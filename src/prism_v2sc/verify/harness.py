@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
 from prism_v2sc.codegen.systemc import generate_systemc_header
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
+from prism_v2sc.frontend.flow import lower_design_top_down
 from prism_v2sc.ir.model import DesignIR
 
 T = TypeVar("T")
+MAX_CAPTURED_TOOL_OUTPUT_CHARS = 16_384
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,8 @@ class ToolMeasurement:
     returncode: int | None = None
     stdout: str = ""
     stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
     note: str = ""
 
 
@@ -55,10 +57,19 @@ class ConversionReport:
     top: str
     sources: tuple[str, ...]
     parse_lower: Measurement
+    source_index: Measurement
+    traversal: Measurement
     codegen: Measurement
     total_elapsed_seconds: float
     peak_python_bytes: int
     observed_process_bytes: int | None
+    source_count: int
+    source_parse_count: int
+    module_parse_count: int
+    module_lower_count: int
+    visited_modules: tuple[str, ...]
+    missing_modules: tuple[str, ...]
+    ambiguous_modules: tuple[str, ...]
     module_count: int
     port_count: int
     signal_count: int
@@ -91,18 +102,42 @@ def convert_with_metrics(
     sources: Sequence[Path],
     top: str,
     *,
+    include_dirs: Sequence[Path] = (),
+    defines: Sequence[str] = (),
     compare_verilator: bool = False,
 ) -> ConversionArtifacts:
     """Parse, lower, emit SystemC, and measure time and peak Python allocation."""
     normalized_sources = tuple(str(source) for source in sources)
     total_start = time.perf_counter()
 
-    parse_lower_measurement, design = _measure(lambda: lower_design(parse_verilog(list(sources)), top))
+    parse_lower_measurement, flow = _measure(
+        lambda: lower_design_top_down(
+            sources,
+            top,
+            include_dirs=include_dirs,
+            defines=defines,
+        )
+    )
+    design = flow.design
+    source_index_measurement = Measurement(
+        elapsed_seconds=flow.source_index_elapsed_seconds,
+        peak_python_bytes=0,
+    )
+    traversal_measurement = Measurement(
+        elapsed_seconds=flow.traversal_elapsed_seconds,
+        peak_python_bytes=0,
+    )
     codegen_measurement, header = _measure(lambda: generate_systemc_header(design))
     total_elapsed = time.perf_counter() - total_start
 
     verilator_command = _find_verilator_command()
-    verilator = _measure_verilator_lint(sources, top, verilator_command) if compare_verilator else ToolMeasurement(
+    verilator = _measure_verilator_lint(
+        sources,
+        top,
+        verilator_command,
+        include_dirs=include_dirs,
+        defines=defines,
+    ) if compare_verilator else ToolMeasurement(
         tool="verilator",
         available=verilator_command is not None,
         executable=verilator_command[0] if verilator_command else "",
@@ -113,6 +148,8 @@ def convert_with_metrics(
         top=top,
         sources=normalized_sources,
         parse_lower=parse_lower_measurement,
+        source_index=source_index_measurement,
+        traversal=traversal_measurement,
         codegen=codegen_measurement,
         total_elapsed_seconds=total_elapsed,
         peak_python_bytes=max(
@@ -123,6 +160,13 @@ def convert_with_metrics(
             parse_lower_measurement.observed_process_bytes,
             codegen_measurement.observed_process_bytes,
         ),
+        source_count=len(sources),
+        source_parse_count=flow.traversal.source_parse_count,
+        module_parse_count=flow.traversal.module_parse_count,
+        module_lower_count=flow.traversal.module_lower_count,
+        visited_modules=flow.traversal.visited_modules,
+        missing_modules=flow.traversal.missing_modules,
+        ambiguous_modules=flow.traversal.ambiguous_modules,
         module_count=len(design.modules),
         port_count=sum(len(module.ports) for module in design.modules),
         signal_count=sum(len(module.signals) for module in design.modules),
@@ -164,6 +208,9 @@ def _measure_verilator_lint(
     sources: Sequence[Path],
     top: str,
     command_prefix: tuple[str, ...] | None,
+    *,
+    include_dirs: Sequence[Path] = (),
+    defines: Sequence[str] = (),
 ) -> ToolMeasurement:
     if command_prefix is None:
         return ToolMeasurement(
@@ -172,7 +219,15 @@ def _measure_verilator_lint(
             note="verilator executable not found on PATH",
         )
 
-    command = [*command_prefix, "--lint-only", "--top-module", top, *[str(source) for source in sources]]
+    command = [
+        *command_prefix,
+        "--lint-only",
+        "--top-module",
+        top,
+        *[f"-I{include_dir}" for include_dir in include_dirs],
+        *[f"-D{define}" for define in defines],
+        *[str(source) for source in sources],
+    ]
     env = os.environ.copy()
     verilator_root = _infer_verilator_root(command_prefix)
     if verilator_root is not None:
@@ -189,8 +244,10 @@ def _measure_verilator_lint(
             time.sleep(0.01)
         stdout_file.seek(0)
         stderr_file.seek(0)
-        stdout = stdout_file.read()
-        stderr = stderr_file.read()
+        stdout_raw = stdout_file.read()
+        stderr_raw = stderr_file.read()
+        stdout, stdout_truncated = _truncate_text(stdout_raw, MAX_CAPTURED_TOOL_OUTPUT_CHARS)
+        stderr, stderr_truncated = _truncate_text(stderr_raw, MAX_CAPTURED_TOOL_OUTPUT_CHARS)
     elapsed = time.perf_counter() - start
     return ToolMeasurement(
         tool="verilator",
@@ -201,12 +258,18 @@ def _measure_verilator_lint(
         returncode=process.returncode,
         stdout=stdout,
         stderr=stderr,
+        stdout_truncated=stdout_truncated,
+        stderr_truncated=stderr_truncated,
+        note="stdout/stderr truncated" if stdout_truncated or stderr_truncated else "",
     )
 
 
 def _find_verilator_command() -> tuple[str, ...] | None:
     executable = shutil.which("verilator")
     if executable is not None:
+        adapted = _adapt_windows_verilator_wrapper(Path(executable))
+        if adapted is not None:
+            return adapted
         return (executable,)
 
     if sys.platform != "win32":
@@ -218,15 +281,31 @@ def _find_verilator_command() -> tuple[str, ...] | None:
         candidate = Path(directory) / "verilator"
         if not candidate.is_file():
             continue
-        perl = candidate.parent.parent / "usr" / "bin" / "perl.exe"
-        msys_wrapper = candidate.parent.parent / "share" / "verilator" / "bin" / "verilator"
-        if perl.is_file() and msys_wrapper.is_file():
-            return (str(perl), str(msys_wrapper))
-        msys_binary = candidate.parent.parent / "share" / "verilator" / "bin" / "verilator_bin.exe"
-        if msys_binary.is_file():
-            return (str(msys_binary),)
-        if perl.is_file():
-            return (str(perl), str(candidate))
+        adapted = _adapt_windows_verilator_wrapper(candidate)
+        if adapted is not None:
+            return adapted
+    return None
+
+
+def _adapt_windows_verilator_wrapper(candidate: Path) -> tuple[str, ...] | None:
+    if sys.platform != "win32":
+        return None
+    if candidate.suffix.lower() == ".exe":
+        return (str(candidate),)
+
+    root = candidate.parent.parent
+    real_root = root / "share" / "verilator"
+    real_bin_dir = real_root / "bin"
+    real_binary = real_bin_dir / "verilator_bin.exe"
+    if real_binary.is_file():
+        return (str(real_binary),)
+
+    perl = root / "usr" / "bin" / "perl.exe"
+    real_wrapper = real_bin_dir / "verilator"
+    if perl.is_file() and real_wrapper.is_file():
+        return (str(perl), str(real_wrapper))
+    if perl.is_file():
+        return (str(perl), str(candidate))
     return None
 
 
@@ -243,6 +322,15 @@ def _infer_verilator_root(command_prefix: tuple[str, ...]) -> Path | None:
 def _max_optional(*values: int | None) -> int | None:
     present = [value for value in values if value is not None]
     return max(present) if present else None
+
+
+def _truncate_text(text: str, limit: int) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    omitted = len(text) - limit
+    suffix = f"\n... truncated {omitted} character(s) ...\n"
+    keep = max(0, limit - len(suffix))
+    return text[:keep] + suffix, True
 
 
 def _current_process_memory_bytes() -> int | None:

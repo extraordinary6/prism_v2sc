@@ -22,7 +22,10 @@ def test_cli_writes_ir_and_systemc_header(tmp_path: Path, capsys) -> None:
     payload = json.loads(ir_path.read_text(encoding="utf-8"))
     assert payload["top"] == "top"
     assert payload["modules"][0]["name"] == "top"
-    assert payload["modules"][0]["continuous_assigns"] == [{"left": "y", "right": "a"}]
+    assigns = payload["modules"][0]["continuous_assigns"]
+    assert len(assigns) == 1
+    assert assigns[0]["left"] == "y"
+    assert assigns[0]["right"] == "a"
 
     header = (out_dir / "prism_v2sc.hpp").read_text(encoding="utf-8")
     assert "SC_MODULE(top)" in header
@@ -68,11 +71,10 @@ endmodule
     assert modules["child"]["parameters"] == [{"kind": "parameter", "name": "WIDTH", "value": "8"}]
     assert modules["child"]["processes"][0]["kind"] == "always_ff"
     assert modules["child"]["processes"][0]["statements"] == ["y <= a"]
-    assert modules["child"]["processes"][0]["structured_statements"][0] == {
-        "left": "y",
-        "right": "a",
-        "type": "nonblocking_assign",
-    }
+    nba = modules["child"]["processes"][0]["structured_statements"][0]
+    assert nba["type"] == "nonblocking_assign"
+    assert nba["left"] == "y"
+    assert nba["right"] == "a"
     assert modules["top"]["signals"][0]["name"] == "tmp"
     assert modules["top"]["signals"][0]["width"] == {"msb": "7", "lsb": "0"}
     assert modules["top"]["instances"][0]["module"] == "child"
@@ -99,15 +101,15 @@ def test_cli_writes_phase5_metrics(tmp_path: Path, capsys) -> None:
 
 
 def test_cli_can_fail_on_error_diagnostics(tmp_path: Path, capsys) -> None:
-    rtl = tmp_path / "case_top.v"
+    rtl = tmp_path / "for_top.v"
     rtl.write_text(
         """
-module case_top(input wire [1:0] sel, output reg y);
+module for_top(input wire [1:0] a, output reg [1:0] y);
+  integer i;
   always @(*) begin
-    case (sel)
-      2'b00: y = 1'b0;
-      default: y = 1'b1;
-    endcase
+    for (i = 0; i < 2; i = i + 1) begin
+      y[i] = a[i];
+    end
   end
 endmodule
 """,
@@ -115,7 +117,7 @@ endmodule
     )
     out_dir = tmp_path / "systemc"
 
-    assert main(["--top", "case_top", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
+    assert main(["--top", "for_top", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
     assert "diagnostics: 1 error(s)" in capsys.readouterr().out
 
 
@@ -230,3 +232,50 @@ top.v
     payload = json.loads((out_dir / "ir.json").read_text(encoding="utf-8"))
     # Reachability filter should keep top + leaf only, and dedupe leaf source.
     assert {module["name"] for module in payload["modules"]} == {"top", "leaf"}
+
+
+def test_cli_passes_filelist_include_dirs_and_defines_to_parser(tmp_path: Path) -> None:
+    include_dir = tmp_path / "inc"
+    include_dir.mkdir()
+    defs = include_dir / "defs.vh"
+    top = tmp_path / "top.v"
+    filelist = tmp_path / "sources.f"
+    out_dir = tmp_path / "systemc"
+
+    defs.write_text("`define WIDTH 8\n", encoding="utf-8")
+    top.write_text(
+        """
+`include "defs.vh"
+module top(
+  input wire [`WIDTH-1:0] a,
+`ifdef USE_INVERT
+  output wire [`WIDTH-1:0] y
+);
+  assign y = ~a;
+`else
+  output wire [`WIDTH-1:0] y
+);
+  assign y = a;
+`endif
+endmodule
+""",
+        encoding="utf-8",
+    )
+    filelist.write_text(
+        """
++incdir+inc
+-DUSE_INVERT
+top.v
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["--top", "top", "--filelist", str(filelist), "--out", str(out_dir)]) == 0
+
+    payload = json.loads((out_dir / "ir.json").read_text(encoding="utf-8"))
+    top_module = payload["modules"][0]
+    assert top_module["ports"][0]["width"] == {"msb": "(8 - 1)", "lsb": "0"}
+    assigns = top_module["continuous_assigns"]
+    assert len(assigns) == 1
+    assert assigns[0]["left"] == "y"
+    assert assigns[0]["right"] == "(~a)"

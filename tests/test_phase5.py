@@ -70,7 +70,7 @@ endmodule
     assert "stage<WIDTH> u1;" in artifacts.header
 
 
-def test_unsupported_case_is_reported_in_ir(tmp_path: Path) -> None:
+def test_case_statement_is_lowered_without_diagnostic(tmp_path: Path) -> None:
     rtl = tmp_path / "decode.v"
     rtl.write_text(
         """
@@ -89,12 +89,10 @@ endmodule
 
     design = lower_design(parse_verilog([rtl]), "decode")
 
-    assert len(design.diagnostics) == 1
-    diagnostic = design.diagnostics[0]
-    assert diagnostic.severity == "error"
-    assert diagnostic.module == "decode"
-    assert diagnostic.code == "unsupported_case"
-    assert diagnostic.node == "CaseStatement"
+    assert design.diagnostics == ()
+    process = design.modules[0].processes[0]
+    assert process.structured_statements[0]["type"] == "case"
+    assert process.structured_statements[0]["expr"] == "sel"
 
 
 def test_windows_verilator_wrapper_discovery(monkeypatch, tmp_path: Path) -> None:
@@ -116,7 +114,23 @@ def test_windows_verilator_wrapper_discovery(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(harness.sys, "platform", "win32")
     monkeypatch.setenv("PATH", str(bin_dir))
 
-    assert harness._find_verilator_command() == (str(perl), str(wrapper))
+    assert harness._find_verilator_command() == (str(real_binary),)
+
+
+def test_windows_verilator_which_wrapper_prefers_real_binary(monkeypatch, tmp_path: Path) -> None:
+    bin_dir = tmp_path / "mingw64" / "bin"
+    real_bin_dir = tmp_path / "mingw64" / "share" / "verilator" / "bin"
+    bin_dir.mkdir(parents=True)
+    real_bin_dir.mkdir(parents=True)
+    wrapper = bin_dir / "verilator"
+    wrapper.write_text("#!/usr/bin/perl\n", encoding="utf-8")
+    real_binary = real_bin_dir / "verilator_bin.exe"
+    real_binary.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(harness.shutil, "which", lambda _name: str(wrapper))
+    monkeypatch.setattr(harness.sys, "platform", "win32")
+
+    assert harness._find_verilator_command() == (str(real_binary),)
 
 
 def test_verilator_root_is_inferred_from_share_binary(tmp_path: Path) -> None:

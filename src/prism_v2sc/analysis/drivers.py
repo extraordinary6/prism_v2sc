@@ -17,7 +17,7 @@ class AssignmentSite:
     process_kind: str
     assignment_kind: str
     target: str
-    base_target: str
+    conflict_target: str
 
 
 def analyze_process_drivers(module_name: str, processes: tuple[ProcessIR, ...]) -> tuple[DiagnosticIR, ...]:
@@ -31,7 +31,7 @@ def analyze_process_drivers(module_name: str, processes: tuple[ProcessIR, ...]) 
 
     by_target: dict[str, list[AssignmentSite]] = defaultdict(list)
     for site in assignments:
-        by_target[site.base_target].append(site)
+        by_target[site.conflict_target].append(site)
 
     diagnostics: list[DiagnosticIR] = []
     for target in sorted(by_target):
@@ -128,9 +128,14 @@ def _collect_statement_assignments(
                     process_kind=process.kind,
                     assignment_kind="blocking" if kind == "blocking_assign" else "nonblocking",
                     target=left,
-                    base_target=base,
+                    conflict_target=_conflict_target(left),
                 )
             )
+        return
+    if kind == "case":
+        for item in _as_case_items(statement.get("items")):
+            for child in _as_statement_list(item.get("statements")):
+                _collect_statement_assignments(process, process_index, child, sites)
         return
     if kind != "if":
         return
@@ -147,11 +152,28 @@ def _as_statement_list(value: object) -> list[dict[str, object]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _as_case_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _base_target(target: str) -> str:
     match = re.match(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_$]*)", target)
     if match is None:
         return ""
     return match.group("name")
+
+
+def _conflict_target(target: str) -> str:
+    target = target.strip()
+    match = re.match(r"^(?P<name>[A-Za-z_][A-Za-z0-9_$]*)(?P<select>\[[^\]]+\])?$", target)
+    if match is None:
+        return _base_target(target)
+    select = match.group("select")
+    if not select:
+        return match.group("name")
+    return f"{match.group('name')}{select.replace(' ', '')}"
 
 
 def _process_has_blocking_assign(process: ProcessIR) -> bool:
@@ -165,6 +187,12 @@ def _statement_has_blocking_assign(statement: dict[str, object]) -> bool:
     kind = statement.get("type")
     if kind == "blocking_assign":
         return True
+    if kind == "case":
+        return any(
+            _statement_has_blocking_assign(child)
+            for item in _as_case_items(statement.get("items"))
+            for child in _as_statement_list(item.get("statements"))
+        )
     if kind != "if":
         return False
     return any(_statement_has_blocking_assign(child) for child in _as_statement_list(statement.get("true"))) or any(

@@ -109,7 +109,10 @@ endmodule
     assert "sc_vector<bitcell> g_u;" in header
     assert 'g_u("g_u", WIDTH)' in header
     assert "for (int i = 0; i < WIDTH; ++i) {" in header
-    assert "g_u[i].a(a /* TODO: bind bit-select [i] via generated scalar signal */);" in header
+    assert "sc_vector<sc_signal<bool>> __bridge_g_u_a;" in header
+    assert "sc_vector<sc_signal<bool>> __bridge_g_u_y;" in header
+    assert "g_u[i].a(__bridge_g_u_a[i]);" in header
+    assert "g_u[i].y(__bridge_g_u_y[i]);" in header
 
 
 def test_generate_systemc_header_for_simple_dff_with_async_reset(tmp_path: Path) -> None:

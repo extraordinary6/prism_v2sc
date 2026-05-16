@@ -79,18 +79,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--top is required")
 
     try:
-        sources = collect_sources(args.sources, args.filelist)
-    except FileNotFoundError as exc:
+        source_set = collect_sources(args.sources, args.filelist)
+    except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
 
-    if not sources:
+    if not source_set.sources:
         parser.error("no Verilog source files resolved from positional inputs and filelists")
 
     args.out.mkdir(parents=True, exist_ok=True)
 
     artifacts = convert_with_metrics(
-        sources,
+        source_set.sources,
         args.top,
+        include_dirs=source_set.include_dirs,
+        defines=source_set.defines,
         compare_verilator=args.compare_verilator,
     )
     design = artifacts.design

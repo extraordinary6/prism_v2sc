@@ -4,16 +4,23 @@
 
 The project currently supports:
 
-- Pyverilog-based parsing and lowering into a structured JSON IR
+- Pyverilog-based parsing and lowering into a structured JSON IR (with a tree-form expression sub-IR for expression-aware codegen)
 - Hierarchical module emission as single-header SystemC (`prism_v2sc.hpp`)
-- Basic handling for:
-  - module ports/signals/parameters
+- Verilog constructs handled by the codegen:
+  - module ports / signals / parameters / localparams
   - continuous `assign`
-  - simple `always @(*)` combinational processes
-  - simple edge-triggered `always @(posedge/negedge ...)`
+  - `always @(*)` combinational processes (per-output style with proper staging)
+  - `always @(posedge/negedge ...)` sequential processes with async reset
+  - `if`/`else` and ordinary `case` statements
+  - bit-select reads (`sig[i]`) and part-select reads (`sig[msb:lsb]`)
+  - bit-select / part-select on the LHS of sequential assignments (via staged `__next_*`)
+  - concatenation `{a, b, ...}` and replication `{N{x}}` in expressions
+  - reduction operators `&x`, `|x`, `^x` and the inverted variants
+  - ternary expressions and full binary/unary operator coverage
   - module instantiation with parameter override
-  - simple `generate for` instance arrays
-- Phase 5 conversion metrics (time + memory + optional Verilator lint comparison)
+  - `generate for` instance arrays and `generate if` (statically resolvable conditions)
+- Phase 5/7 conversion metrics (time + memory + traversal counts + optional Verilator lint comparison)
+- RTL vs SystemC functional equivalence CI (`.github/workflows/equivalence.yml`)
 
 It intentionally does **not** guarantee full Verilog/SystemVerilog semantic equivalence.
 
@@ -103,6 +110,10 @@ python -m prism_v2sc --top top --filelist rtl/sources.f --out build/systemc
 `sources.f` currently supports:
 
 - one file path per line
+- `-I <dir>` and `-I<dir>` include directories
+- `+incdir+<dir>` include directories
+- `-D <macro[=value]>` and `-D<macro[=value]>` preprocessor defines
+- nested `-f <filelist>` and `-f<filelist>` entries
 - blank lines
 - comment lines starting with `#` or `//`
 
@@ -121,13 +132,23 @@ If Verilator is discoverable, `metrics.json` includes:
 - peak observed Verilator process memory
 - captured stdout/stderr
 
+The same report also includes Phase 7 flow counters:
+
+- source-index and top-driven traversal timing
+- source files parsed during reachable traversal
+- modules parsed/lowered once after repeated-instantiation de-dup
+- visited, missing, and ambiguous module lists
+- truncation flags for captured external-tool stdout/stderr
+
 ## 5. Top-Down Reachability
 
-Lowering/codegen is now driven by `--top` reachability:
+Lowering/codegen is now driven by `--top` reachability using a lightweight module-to-source index:
 
-- only modules reachable from the top instance graph are lowered/emitted
+- only modules reachable from the top instance graph are parsed/lowered/emitted
+- repeated instantiations lower each module definition once
 - unrelated modules present in input sources are ignored
 - unknown instance target modules are reported via diagnostics (`unresolved_instance_module`)
+- duplicate module definitions are reported via diagnostics (`ambiguous_module_definition`)
 
 ## 6. Diagnostics and Unsupported Constructs
 
@@ -139,9 +160,11 @@ Lowering collects unsupported/risky constructs into IR diagnostics:
 Examples currently reported:
 
 - `initial` blocks (parsed but not emitted as executable SystemC behavior)
-- `case` statements in processes
+- unsupported statements nested inside processes
 - procedural `for` loops in `always/initial`
 - unsupported generate items/patterns
+- X/Z/? literals that are approximated as zero in generated C++ expressions
+- modules with multiple procedural blocks where full Verilog event scheduling is approximated
 
 Use `--fail-on-diagnostics` in CI to hard-fail when error diagnostics are present.
 
@@ -159,6 +182,21 @@ Current test coverage includes:
 - frontend lowering checks
 - SystemC header generation for hierarchy/parameters/generate-for
 - phase5 metrics and diagnostics behavior
+
+### 7.1 RTL vs SystemC equivalence (CI)
+
+The `equivalence` GitHub Actions workflow (`.github/workflows/equivalence.yml`)
+runs on every push and pull request to `main`. For each fixture under
+`tests/equivalence/fixtures/`, it converts the RTL with `prism-v2sc`, then
+co-simulates the original Verilog (Icarus Verilog) and the generated
+SystemC (libsystemc-dev) with a shared deterministic stimulus file, and
+diffs the per-cycle output traces. The comparison is near-cycle-accurate
+(inputs driven on negedge, outputs sampled after posedge); the harness
+accepts a `--shift-tolerance` knob for designs whose SystemC model
+legitimately lags the RTL by a fixed number of cycles.
+
+See `tests/equivalence/README.md` for details on adding fixtures and
+running the harness locally.
 
 ## 8. Notes on Verilator Detection (Windows/MSYS2/MinGW)
 
@@ -178,4 +216,6 @@ This tool is currently a pragmatic RTL-subset translator. It prioritizes:
 - practical conversion and iteration speed
 - explicit diagnostics over silent mis-compilation
 
-It does not yet implement full scheduling-accurate equivalence for all language features.
+The current development priority is Verilog functional correctness before broad SystemVerilog expansion. The project does not yet have a full golden functional differential harness; Verilator integration currently provides lint/tool comparison, not output-equivalence proof.
+
+See `docs/correctness_strategy.md`, `docs/known_differences.md`, and `docs/hardening_checks.md` for correctness priorities, known differences, and reproducible hardening commands.

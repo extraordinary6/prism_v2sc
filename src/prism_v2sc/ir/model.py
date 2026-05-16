@@ -50,6 +50,8 @@ class ContinuousAssignIR:
 
     left: str
     right: str
+    left_expr: dict[str, Any] | None = None
+    right_expr: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from pyverilog.vparser import ast as vast
 
 from prism_v2sc.analysis.drivers import analyze_process_drivers
-from prism_v2sc.ir.expressions import render_expr
+from prism_v2sc.ir.expressions import lower_expr, render_expr
 from prism_v2sc.ir.model import (
     ArgIR,
     ContinuousAssignIR,
@@ -33,7 +36,7 @@ def lower_design(ast: object, top: str) -> DesignIR:
         raise ValueError(f"top module '{top}' not found; known modules: {known}")
 
     module_order = list(module_index)
-    lowered_by_name = {name: _lower_module(module_index[name]) for name in module_order}
+    lowered_by_name = {name: lower_module(module_index[name]) for name in module_order}
     reachable_names, missing_refs = _reachable_modules(top, lowered_by_name)
 
     modules: list[ModuleIR] = []
@@ -96,14 +99,20 @@ def _reachable_modules(
     return reachable, missing_refs
 
 
-def _instantiated_modules(module: ModuleIR) -> list[str]:
+def instantiated_modules(module: ModuleIR) -> list[str]:
+    """Return module names instantiated directly by a lowered module."""
     child_modules = [instance.module for instance in module.instances]
     for generate_for in module.generate_fors:
         child_modules.extend(instance.module for instance in generate_for.instances)
     return child_modules
 
 
-def _lower_module(module: vast.ModuleDef) -> ModuleIR:
+def _instantiated_modules(module: ModuleIR) -> list[str]:
+    return instantiated_modules(module)
+
+
+def lower_module(module: vast.ModuleDef) -> ModuleIR:
+    """Lower one Pyverilog module definition into module IR."""
     parameters: list[ParameterIR] = []
     ports: list[PortIR] = []
     signals: list[SignalIR] = []
@@ -121,52 +130,23 @@ def _lower_module(module: vast.ModuleDef) -> ModuleIR:
             ports.append(lowered)
             port_names.add(lowered.name)
 
-    for item in module.items or ():
-        if isinstance(item, vast.Decl):
-            item_parameters, item_signals = _lower_decl(item, port_names)
-            parameters.extend(item_parameters)
-            signals.extend(item_signals)
-        elif isinstance(item, vast.Assign):
-            continuous_assigns.append(
-                ContinuousAssignIR(left=render_expr(item.left), right=render_expr(item.right))
-            )
-        elif isinstance(item, vast.Always):
-            processes.append(_lower_always(item))
-            diagnostics.extend(_statement_diagnostics(module.name, item.statement))
-        elif isinstance(item, vast.Initial):
-            diagnostics.append(
-                _diagnostic(
-                    module.name,
-                    "unsupported_initial",
-                    "initial blocks are parsed but not emitted as SystemC behavior",
-                    item,
-                )
-            )
-            diagnostics.extend(_statement_diagnostics(module.name, item.statement))
-            processes.append(
-                ProcessIR(
-                    kind="initial",
-                    statements=_statement_summaries(item.statement),
-                    structured_statements=_structured_statements(item.statement),
-                )
-            )
-        elif isinstance(item, vast.InstanceList):
-            instances.extend(_lower_instance_list(item))
-        elif isinstance(item, vast.GenerateStatement):
-            lowered_generate_fors, generate_diagnostics = _lower_generate_statement(module.name, item)
-            generate_fors.extend(lowered_generate_fors)
-            diagnostics.extend(generate_diagnostics)
-        elif isinstance(item, vast.Pragma):
-            diagnostics.append(
-                _diagnostic(
-                    module.name,
-                    "unsupported_pragma",
-                    "pragmas are ignored by the current lowering flow",
-                    item,
-                    severity="warning",
-                )
-            )
+    accumulator = _LoweringAccumulator(
+        module_name=module.name,
+        parameters=parameters,
+        signals=signals,
+        continuous_assigns=continuous_assigns,
+        processes=processes,
+        instances=instances,
+        generate_fors=generate_fors,
+        diagnostics=diagnostics,
+        port_names=port_names,
+    )
 
+    for item in module.items or ():
+        _process_module_item(item, accumulator)
+
+    diagnostics.extend(_xz_literal_diagnostics(module.name, processes, continuous_assigns))
+    diagnostics.extend(_scheduler_approximation_diagnostics(module.name, processes))
     diagnostics.extend(analyze_process_drivers(module.name, tuple(processes)))
 
     return ModuleIR(
@@ -180,6 +160,252 @@ def _lower_module(module: vast.ModuleDef) -> ModuleIR:
         generate_fors=tuple(generate_fors),
         diagnostics=tuple(diagnostics),
     )
+
+
+@dataclass
+class _LoweringAccumulator:
+    """Mutable accumulator for module item lowering (including nested generates)."""
+
+    module_name: str
+    parameters: list[ParameterIR]
+    signals: list[SignalIR]
+    continuous_assigns: list[ContinuousAssignIR]
+    processes: list[ProcessIR]
+    instances: list[InstanceIR]
+    generate_fors: list[GenerateForIR]
+    diagnostics: list[DiagnosticIR]
+    port_names: set[str]
+
+
+def _process_module_item(item: object, acc: _LoweringAccumulator) -> None:
+    if isinstance(item, vast.Decl):
+        item_parameters, item_signals = _lower_decl(item, acc.port_names)
+        acc.parameters.extend(item_parameters)
+        acc.signals.extend(item_signals)
+        return
+    if isinstance(item, vast.Assign):
+        acc.continuous_assigns.append(
+            ContinuousAssignIR(
+                left=render_expr(item.left),
+                right=render_expr(item.right),
+                left_expr=lower_expr(item.left),
+                right_expr=lower_expr(item.right),
+            )
+        )
+        return
+    if isinstance(item, vast.Always):
+        acc.processes.append(_lower_always(item))
+        acc.diagnostics.extend(_statement_diagnostics(acc.module_name, item.statement))
+        return
+    if isinstance(item, vast.Initial):
+        acc.diagnostics.append(
+            _diagnostic(
+                acc.module_name,
+                "unsupported_initial",
+                "initial blocks are parsed but not emitted as SystemC behavior",
+                item,
+            )
+        )
+        acc.diagnostics.extend(_statement_diagnostics(acc.module_name, item.statement))
+        acc.processes.append(
+            ProcessIR(
+                kind="initial",
+                statements=_statement_summaries(item.statement),
+                structured_statements=_structured_statements(item.statement),
+            )
+        )
+        return
+    if isinstance(item, vast.InstanceList):
+        acc.instances.extend(_lower_instance_list(item))
+        return
+    if isinstance(item, vast.GenerateStatement):
+        _process_generate_statement(item, acc)
+        return
+    if isinstance(item, vast.Pragma):
+        acc.diagnostics.append(
+            _diagnostic(
+                acc.module_name,
+                "unsupported_pragma",
+                "pragmas are ignored by the current lowering flow",
+                item,
+                severity="warning",
+            )
+        )
+        return
+
+
+def _process_generate_statement(generate: vast.GenerateStatement, acc: _LoweringAccumulator) -> None:
+    for item in generate.items:
+        _process_generate_item(item, acc)
+
+
+def _process_generate_item(item: object, acc: _LoweringAccumulator) -> None:
+    if isinstance(item, vast.ForStatement):
+        lowered = _lower_generate_for(item)
+        if lowered is not None:
+            acc.generate_fors.append(lowered)
+        else:
+            acc.diagnostics.append(
+                _diagnostic(
+                    acc.module_name,
+                    "unsupported_generate_for",
+                    "generate-for must use a named block containing instance lists",
+                    item,
+                )
+            )
+        return
+    if isinstance(item, vast.IfStatement):
+        parameter_values = _parameter_value_map(acc.parameters)
+        cond_value = _const_eval_expr(item.cond, parameter_values)
+        if cond_value is None:
+            acc.diagnostics.append(
+                _diagnostic(
+                    acc.module_name,
+                    "unsupported_generate_if_condition",
+                    "generate-if condition could not be evaluated from parameter values",
+                    item,
+                )
+            )
+            return
+        chosen = item.true_statement if cond_value else item.false_statement
+        _process_generate_branch(chosen, acc)
+        return
+    if isinstance(item, vast.Block):
+        for child in item.statements:
+            _process_generate_item(child, acc)
+        return
+    if isinstance(item, (vast.Decl, vast.Assign, vast.Always, vast.Initial, vast.InstanceList, vast.GenerateStatement, vast.Pragma)):
+        _process_module_item(item, acc)
+        return
+    acc.diagnostics.append(
+        _diagnostic(
+            acc.module_name,
+            "unsupported_generate_item",
+            "only simple generate-for, generate-if, and block items are supported",
+            item,
+        )
+    )
+
+
+def _process_generate_branch(node: object | None, acc: _LoweringAccumulator) -> None:
+    if node is None:
+        return
+    if isinstance(node, vast.Block):
+        for child in node.statements:
+            _process_generate_item(child, acc)
+    else:
+        _process_generate_item(node, acc)
+
+
+def _parameter_value_map(parameters: list[ParameterIR]) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for parameter in parameters:
+        text = (parameter.value or "").strip()
+        parsed = _parse_simple_constant(text)
+        if parsed is not None:
+            values[parameter.name] = parsed
+    return values
+
+
+def _parse_simple_constant(text: str) -> int | None:
+    cleaned = text.strip().replace("_", "")
+    if not cleaned:
+        return None
+    sized = re.match(r"^(?P<size>\d+)?\s*'\s*(?P<base>[bodhBODH])(?P<value>[0-9a-fA-F]+)$", cleaned)
+    unsized = re.match(r"^'\s*(?P<base>[bodhBODH])(?P<value>[0-9a-fA-F]+)$", cleaned)
+    bases = {"b": 2, "o": 8, "d": 10, "h": 16}
+    if sized:
+        try:
+            return int(sized.group("value"), bases[sized.group("base").lower()])
+        except ValueError:
+            return None
+    if unsized:
+        try:
+            return int(unsized.group("value"), bases[unsized.group("base").lower()])
+        except ValueError:
+            return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
+def _const_eval_expr(node: object | None, parameter_values: dict[str, int]) -> int | None:
+    """Static evaluation for generate-if conditions."""
+    if node is None:
+        return None
+    cls_name = node.__class__.__name__
+    if cls_name == "IntConst":
+        return _parse_simple_constant(str(getattr(node, "value", "")))
+    if cls_name == "Identifier":
+        return parameter_values.get(str(getattr(node, "name", "")))
+    if cls_name in {"Lvalue", "Rvalue"}:
+        children = node.children() if hasattr(node, "children") else ()
+        return _const_eval_expr(children[0], parameter_values) if children else None
+    if cls_name in {"Plus", "Minus", "Times", "Divide", "Mod", "Sll", "Srl", "And", "Or", "Xor",
+                    "Eq", "NotEq", "LessThan", "GreaterThan", "LessEq", "GreaterEq", "Land", "Lor"}:
+        children = node.children() if hasattr(node, "children") else ()
+        if len(children) < 2:
+            return None
+        left = _const_eval_expr(children[0], parameter_values)
+        right = _const_eval_expr(children[1], parameter_values)
+        if left is None or right is None:
+            return None
+        try:
+            if cls_name == "Plus":
+                return left + right
+            if cls_name == "Minus":
+                return left - right
+            if cls_name == "Times":
+                return left * right
+            if cls_name == "Divide":
+                return left // right if right else None
+            if cls_name == "Mod":
+                return left % right if right else None
+            if cls_name == "Sll":
+                return left << right
+            if cls_name == "Srl":
+                return left >> right
+            if cls_name == "And":
+                return left & right
+            if cls_name == "Or":
+                return left | right
+            if cls_name == "Xor":
+                return left ^ right
+            if cls_name == "Eq":
+                return int(left == right)
+            if cls_name == "NotEq":
+                return int(left != right)
+            if cls_name == "LessThan":
+                return int(left < right)
+            if cls_name == "GreaterThan":
+                return int(left > right)
+            if cls_name == "LessEq":
+                return int(left <= right)
+            if cls_name == "GreaterEq":
+                return int(left >= right)
+            if cls_name == "Land":
+                return int(bool(left) and bool(right))
+            if cls_name == "Lor":
+                return int(bool(left) or bool(right))
+        except Exception:
+            return None
+    if cls_name in {"Uminus", "Uplus", "Ulnot", "Unot"}:
+        children = node.children() if hasattr(node, "children") else ()
+        if not children:
+            return None
+        operand = _const_eval_expr(children[0], parameter_values)
+        if operand is None:
+            return None
+        if cls_name == "Uminus":
+            return -operand
+        if cls_name == "Uplus":
+            return operand
+        if cls_name == "Ulnot":
+            return int(not operand)
+        if cls_name == "Unot":
+            return ~operand
+    return None
 
 
 def _extract_paramlist(paramlist: vast.Paramlist | None) -> list[ParameterIR]:
@@ -292,24 +518,38 @@ def _structured_statement(statement: object) -> dict[str, object]:
             "type": "blocking_assign",
             "left": render_expr(statement.left),
             "right": render_expr(statement.right),
+            "left_expr": lower_expr(statement.left),
+            "right_expr": lower_expr(statement.right),
         }
     if isinstance(statement, vast.NonblockingSubstitution):
         return {
             "type": "nonblocking_assign",
             "left": render_expr(statement.left),
             "right": render_expr(statement.right),
+            "left_expr": lower_expr(statement.left),
+            "right_expr": lower_expr(statement.right),
         }
     if isinstance(statement, vast.IfStatement):
         return {
             "type": "if",
             "cond": render_expr(statement.cond),
+            "cond_expr": lower_expr(statement.cond),
             "true": list(_structured_statements(statement.true_statement)),
             "false": list(_structured_statements(statement.false_statement)),
         }
     if isinstance(statement, vast.CaseStatement):
         return {
-            "type": "unsupported",
-            "node": "case",
+            "type": "case",
+            "expr": render_expr(statement.comp),
+            "expr_tree": lower_expr(statement.comp),
+            "items": [
+                {
+                    "conds": [] if item.cond is None else [render_expr(cond) for cond in item.cond],
+                    "cond_exprs": [] if item.cond is None else [lower_expr(cond) for cond in item.cond],
+                    "statements": list(_structured_statements(item.statement)),
+                }
+                for item in statement.caselist
+            ],
         }
     return {
         "type": "unsupported",
@@ -330,14 +570,10 @@ def _statement_diagnostics(module_name: str, statement: object | None) -> list[D
         diagnostics.extend(_statement_diagnostics(module_name, statement.false_statement))
         return diagnostics
     if isinstance(statement, vast.CaseStatement):
-        return [
-            _diagnostic(
-                module_name,
-                "unsupported_case",
-                "case statements are parsed but not emitted as executable SystemC logic",
-                statement,
-            )
-        ]
+        diagnostics: list[DiagnosticIR] = []
+        for item in statement.caselist:
+            diagnostics.extend(_statement_diagnostics(module_name, item.statement))
+        return diagnostics
     if isinstance(statement, vast.ForStatement):
         return [
             _diagnostic(
@@ -374,38 +610,6 @@ def _lower_instance_list(instance_list: vast.InstanceList) -> list[InstanceIR]:
             InstanceIR(module=instance.module, name=instance.name, parameters=parameters, ports=ports)
         )
     return instances
-
-
-def _lower_generate_statement(
-    module_name: str,
-    generate: vast.GenerateStatement,
-) -> tuple[list[GenerateForIR], list[DiagnosticIR]]:
-    generate_fors: list[GenerateForIR] = []
-    diagnostics: list[DiagnosticIR] = []
-    for item in generate.items:
-        if isinstance(item, vast.ForStatement):
-            lowered = _lower_generate_for(item)
-            if lowered is not None:
-                generate_fors.append(lowered)
-            else:
-                diagnostics.append(
-                    _diagnostic(
-                        module_name,
-                        "unsupported_generate_for",
-                        "generate-for must use a named block containing instance lists",
-                        item,
-                    )
-                )
-        else:
-            diagnostics.append(
-                _diagnostic(
-                    module_name,
-                    "unsupported_generate_item",
-                    "only simple generate-for items are supported",
-                    item,
-                )
-            )
-    return generate_fors, diagnostics
 
 
 def _lower_generate_for(statement: vast.ForStatement) -> GenerateForIR | None:
@@ -467,3 +671,108 @@ def _diagnostic(
         message=message,
         node=node.__class__.__name__,
     )
+
+
+def _xz_literal_diagnostics(
+    module_name: str,
+    processes: list[ProcessIR],
+    continuous_assigns: list[ContinuousAssignIR],
+) -> list[DiagnosticIR]:
+    diagnostics: list[DiagnosticIR] = []
+    seen: set[str] = set()
+    for assign in continuous_assigns:
+        for expr in (assign.left, assign.right):
+            _append_xz_literal_diagnostic(module_name, expr, diagnostics, seen)
+    for process in processes:
+        for statement in process.structured_statements:
+            _scan_statement_for_xz_literals(module_name, statement, diagnostics, seen)
+    return diagnostics
+
+
+def _scan_statement_for_xz_literals(
+    module_name: str,
+    statement: dict[str, object],
+    diagnostics: list[DiagnosticIR],
+    seen: set[str],
+) -> None:
+    kind = statement.get("type")
+    if kind in {"blocking_assign", "nonblocking_assign"}:
+        _append_xz_literal_diagnostic(module_name, str(statement.get("left", "")), diagnostics, seen)
+        _append_xz_literal_diagnostic(module_name, str(statement.get("right", "")), diagnostics, seen)
+        return
+    if kind == "if":
+        _append_xz_literal_diagnostic(module_name, str(statement.get("cond", "")), diagnostics, seen)
+        for child in _as_statement_list(statement.get("true")):
+            _scan_statement_for_xz_literals(module_name, child, diagnostics, seen)
+        for child in _as_statement_list(statement.get("false")):
+            _scan_statement_for_xz_literals(module_name, child, diagnostics, seen)
+        return
+    if kind == "case":
+        _append_xz_literal_diagnostic(module_name, str(statement.get("expr", "")), diagnostics, seen)
+        for item in _as_case_items(statement.get("items")):
+            conds = item.get("conds")
+            if isinstance(conds, list):
+                for cond in conds:
+                    _append_xz_literal_diagnostic(module_name, str(cond), diagnostics, seen)
+            for child in _as_statement_list(item.get("statements")):
+                _scan_statement_for_xz_literals(module_name, child, diagnostics, seen)
+
+
+def _append_xz_literal_diagnostic(
+    module_name: str,
+    expr: str,
+    diagnostics: list[DiagnosticIR],
+    seen: set[str],
+) -> None:
+    for literal in _xz_literals(expr):
+        key = f"{module_name}:{literal}"
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            DiagnosticIR(
+                severity="warning",
+                module=module_name,
+                code="x_z_literal_approximated",
+                message=(
+                    f"literal '{literal}' contains X/Z/? bits; generated C++ currently "
+                    "approximates those bits as zero"
+                ),
+                node="IntConst",
+            )
+        )
+
+
+def _xz_literals(expr: str) -> list[str]:
+    pattern = re.compile(r"\b(?:\d+)?'\s*[bodhBODH][0-9a-fA-F_xXzZ?]+")
+    return [match.group(0) for match in pattern.finditer(expr) if re.search(r"[xXzZ?]", match.group(0))]
+
+
+def _scheduler_approximation_diagnostics(module_name: str, processes: list[ProcessIR]) -> list[DiagnosticIR]:
+    procedural = [process for process in processes if process.kind in {"always_comb", "always_ff", "initial"}]
+    if len(procedural) <= 1:
+        return []
+    return [
+        DiagnosticIR(
+            severity="warning",
+            module=module_name,
+            code="event_scheduler_approximated",
+            message=(
+                "module contains multiple procedural blocks; generated SystemC uses "
+                "SC_METHOD scheduling and may differ from full Verilog event ordering"
+            ),
+            node="Always",
+        )
+    ]
+
+
+def _as_statement_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _as_case_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]

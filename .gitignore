@@ -7,3 +7,4 @@ parsetab.py
 .pytest_*_tmp/
 build/
 tests/tmp/
+.claude/

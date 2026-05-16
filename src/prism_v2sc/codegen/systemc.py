@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 
 from prism_v2sc.ir.model import (
@@ -16,7 +17,43 @@ from prism_v2sc.ir.model import (
     WidthIR,
 )
 
+from .expr import (
+    ModuleContext,
+    build_module_context,
+    collect_sensitivity,
+    const_eval,
+    infer_width,
+    lvalue_base_name,
+    render_lvalue,
+    render_rvalue,
+    sanitize_identifier,
+)
 from .writer import CodeWriter
+
+
+@dataclass(frozen=True)
+class GenerateBitBridge:
+    """Scalar bridge for a generated instance bit-select port binding."""
+
+    name: str
+    method_name: str
+    parent_name: str
+    port_name: str
+    direction: str
+    count_expr: str
+
+
+@dataclass(frozen=True)
+class DirectBitBridge:
+    """Scalar bridge for a direct instance bit-select port binding."""
+
+    name: str
+    method_name: str
+    parent_name: str
+    index_expr: str
+    instance_name: str
+    port_name: str
+    direction: str
 
 
 def banner() -> str:
@@ -42,16 +79,21 @@ def generate_systemc_header(design: DesignIR) -> str:
     writer.line(f"#define {guard}")
     writer.line()
 
-    for module in design.modules:
-        _emit_module(writer, module)
+    modules = _dependency_order(list(design.modules))
+    modules_by_name = {module.name: module for module in modules}
+    for module in modules:
+        _emit_module(writer, module, modules_by_name)
         writer.line()
 
     writer.line(f"#endif  // {guard}")
     return writer.render()
 
 
-def _emit_module(writer: CodeWriter, module: ModuleIR) -> None:
+def _emit_module(writer: CodeWriter, module: ModuleIR, modules_by_name: dict[str, ModuleIR]) -> None:
     class_name = _sanitize_identifier(module.name)
+    ctx = build_module_context(module)
+    bit_bridges = _generate_bit_bridges(module, modules_by_name)
+    direct_bit_bridges = _direct_bit_bridges(module, modules_by_name)
     if module.parameters:
         template_params = ", ".join(
             f"int {_sanitize_identifier(parameter.name)} = {_cpp_expr(parameter.value)}"
@@ -79,10 +121,14 @@ def _emit_module(writer: CodeWriter, module: ModuleIR) -> None:
                 f"sc_vector<{_instance_type(instance)}> "
                 f"{_sanitize_identifier(generate_for.name)}_{_sanitize_identifier(instance.name)};"
             )
+    for bridge in bit_bridges:
+        writer.line(f"sc_vector<sc_signal<bool>> {bridge.name};")
+    for bridge in direct_bit_bridges:
+        writer.line(f"sc_signal<bool> {bridge.name};")
     if module.instances or module.generate_fors:
         writer.line()
 
-    methods = _method_specs(module)
+    methods = _method_specs(module, ctx)
     for method_name, body_lines in methods:
         writer.line(f"void {method_name}() {{")
         writer.indent()
@@ -92,7 +138,14 @@ def _emit_module(writer: CodeWriter, module: ModuleIR) -> None:
         writer.line("}")
         writer.line()
 
-    _emit_constructor(writer, module, methods)
+    for bridge in bit_bridges:
+        _emit_bridge_method(writer, bridge)
+        writer.line()
+    for bridge in direct_bit_bridges:
+        _emit_direct_bridge_method(writer, bridge)
+        writer.line()
+
+    _emit_constructor(writer, module, ctx, methods, bit_bridges, direct_bit_bridges)
     writer.dedent()
     writer.line("};")
 
@@ -100,7 +153,10 @@ def _emit_module(writer: CodeWriter, module: ModuleIR) -> None:
 def _emit_constructor(
     writer: CodeWriter,
     module: ModuleIR,
+    ctx: ModuleContext,
     methods: list[tuple[str, list[str]]],
+    bit_bridges: list[GenerateBitBridge],
+    direct_bit_bridges: list[DirectBitBridge],
 ) -> None:
     class_name = _sanitize_identifier(module.name)
     init_list = [f"{_sanitize_identifier(instance.name)}(\"{instance.name}\")" for instance in module.instances]
@@ -110,6 +166,8 @@ def _emit_constructor(
             init_list.append(
                 f"{vector_name}(\"{vector_name}\", {_generate_for_count_expr(generate_for)})"
             )
+    for bridge in bit_bridges:
+        init_list.append(f"{bridge.name}(\"{bridge.name}\", {bridge.count_expr})")
     if init_list:
         writer.line(f"SC_CTOR({class_name})")
         writer.indent()
@@ -122,7 +180,7 @@ def _emit_constructor(
 
     for method_name, _body_lines in methods:
         writer.line(f"SC_METHOD({method_name});")
-        sensitivity = _method_sensitivity(module, method_name)
+        sensitivity = _method_sensitivity(module, method_name, ctx)
         if sensitivity:
             writer.line("sensitive" + "".join(f" << {name}" for name in sensitivity) + ";")
         else:
@@ -131,7 +189,16 @@ def _emit_constructor(
 
     for instance in module.instances:
         instance_name = _sanitize_identifier(instance.name)
-        _emit_instance_bindings(writer, instance_name, instance)
+        _emit_instance_bindings(
+            writer,
+            instance_name,
+            instance,
+            direct_bridge_by_port={
+                bridge.port_name: bridge.name
+                for bridge in direct_bit_bridges
+                if bridge.instance_name == instance.name
+            },
+        )
 
     for generate_for in module.generate_fors:
         loop_var = _sanitize_identifier(generate_for.var)
@@ -140,9 +207,42 @@ def _emit_constructor(
         writer.indent()
         for instance in generate_for.instances:
             vector_name = f"{_sanitize_identifier(generate_for.name)}_{_sanitize_identifier(instance.name)}"
-            _emit_instance_bindings(writer, f"{vector_name}[{loop_var}]", instance, loop_var=loop_var)
+            _emit_instance_bindings(
+                writer,
+                f"{vector_name}[{loop_var}]",
+                instance,
+                loop_var=loop_var,
+                bit_bridge_by_port={
+                    bridge.port_name: bridge.name
+                    for bridge in bit_bridges
+                    if bridge.name.startswith(
+                        f"__bridge_{_sanitize_identifier(generate_for.name)}_"
+                        f"{_sanitize_identifier(instance.name)}_"
+                    )
+                },
+            )
         writer.dedent()
         writer.line("}")
+
+    for bridge in bit_bridges:
+        writer.line(f"SC_METHOD({bridge.method_name});")
+        if bridge.direction == "input":
+            writer.line(f"sensitive << {bridge.parent_name};")
+        else:
+            writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+            writer.indent()
+            writer.line(f"sensitive << {bridge.name}[i];")
+            writer.dedent()
+            writer.line("}")
+        writer.line()
+
+    for bridge in direct_bit_bridges:
+        writer.line(f"SC_METHOD({bridge.method_name});")
+        if bridge.direction == "input":
+            writer.line(f"sensitive << {bridge.parent_name};")
+        else:
+            writer.line(f"sensitive << {bridge.name};")
+        writer.line()
 
     writer.dedent()
     writer.line("}")
@@ -153,9 +253,19 @@ def _emit_instance_bindings(
     instance_ref: str,
     instance: InstanceIR,
     loop_var: str | None = None,
+    bit_bridge_by_port: dict[str, str] | None = None,
+    direct_bridge_by_port: dict[str, str] | None = None,
 ) -> None:
     for port in instance.ports:
         if port.name:
+            direct_bridge_name = (direct_bridge_by_port or {}).get(port.name)
+            if direct_bridge_name is not None:
+                writer.line(f"{instance_ref}.{_sanitize_identifier(port.name)}({direct_bridge_name});")
+                continue
+            bridge_name = (bit_bridge_by_port or {}).get(port.name)
+            if bridge_name is not None and loop_var is not None:
+                writer.line(f"{instance_ref}.{_sanitize_identifier(port.name)}({bridge_name}[{loop_var}]);")
+                continue
             writer.line(
                 f"{instance_ref}.{_sanitize_identifier(port.name)}"
                 f"({_cpp_binding_expr(port.value, loop_var=loop_var)});"
@@ -164,27 +274,156 @@ def _emit_instance_bindings(
             writer.line(f"// Positional port binding not emitted for {instance.name}: {port.value}")
 
 
-def _method_specs(module: ModuleIR) -> list[tuple[str, list[str]]]:
+def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[str]]]:
     specs: list[tuple[str, list[str]]] = []
     for index, assign in enumerate(module.continuous_assigns):
-        specs.append((f"assign_{index}", [_emit_assignment(assign.left, assign.right)]))
+        specs.append((f"assign_{index}", [_emit_continuous_assign(assign, ctx)]))
 
     comb_index = 0
     ff_index = 0
     for process in module.processes:
         if process.kind == "always_comb":
-            specs.append((f"always_comb_{comb_index}", _emit_comb_process(process)))
+            specs.append((f"always_comb_{comb_index}", _emit_comb_process(process, ctx)))
             comb_index += 1
         elif process.kind == "always_ff":
-            specs.append((f"always_ff_{ff_index}", _emit_ff_process(process)))
+            specs.append((f"always_ff_{ff_index}", _emit_ff_process(process, ctx)))
             ff_index += 1
     return specs
 
 
-def _method_sensitivity(module: ModuleIR, method_name: str) -> list[str]:
+def _emit_bridge_method(writer: CodeWriter, bridge: GenerateBitBridge) -> None:
+    writer.line(f"void {bridge.method_name}() {{")
+    writer.indent()
+    if bridge.direction == "input":
+        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+        writer.indent()
+        writer.line(f"{bridge.name}[i].write({bridge.parent_name}.read()[i]);")
+        writer.dedent()
+        writer.line("}")
+    else:
+        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
+        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+        writer.indent()
+        writer.line(f"__tmp[i] = {bridge.name}[i].read();")
+        writer.dedent()
+        writer.line("}")
+        writer.line(f"{bridge.parent_name}.write(__tmp);")
+    writer.dedent()
+    writer.line("}")
+
+
+def _emit_direct_bridge_method(writer: CodeWriter, bridge: DirectBitBridge) -> None:
+    writer.line(f"void {bridge.method_name}() {{")
+    writer.indent()
+    if bridge.direction == "input":
+        writer.line(f"{bridge.name}.write({bridge.parent_name}.read()[{bridge.index_expr}]);")
+    else:
+        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
+        writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
+        writer.line(f"{bridge.parent_name}.write(__tmp);")
+    writer.dedent()
+    writer.line("}")
+
+
+def _dependency_order(modules: list[ModuleIR]) -> list[ModuleIR]:
+    by_name = {module.name: module for module in modules}
+    visited: set[str] = set()
+    ordered: list[ModuleIR] = []
+
+    def visit(module: ModuleIR) -> None:
+        if module.name in visited:
+            return
+        visited.add(module.name)
+        for child in _module_dependencies(module):
+            child_module = by_name.get(child)
+            if child_module is not None:
+                visit(child_module)
+        ordered.append(module)
+
+    for module in modules:
+        visit(module)
+    return ordered
+
+
+def _module_dependencies(module: ModuleIR) -> list[str]:
+    names = [instance.module for instance in module.instances]
+    for generate_for in module.generate_fors:
+        names.extend(instance.module for instance in generate_for.instances)
+    return _dedupe(names)
+
+
+def _generate_bit_bridges(module: ModuleIR, modules_by_name: dict[str, ModuleIR]) -> list[GenerateBitBridge]:
+    bridges: list[GenerateBitBridge] = []
+    for generate_for in module.generate_fors:
+        count_expr = _generate_for_count_expr(generate_for)
+        for instance in generate_for.instances:
+            child = modules_by_name.get(instance.module)
+            if child is None:
+                continue
+            child_ports = {port.name: port for port in child.ports}
+            for port in instance.ports:
+                match = _bit_select_binding(port.value, generate_for.var)
+                if match is None:
+                    continue
+                child_port = child_ports.get(port.name)
+                if child_port is None or child_port.direction not in {"input", "output"}:
+                    continue
+                parent_name, _index = match
+                base = (
+                    f"{_sanitize_identifier(generate_for.name)}_"
+                    f"{_sanitize_identifier(instance.name)}_"
+                    f"{_sanitize_identifier(port.name)}"
+                )
+                bridges.append(
+                    GenerateBitBridge(
+                        name=f"__bridge_{base}",
+                        method_name=f"__bridge_method_{base}",
+                        parent_name=_sanitize_identifier(parent_name),
+                        port_name=port.name,
+                        direction=child_port.direction,
+                        count_expr=count_expr,
+                    )
+                )
+    return bridges
+
+
+def _direct_bit_bridges(module: ModuleIR, modules_by_name: dict[str, ModuleIR]) -> list[DirectBitBridge]:
+    bridges: list[DirectBitBridge] = []
+    for instance in module.instances:
+        child = modules_by_name.get(instance.module)
+        if child is None:
+            continue
+        child_ports = {port.name: port for port in child.ports}
+        for port in instance.ports:
+            match = _constant_bit_select_binding(port.value)
+            if match is None:
+                continue
+            child_port = child_ports.get(port.name)
+            if child_port is None or child_port.direction not in {"input", "output"}:
+                continue
+            parent_name, index_expr = match
+            base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port.name)}"
+            bridges.append(
+                DirectBitBridge(
+                    name=f"__bridge_{base}",
+                    method_name=f"__bridge_method_{base}",
+                    parent_name=_sanitize_identifier(parent_name),
+                    index_expr=_sanitize_identifier(index_expr) if not index_expr.isdecimal() else index_expr,
+                    instance_name=instance.name,
+                    port_name=port.name,
+                    direction=child_port.direction,
+                )
+            )
+    return bridges
+
+
+def _method_sensitivity(module: ModuleIR, method_name: str, ctx: ModuleContext) -> list[str]:
     if method_name.startswith("assign_"):
         index = int(method_name.removeprefix("assign_"))
-        return _identifiers(module.continuous_assigns[index].right)
+        assign = module.continuous_assigns[index]
+        if assign.right_expr is not None:
+            return collect_sensitivity(assign.right_expr, ctx)
+        return _identifiers(assign.right)
 
     if method_name.startswith("always_comb_"):
         index = int(method_name.removeprefix("always_comb_"))
@@ -193,11 +432,21 @@ def _method_sensitivity(module: ModuleIR, method_name: str) -> list[str]:
         explicit = [item.signal for item in process.sensitivity if item.edge in {"all", "level"} and item.signal]
         if explicit:
             return [_sanitize_identifier(name) for name in explicit if name != "*"]
-        read_names: list[str] = []
-        for statement in process.statements:
-            if "=" in statement:
-                read_names.extend(_identifiers(statement.split("=", maxsplit=1)[1]))
-        return _dedupe(read_names)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for statement in process.structured_statements:
+            for name in _collect_statement_rhs_sensitivity(statement, ctx):
+                if name not in seen:
+                    seen.add(name)
+                    ordered.append(name)
+        if ordered:
+            return ordered
+        # Last-resort fall back to the legacy string scan
+        legacy: list[str] = []
+        for statement_str in process.statements:
+            if "=" in statement_str:
+                legacy.extend(_identifiers(statement_str.split("=", maxsplit=1)[1]))
+        return _dedupe(legacy)
 
     if method_name.startswith("always_ff_"):
         index = int(method_name.removeprefix("always_ff_"))
@@ -212,132 +461,283 @@ def _method_sensitivity(module: ModuleIR, method_name: str) -> list[str]:
     return []
 
 
-def _emit_comb_process(process: ProcessIR) -> list[str]:
-    if process.structured_statements:
-        return _emit_structured_statements(process)
-
-    lines: list[str] = []
-    for statement in process.statements:
-        if "<=" in statement:
-            left, right = statement.split("<=", maxsplit=1)
-            lines.append(_emit_assignment(left.strip(), right.strip()))
-        elif "=" in statement:
-            left, right = statement.split("=", maxsplit=1)
-            lines.append(_emit_assignment(left.strip(), right.strip()))
-        else:
-            lines.append(f"// Unsupported statement: {statement}")
-    return lines
-
-
-def _emit_structured_statements(process: ProcessIR) -> list[str]:
-    if not process.structured_statements:
-        return ["// Empty process."]
-    lines: list[str] = []
-    for statement in process.structured_statements:
-        lines.extend(_emit_structured_statement(statement, indent_level=0))
-    return lines
-
-
-def _emit_structured_statement(statement: dict[str, object], indent_level: int) -> list[str]:
-    prefix = "  " * indent_level
+def _collect_statement_rhs_sensitivity(statement: dict[str, object], ctx: ModuleContext) -> list[str]:
     kind = statement.get("type")
-
+    names: list[str] = []
     if kind in {"blocking_assign", "nonblocking_assign"}:
-        return [prefix + _emit_assignment(str(statement["left"]), str(statement["right"]))]
-
+        right_expr = statement.get("right_expr")
+        if isinstance(right_expr, dict):
+            names.extend(collect_sensitivity(right_expr, ctx))
+        # bit-/part-select indices on LHS also need sensitivity
+        left_expr = statement.get("left_expr")
+        if isinstance(left_expr, dict):
+            names.extend(_collect_lvalue_index_sensitivity(left_expr, ctx))
+        return names
     if kind == "if":
-        cond = _cpp_rvalue(str(statement["cond"]))
-        lines = [f"{prefix}if ({cond}) {{"]
+        cond_expr = statement.get("cond_expr")
+        if isinstance(cond_expr, dict):
+            names.extend(collect_sensitivity(cond_expr, ctx))
         for child in _as_statement_list(statement.get("true")):
-            lines.extend(_emit_structured_statement(child, indent_level + 1))
-        false_branch = _as_statement_list(statement.get("false"))
-        if false_branch:
-            lines.append(f"{prefix}}} else {{")
-            for child in false_branch:
-                lines.extend(_emit_structured_statement(child, indent_level + 1))
-        lines.append(f"{prefix}}}")
+            names.extend(_collect_statement_rhs_sensitivity(child, ctx))
+        for child in _as_statement_list(statement.get("false")):
+            names.extend(_collect_statement_rhs_sensitivity(child, ctx))
+        return names
+    if kind == "case":
+        expr_tree = statement.get("expr_tree")
+        if isinstance(expr_tree, dict):
+            names.extend(collect_sensitivity(expr_tree, ctx))
+        for item in _as_case_items(statement.get("items")):
+            for cond_expr in item.get("cond_exprs", []) or []:
+                if isinstance(cond_expr, dict):
+                    names.extend(collect_sensitivity(cond_expr, ctx))
+            for child in _as_statement_list(item.get("statements")):
+                names.extend(_collect_statement_rhs_sensitivity(child, ctx))
+    return names
+
+
+def _collect_lvalue_index_sensitivity(expr: dict[str, object], ctx: ModuleContext) -> list[str]:
+    kind = expr.get("kind")
+    names: list[str] = []
+    if kind == "bitselect":
+        index = expr.get("index")
+        if isinstance(index, dict):
+            names.extend(collect_sensitivity(index, ctx))
+        target = expr.get("target")
+        if isinstance(target, dict):
+            names.extend(_collect_lvalue_index_sensitivity(target, ctx))
+    elif kind == "partselect":
+        for key in ("msb", "lsb"):
+            child = expr.get(key)
+            if isinstance(child, dict):
+                names.extend(collect_sensitivity(child, ctx))
+        target = expr.get("target")
+        if isinstance(target, dict):
+            names.extend(_collect_lvalue_index_sensitivity(target, ctx))
+    return names
+
+
+def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
+    if not process.structured_statements:
+        if process.statements:
+            lines: list[str] = []
+            for statement in process.statements:
+                if "<=" in statement:
+                    left, right = statement.split("<=", maxsplit=1)
+                    lines.append(_emit_legacy_assignment(left.strip(), right.strip()))
+                elif "=" in statement:
+                    left, right = statement.split("=", maxsplit=1)
+                    lines.append(_emit_legacy_assignment(left.strip(), right.strip()))
+                else:
+                    lines.append(f"// Unsupported statement: {statement}")
+            return lines
+        return ["// Empty process."]
+
+    written_bases = _collect_written_base_names(process)
+    if not written_bases:
+        # No writes — emit straight-through structured form (rare).
+        lines: list[str] = []
+        for statement in process.structured_statements:
+            lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=frozenset()))
         return lines
 
-    node = statement.get("node", kind)
-    return [f"{prefix}// Unsupported statement: {node}"]
-
-
-def _collect_lvalue_identifiers(statement: dict[str, object], names: set[str]) -> None:
-    kind = statement.get("type")
-    if kind in {"blocking_assign", "nonblocking_assign"}:
-        left = str(statement.get("left", "")).strip()
-        if left:
-            names.add(left)
-        return
-    if kind != "if":
-        return
-    for child in _as_statement_list(statement.get("true")):
-        _collect_lvalue_identifiers(child, names)
-    for child in _as_statement_list(statement.get("false")):
-        _collect_lvalue_identifiers(child, names)
-
-
-def _process_written_signals(process: ProcessIR) -> list[str]:
-    names: set[str] = set()
+    staged_names = frozenset(written_bases)
+    lines = []
+    for base in written_bases:
+        sanitized = _sanitize_identifier(base)
+        lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
     for statement in process.structured_statements:
-        _collect_lvalue_identifiers(statement, names)
-    return _dedupe(sorted(names))
+        lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=staged_names))
+    for base in written_bases:
+        sanitized = _sanitize_identifier(base)
+        lines.append(f"{sanitized}.write(__next_{sanitized});")
+    return lines
 
 
-def _emit_ff_structured_statement(
+def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
+    if not process.structured_statements:
+        return ["// Empty process."]
+
+    written_bases = _collect_written_base_names(process)
+    if not written_bases:
+        lines: list[str] = []
+        for statement in process.structured_statements:
+            lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=frozenset()))
+        return lines
+
+    staged_names = frozenset(written_bases)
+    lines = []
+    for base in written_bases:
+        sanitized = _sanitize_identifier(base)
+        lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
+    for statement in process.structured_statements:
+        lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=staged_names))
+    for base in written_bases:
+        sanitized = _sanitize_identifier(base)
+        lines.append(f"{sanitized}.write(__next_{sanitized});")
+    return lines
+
+
+def _emit_structured_statement(
     statement: dict[str, object],
     indent_level: int,
-    staged_names: set[str],
+    *,
+    ctx: ModuleContext,
+    staged_names: frozenset[str],
 ) -> list[str]:
     prefix = "  " * indent_level
     kind = statement.get("type")
 
-    if kind == "blocking_assign":
-        return [prefix + _emit_assignment(str(statement["left"]), str(statement["right"]))]
-
-    if kind == "nonblocking_assign":
-        left = str(statement["left"])
-        right = str(statement["right"])
-        if left in staged_names:
-            return [prefix + f"__next_{_sanitize_identifier(left)} = {_cpp_rvalue(right)};"]
-        return [prefix + _emit_assignment(left, right)]
+    if kind in {"blocking_assign", "nonblocking_assign"}:
+        return [prefix + _emit_tree_assignment(statement, ctx, staged_names)]
 
     if kind == "if":
-        cond = _cpp_rvalue(str(statement["cond"]))
-        lines = [f"{prefix}if ({cond}) {{"]
+        cond_text = _render_cond(statement, ctx)
+        lines = [f"{prefix}if ({cond_text}) {{"]
         for child in _as_statement_list(statement.get("true")):
-            lines.extend(_emit_ff_structured_statement(child, indent_level + 1, staged_names))
+            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
         false_branch = _as_statement_list(statement.get("false"))
         if false_branch:
             lines.append(f"{prefix}}} else {{")
             for child in false_branch:
-                lines.extend(_emit_ff_structured_statement(child, indent_level + 1, staged_names))
+                lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
         lines.append(f"{prefix}}}")
         return lines
+
+    if kind == "case":
+        return _emit_case_statement(statement, indent_level, ctx=ctx, staged_names=staged_names)
 
     node = statement.get("node", kind)
     return [f"{prefix}// Unsupported statement: {node}"]
 
 
-def _emit_ff_process(process: ProcessIR) -> list[str]:
-    if not process.structured_statements:
-        return ["// Empty process."]
-
-    written_signals = _process_written_signals(process)
-    if not written_signals:
-        return _emit_structured_statements(process)
-
-    staged_names = set(written_signals)
-    lines: list[str] = []
-    for signal in written_signals:
-        sanitized = _sanitize_identifier(signal)
-        lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
-    for statement in process.structured_statements:
-        lines.extend(_emit_ff_structured_statement(statement, indent_level=0, staged_names=staged_names))
-    for signal in written_signals:
-        sanitized = _sanitize_identifier(signal)
-        lines.append(f"{sanitized}.write(__next_{sanitized});")
+def _emit_case_statement(
+    statement: dict[str, object],
+    indent_level: int,
+    *,
+    ctx: ModuleContext,
+    staged_names: frozenset[str],
+) -> list[str]:
+    prefix = "  " * indent_level
+    expr_tree = statement.get("expr_tree")
+    if isinstance(expr_tree, dict):
+        expr = render_rvalue(expr_tree, ctx)
+    else:
+        expr = _cpp_rvalue(str(statement.get("expr", "")))
+    lines = [f"{prefix}switch ({expr}) {{"]
+    for item in _as_case_items(statement.get("items")):
+        cond_exprs = item.get("cond_exprs")
+        if isinstance(cond_exprs, list) and cond_exprs:
+            for cond_expr in cond_exprs:
+                if isinstance(cond_expr, dict):
+                    lines.append(f"{prefix}case {render_rvalue(cond_expr, ctx)}:")
+                else:
+                    lines.append(f"{prefix}case {cond_expr}:")
+        else:
+            conds = item.get("conds")
+            if isinstance(conds, list) and conds:
+                for cond in conds:
+                    lines.append(f"{prefix}case {_cpp_expr(str(cond))}:")
+            else:
+                lines.append(f"{prefix}default:")
+        for child in _as_statement_list(item.get("statements")):
+            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+        lines.append(f"{prefix}  break;")
+    lines.append(f"{prefix}}}")
     return lines
+
+
+def _render_cond(statement: dict[str, object], ctx: ModuleContext) -> str:
+    cond_expr = statement.get("cond_expr")
+    if isinstance(cond_expr, dict):
+        return render_rvalue(cond_expr, ctx)
+    return _cpp_rvalue(str(statement.get("cond", "")))
+
+
+def _emit_tree_assignment(
+    statement: dict[str, object],
+    ctx: ModuleContext,
+    staged_names: frozenset[str],
+) -> str:
+    left_expr = statement.get("left_expr")
+    right_expr = statement.get("right_expr")
+    if isinstance(right_expr, dict):
+        rhs = render_rvalue(right_expr, ctx)
+    else:
+        rhs = _cpp_rvalue(str(statement.get("right", "")))
+
+    if isinstance(left_expr, dict):
+        base = lvalue_base_name(left_expr)
+        if base in staged_names:
+            lhs = render_lvalue(left_expr, ctx, staged_names=staged_names)
+            return f"{lhs} = {rhs};"
+        # No staging available — fall back to .write() for the simple identifier case.
+        if left_expr.get("kind") == "identifier":
+            return f"{render_lvalue(left_expr, ctx)}.write({rhs});"
+        # Read-modify-write fallback for bit-/part-select on an unstaged signal.
+        return f"// unsupported lvalue without staging: {statement.get('left', '')}"
+
+    return _emit_legacy_assignment(str(statement.get("left", "")), rhs, rhs_already_cpp=True)
+
+
+def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> str:
+    if assign.right_expr is not None:
+        rhs = render_rvalue(assign.right_expr, ctx)
+    else:
+        rhs = _cpp_rvalue(assign.right)
+    if assign.left_expr is not None and assign.left_expr.get("kind") == "identifier":
+        return f"{render_lvalue(assign.left_expr, ctx)}.write({rhs});"
+    if assign.left_expr is not None and assign.left_expr.get("kind") in {"bitselect", "partselect"}:
+        base = lvalue_base_name(assign.left_expr)
+        if base:
+            sanitized = _sanitize_identifier(base)
+            lhs_target = render_lvalue(assign.left_expr, ctx, staged_names=frozenset({base}))
+            return (
+                f"{{ auto __tmp_{sanitized} = {sanitized}.read(); "
+                f"{lhs_target.replace(f'__next_{sanitized}', f'__tmp_{sanitized}')} = {rhs}; "
+                f"{sanitized}.write(__tmp_{sanitized}); }}"
+            )
+    return _emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)
+
+
+def _collect_written_base_names(process: ProcessIR) -> list[str]:
+    """Return the deduped base signal names assigned to inside a process."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for statement in process.structured_statements:
+        for base in _walk_lvalue_bases(statement):
+            if base and base not in seen:
+                seen.add(base)
+                ordered.append(base)
+    return ordered
+
+
+def _walk_lvalue_bases(statement: dict[str, object]) -> list[str]:
+    kind = statement.get("type")
+    if kind in {"blocking_assign", "nonblocking_assign"}:
+        left_expr = statement.get("left_expr")
+        if isinstance(left_expr, dict):
+            base = lvalue_base_name(left_expr)
+            if base:
+                return [base]
+        left_str = str(statement.get("left", "")).strip()
+        match = re.match(r"^(?P<name>[A-Za-z_][A-Za-z0-9_$]*)", left_str)
+        if match:
+            return [match.group("name")]
+        return []
+    if kind == "if":
+        names: list[str] = []
+        for child in _as_statement_list(statement.get("true")):
+            names.extend(_walk_lvalue_bases(child))
+        for child in _as_statement_list(statement.get("false")):
+            names.extend(_walk_lvalue_bases(child))
+        return names
+    if kind == "case":
+        names = []
+        for item in _as_case_items(statement.get("items")):
+            for child in _as_statement_list(item.get("statements")):
+                names.extend(_walk_lvalue_bases(child))
+        return names
+    return []
 
 
 def _as_statement_list(value: object) -> list[dict[str, object]]:
@@ -346,8 +746,15 @@ def _as_statement_list(value: object) -> list[dict[str, object]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _emit_assignment(left: str, right: str) -> str:
-    return f"{_cpp_lvalue(left)}.write({_cpp_rvalue(right)});"
+def _as_case_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _emit_legacy_assignment(left: str, right: str, *, rhs_already_cpp: bool = False) -> str:
+    rendered_right = right if rhs_already_cpp else _cpp_rvalue(right)
+    return f"{_cpp_lvalue(left)}.write({rendered_right});"
 
 
 def _port_type(port: PortIR) -> str:
@@ -452,9 +859,29 @@ def _cpp_binding_expr(expr: str, loop_var: str | None = None) -> str:
         name = _sanitize_identifier(match.group("name"))
         index = match.group("index")
         if loop_var is not None and index == loop_var:
-            return f"{name} /* TODO: bind bit-select [{loop_var}] via generated scalar signal */"
+            return f"{name}[{loop_var}]"
         return f"{name}[{_sanitize_identifier(index)}]" if not index.isdecimal() else f"{name}[{index}]"
     return _sanitize_identifier(expr)
+
+
+def _bit_select_binding(expr: str, loop_var: str) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\[(?P<index>[A-Za-z_][A-Za-z0-9_$]*|\d+)\]",
+        expr,
+    )
+    if match is None or match.group("index") != loop_var:
+        return None
+    return match.group("name"), match.group("index")
+
+
+def _constant_bit_select_binding(expr: str) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\[(?P<index>[A-Za-z_][A-Za-z0-9_$]*|\d+)\]",
+        expr,
+    )
+    if match is None:
+        return None
+    return match.group("name"), match.group("index")
 
 
 def _convert_verilog_constants(expr: str) -> str:

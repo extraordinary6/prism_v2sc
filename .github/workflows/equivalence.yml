@@ -1,0 +1,57 @@
+name: equivalence
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  rtl-vs-systemc:
+    name: RTL vs SystemC equivalence (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system simulators (iverilog, SystemC, build tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            iverilog \
+            libsystemc-dev \
+            g++ \
+            make
+          dpkg -L libsystemc-dev | head -30 || true
+          iverilog -V | head -2 || true
+          g++ --version | head -1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run pytest (baseline correctness)
+        run: |
+          python -m pytest -q
+
+      - name: Run RTL vs SystemC equivalence harness
+        run: |
+          python tests/equivalence/run_equivalence.py --keep-going
+
+      - name: Upload equivalence artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: equivalence-artifacts
+          path: build/equivalence/
+          if-no-files-found: ignore
+          retention-days: 7
