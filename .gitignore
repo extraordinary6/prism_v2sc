@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+parser.out
+parsetab.py
+.pytest_cache/
+.pytest_tmp/
+.pytest_*_tmp/
+build/
+tests/tmp/
