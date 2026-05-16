@@ -42,6 +42,7 @@ jobs:
 
       - name: Run pytest (baseline correctness)
         run: |
+          mkdir -p build/pytest_tmp
           python -m pytest -q
 
       - name: Run RTL vs SystemC equivalence harness
