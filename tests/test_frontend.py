@@ -69,3 +69,47 @@ endmodule
     code_to_severity = {diagnostic.code: diagnostic.severity for diagnostic in design.diagnostics}
     assert code_to_severity["mixed_assignment_styles"] == "error"
     assert code_to_severity["blocking_in_always_ff"] == "warning"
+
+
+def test_lower_design_keeps_only_top_reachable_modules(tmp_path: Path) -> None:
+    rtl = tmp_path / "hier.v"
+    rtl.write_text(
+        """
+module leaf(input wire a, output wire y);
+  assign y = a;
+endmodule
+
+module mid(input wire a, output wire y);
+  leaf u_leaf(.a(a), .y(y));
+endmodule
+
+module top(input wire a, output wire y);
+  mid u_mid(.a(a), .y(y));
+endmodule
+
+module unused(input wire a, output wire y);
+  assign y = ~a;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_design(parse_verilog([rtl]), "top")
+    assert {module.name for module in design.modules} == {"top", "mid", "leaf"}
+
+
+def test_lower_design_reports_unresolved_instance_module(tmp_path: Path) -> None:
+    rtl = tmp_path / "broken.v"
+    rtl.write_text(
+        """
+module top(input wire a, output wire y);
+  missing_mod u_missing(.a(a), .y(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_design(parse_verilog([rtl]), "top")
+    unresolved = [diagnostic for diagnostic in design.diagnostics if diagnostic.code == "unresolved_instance_module"]
+    assert len(unresolved) == 1
+    assert unresolved[0].module == "top"

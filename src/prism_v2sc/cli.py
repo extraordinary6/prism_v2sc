@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .frontend.preprocess import collect_sources
 from . import __version__
 from .verify.harness import convert_with_metrics, write_report
 
@@ -21,6 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         type=Path,
         help="Input Verilog source files.",
+    )
+    parser.add_argument(
+        "--filelist",
+        action="append",
+        default=[],
+        type=Path,
+        help="Path to .f-style filelist (can be specified multiple times).",
     )
     parser.add_argument(
         "--top",
@@ -64,21 +72,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if not args.sources:
-        parser.error("at least one Verilog source file is required")
-
-    missing_sources = [source for source in args.sources if not source.is_file()]
-    if missing_sources:
-        formatted = ", ".join(str(source) for source in missing_sources)
-        parser.error(f"source file(s) not found: {formatted}")
+    if not args.sources and not args.filelist:
+        parser.error("at least one Verilog source file or --filelist is required")
 
     if args.top is None:
         parser.error("--top is required")
 
+    try:
+        sources = collect_sources(args.sources, args.filelist)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+
+    if not sources:
+        parser.error("no Verilog source files resolved from positional inputs and filelists")
+
     args.out.mkdir(parents=True, exist_ok=True)
 
     artifacts = convert_with_metrics(
-        args.sources,
+        sources,
         args.top,
         compare_verilator=args.compare_verilator,
     )

@@ -31,9 +31,76 @@ def lower_design(ast: object, top: str) -> DesignIR:
     if top not in module_index:
         known = ", ".join(sorted(module_index)) or "<none>"
         raise ValueError(f"top module '{top}' not found; known modules: {known}")
-    modules = tuple(_lower_module(module) for module in module_index.values())
-    diagnostics = tuple(diagnostic for module in modules for diagnostic in module.diagnostics)
-    return DesignIR(top=top, modules=modules, diagnostics=diagnostics)
+
+    module_order = list(module_index)
+    lowered_by_name = {name: _lower_module(module_index[name]) for name in module_order}
+    reachable_names, missing_refs = _reachable_modules(top, lowered_by_name)
+
+    modules: list[ModuleIR] = []
+    for name in module_order:
+        if name not in reachable_names:
+            continue
+        module = lowered_by_name[name]
+        missing_targets = sorted({target for owner, target in missing_refs if owner == module.name})
+        if missing_targets:
+            diagnostics = list(module.diagnostics)
+            for missing_target in missing_targets:
+                diagnostics.append(
+                    DiagnosticIR(
+                        severity="error",
+                        module=module.name,
+                        code="unresolved_instance_module",
+                        message=f"instance refers to unknown module '{missing_target}'",
+                        node="Instance",
+                    )
+                )
+            module = ModuleIR(
+                name=module.name,
+                parameters=module.parameters,
+                ports=module.ports,
+                signals=module.signals,
+                continuous_assigns=module.continuous_assigns,
+                processes=module.processes,
+                instances=module.instances,
+                generate_fors=module.generate_fors,
+                diagnostics=tuple(diagnostics),
+            )
+        modules.append(module)
+
+    modules_tuple = tuple(modules)
+    diagnostics = tuple(diagnostic for module in modules_tuple for diagnostic in module.diagnostics)
+    return DesignIR(top=top, modules=modules_tuple, diagnostics=diagnostics)
+
+
+def _reachable_modules(
+    top: str,
+    modules_by_name: dict[str, ModuleIR],
+) -> tuple[set[str], set[tuple[str, str]]]:
+    reachable: set[str] = set()
+    missing_refs: set[tuple[str, str]] = set()
+    pending = [top]
+
+    while pending:
+        module_name = pending.pop()
+        if module_name in reachable:
+            continue
+        reachable.add(module_name)
+        module = modules_by_name.get(module_name)
+        if module is None:
+            continue
+        for child in _instantiated_modules(module):
+            if child in modules_by_name:
+                pending.append(child)
+            else:
+                missing_refs.add((module_name, child))
+    return reachable, missing_refs
+
+
+def _instantiated_modules(module: ModuleIR) -> list[str]:
+    child_modules = [instance.module for instance in module.instances]
+    for generate_for in module.generate_fors:
+        child_modules.extend(instance.module for instance in generate_for.instances)
+    return child_modules
 
 
 def _lower_module(module: vast.ModuleDef) -> ModuleIR:

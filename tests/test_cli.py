@@ -145,3 +145,88 @@ endmodule
     assert main(["--top", "driver_conflict", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
     output = capsys.readouterr().out
     assert "diagnostics: 2 error(s)" in output
+
+
+def test_cli_accepts_filelist_input(tmp_path: Path, capsys) -> None:
+    leaf = tmp_path / "leaf.v"
+    top = tmp_path / "top.v"
+    filelist = tmp_path / "sources.f"
+    out_dir = tmp_path / "systemc"
+
+    leaf.write_text(
+        """
+module leaf(input wire a, output wire y);
+  assign y = a;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    top.write_text(
+        """
+module top(input wire a, output wire y);
+  leaf u_leaf(.a(a), .y(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    filelist.write_text(
+        """
+# comment line
+// comment line
+leaf.v
+top.v
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["--top", "top", "--filelist", str(filelist), "--out", str(out_dir)]) == 0
+    payload = json.loads((out_dir / "ir.json").read_text(encoding="utf-8"))
+    assert {module["name"] for module in payload["modules"]} == {"top", "leaf"}
+    assert "wrote Phase 1 IR" in capsys.readouterr().out
+
+
+def test_cli_combines_positional_sources_and_filelist_with_dedup(tmp_path: Path) -> None:
+    leaf = tmp_path / "leaf.v"
+    top = tmp_path / "top.v"
+    extra = tmp_path / "extra_unused.v"
+    filelist = tmp_path / "sources.f"
+
+    leaf.write_text(
+        "module leaf(input wire a, output wire y); assign y = a; endmodule\n",
+        encoding="utf-8",
+    )
+    top.write_text(
+        "module top(input wire a, output wire y); leaf u_leaf(.a(a), .y(y)); endmodule\n",
+        encoding="utf-8",
+    )
+    extra.write_text(
+        "module extra_unused(input wire a, output wire y); assign y = ~a; endmodule\n",
+        encoding="utf-8",
+    )
+    filelist.write_text(
+        """
+leaf.v
+top.v
+""",
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "systemc"
+    assert (
+        main(
+            [
+                "--top",
+                "top",
+                "--filelist",
+                str(filelist),
+                "--out",
+                str(out_dir),
+                str(leaf),
+                str(extra),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads((out_dir / "ir.json").read_text(encoding="utf-8"))
+    # Reachability filter should keep top + leaf only, and dedupe leaf source.
+    assert {module["name"] for module in payload["modules"]} == {"top", "leaf"}

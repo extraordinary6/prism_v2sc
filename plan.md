@@ -17,12 +17,13 @@ Primary priorities:
 
 ## 2. Current Status Summary
 
-Overall status: **Phase 0-5 baseline completed** with known gaps.
+Overall status: **Phase 0-6 baseline completed** with known gaps.
 
 What is implemented now:
 
-- multi-source Verilog input via positional CLI args
+- multi-source Verilog input via positional CLI args and `--filelist`
 - Pyverilog parse + module index + structured IR
+- top-down reachable-module lowering based on `--top`
 - SystemC single-header generation (`SC_MODULE`, instances, simple generate-for vectors)
 - diagnostics in IR for unsupported constructs
 - phase5 metrics harness:
@@ -30,12 +31,10 @@ What is implemented now:
   - Python allocation peak (`tracemalloc`)
   - observed process memory
   - optional Verilator lint timing/memory capture
-- tests passing (`16 passed`)
+- tests passing (`20 passed`)
 
 What is not implemented yet:
 
-- native `--filelist` input support
-- true top-down reachable-module lowering/codegen
 - full streaming parse/elaboration
 - broad SystemVerilog coverage
 - full semantic equivalence (event scheduling/NBA corner cases/X/Z fidelity)
@@ -118,33 +117,31 @@ User-requested addition: **filelist support must be part of near-term goals**.
 
 This is now promoted into the next phase plan.
 
-## 5. Next Phases
-
 ### Phase 6: Filelist and Top-Down Reachability
 
-Status: **Planned (next)**
+Status: **Done**
 
-Goals:
+Completed:
 
-1. Add `--filelist <path>` support.
-2. Support common `.f` style list parsing:
+1. Added `--filelist <path>` support (repeatable option).
+2. Implemented `.f` style list parsing:
    - one path per line
-   - ignore blank lines
-   - ignore `#` and `//` comment lines
-3. Merge filelist sources with positional sources safely (deterministic ordering, dedupe).
-4. Add top-down reachable-module filtering from `--top`:
-   - only lower/generate modules reachable from top instance graph
-   - keep diagnostics for unresolved/unknown module references
-5. Add tests for:
+   - ignores blank lines
+   - ignores `#` and `//` comment lines
+3. Merged filelist + positional sources with deterministic dedupe.
+4. Added top-down reachable-module filtering from `--top`.
+5. Added unresolved instance-module diagnostics for unknown references.
+6. Added regression tests for:
    - filelist parsing
    - mixed positional + filelist mode
    - reachable-module pruning behavior
+   - unresolved instance diagnostics
 
-Exit criteria:
+Known limits:
 
-- CLI accepts both direct files and filelist.
-- top-down reachable conversion works on multi-file hierarchical fixtures.
-- test suite remains green.
+- filelist parser currently targets a simple `.f` subset and does not yet parse advanced options (`-I`, `+incdir+`, `-D`, nested `-f`).
+
+## 5. Next Phases
 
 ### Phase 7: Flow and Memory Refinement
 
@@ -189,10 +186,10 @@ Exit criteria:
 
 ## 7. Immediate Action Plan
 
-Next implementation target is **Phase 6**:
+Next implementation target is **Phase 7**:
 
-1. implement `--filelist`
-2. add source aggregation/normalization layer
-3. add top-down reachable-module filtering
-4. add corresponding CLI/frontend tests
-5. update README usage examples for filelist mode
+1. add stage-level and per-module memory/timing breakdown
+2. prototype module-by-module lowering/codegen residency control
+3. add optional truncation for large external tool stdout/stderr in metrics
+4. define reproducible benchmark command and fixture
+5. update docs with benchmark and interpretation guidance

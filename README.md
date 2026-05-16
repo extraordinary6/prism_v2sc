@@ -49,12 +49,13 @@ Key paths:
 Run via module:
 
 ```powershell
-python -m prism_v2sc --top <top_module> [options] <verilog_sources...>
+python -m prism_v2sc --top <top_module> [options] [<verilog_sources...>]
 ```
 
 ### Core options
 
 - `--top <name>`: top module name (required)
+- `--filelist <path>`: `.f` style source list (can be provided multiple times)
 - `--out <dir>`: output directory (default: `build/systemc`)
 - `--dump-ir`: print JSON IR to stdout instead of writing output files
 
@@ -93,7 +94,21 @@ Additional output:
 
 - `build/systemc/metrics.json`
 
-### 4.4 Include Verilator comparison
+### 4.4 Use filelist input
+
+```powershell
+python -m prism_v2sc --top top --filelist rtl/sources.f --out build/systemc
+```
+
+`sources.f` currently supports:
+
+- one file path per line
+- blank lines
+- comment lines starting with `#` or `//`
+
+You can combine positional sources and filelist sources. The tool resolves absolute paths and de-duplicates repeated entries deterministically.
+
+### 4.5 Include Verilator comparison
 
 ```powershell
 python -m prism_v2sc --top top --metrics --compare-verilator --out build/systemc rtl/top.v
@@ -106,7 +121,15 @@ If Verilator is discoverable, `metrics.json` includes:
 - peak observed Verilator process memory
 - captured stdout/stderr
 
-## 5. Diagnostics and Unsupported Constructs
+## 5. Top-Down Reachability
+
+Lowering/codegen is now driven by `--top` reachability:
+
+- only modules reachable from the top instance graph are lowered/emitted
+- unrelated modules present in input sources are ignored
+- unknown instance target modules are reported via diagnostics (`unresolved_instance_module`)
+
+## 6. Diagnostics and Unsupported Constructs
 
 Lowering collects unsupported/risky constructs into IR diagnostics:
 
@@ -122,7 +145,7 @@ Examples currently reported:
 
 Use `--fail-on-diagnostics` in CI to hard-fail when error diagnostics are present.
 
-## 6. Testing
+## 7. Testing
 
 Run all tests:
 
@@ -137,7 +160,7 @@ Current test coverage includes:
 - SystemC header generation for hierarchy/parameters/generate-for
 - phase5 metrics and diagnostics behavior
 
-## 7. Notes on Verilator Detection (Windows/MSYS2/MinGW)
+## 8. Notes on Verilator Detection (Windows/MSYS2/MinGW)
 
 The harness supports multiple discovery patterns, including common wrapper/binary layouts used by MSYS2/MinGW installs.
 
@@ -147,7 +170,7 @@ If your environment still reports Verilator unavailable, confirm:
 2. required helper binaries/interpreter are in `PATH`
 3. `verilator --version` succeeds in that shell
 
-## 8. Scope and Limitations
+## 9. Scope and Limitations
 
 This tool is currently a pragmatic RTL-subset translator. It prioritizes:
 
