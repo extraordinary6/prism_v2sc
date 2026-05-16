@@ -117,3 +117,31 @@ endmodule
 
     assert main(["--top", "case_top", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
     assert "diagnostics: 1 error(s)" in capsys.readouterr().out
+
+
+def test_cli_can_fail_on_phase3_driver_conflicts(tmp_path: Path, capsys) -> None:
+    rtl = tmp_path / "driver_conflict.v"
+    rtl.write_text(
+        """
+module driver_conflict(
+  input wire clk_a,
+  input wire clk_b,
+  input wire d,
+  output reg q
+);
+  always @(posedge clk_a) begin
+    q <= d;
+  end
+
+  always @(posedge clk_b) begin
+    q <= ~d;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "systemc"
+
+    assert main(["--top", "driver_conflict", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
+    output = capsys.readouterr().out
+    assert "diagnostics: 2 error(s)" in output

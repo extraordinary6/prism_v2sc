@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pyverilog.vparser import ast as vast
 
+from prism_v2sc.analysis.drivers import analyze_process_drivers
 from prism_v2sc.ir.expressions import render_expr
 from prism_v2sc.ir.model import (
     ArgIR,
@@ -98,6 +99,8 @@ def _lower_module(module: vast.ModuleDef) -> ModuleIR:
                     severity="warning",
                 )
             )
+
+    diagnostics.extend(analyze_process_drivers(module.name, tuple(processes)))
 
     return ModuleIR(
         name=module.name,

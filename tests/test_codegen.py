@@ -133,9 +133,11 @@ endmodule
     header = generate_systemc_header(design)
 
     assert "void always_ff_0()" in header
+    assert "auto __next_q = q.read();" in header
     assert "if ((!rst_n.read())) {" in header
-    assert "q.write(0x00);" in header
+    assert "__next_q = 0x00;" in header
     assert "} else {" in header
-    assert "q.write(d.read());" in header
+    assert "__next_q = d.read();" in header
+    assert "q.write(__next_q);" in header
     assert "SC_METHOD(always_ff_0);" in header
     assert "sensitive << clk.pos() << rst_n.neg();" in header

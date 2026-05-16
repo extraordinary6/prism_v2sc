@@ -176,7 +176,7 @@ def _method_specs(module: ModuleIR) -> list[tuple[str, list[str]]]:
             specs.append((f"always_comb_{comb_index}", _emit_comb_process(process)))
             comb_index += 1
         elif process.kind == "always_ff":
-            specs.append((f"always_ff_{ff_index}", _emit_structured_statements(process)))
+            specs.append((f"always_ff_{ff_index}", _emit_ff_process(process)))
             ff_index += 1
     return specs
 
@@ -260,6 +260,84 @@ def _emit_structured_statement(statement: dict[str, object], indent_level: int) 
 
     node = statement.get("node", kind)
     return [f"{prefix}// Unsupported statement: {node}"]
+
+
+def _collect_lvalue_identifiers(statement: dict[str, object], names: set[str]) -> None:
+    kind = statement.get("type")
+    if kind in {"blocking_assign", "nonblocking_assign"}:
+        left = str(statement.get("left", "")).strip()
+        if left:
+            names.add(left)
+        return
+    if kind != "if":
+        return
+    for child in _as_statement_list(statement.get("true")):
+        _collect_lvalue_identifiers(child, names)
+    for child in _as_statement_list(statement.get("false")):
+        _collect_lvalue_identifiers(child, names)
+
+
+def _process_written_signals(process: ProcessIR) -> list[str]:
+    names: set[str] = set()
+    for statement in process.structured_statements:
+        _collect_lvalue_identifiers(statement, names)
+    return _dedupe(sorted(names))
+
+
+def _emit_ff_structured_statement(
+    statement: dict[str, object],
+    indent_level: int,
+    staged_names: set[str],
+) -> list[str]:
+    prefix = "  " * indent_level
+    kind = statement.get("type")
+
+    if kind == "blocking_assign":
+        return [prefix + _emit_assignment(str(statement["left"]), str(statement["right"]))]
+
+    if kind == "nonblocking_assign":
+        left = str(statement["left"])
+        right = str(statement["right"])
+        if left in staged_names:
+            return [prefix + f"__next_{_sanitize_identifier(left)} = {_cpp_rvalue(right)};"]
+        return [prefix + _emit_assignment(left, right)]
+
+    if kind == "if":
+        cond = _cpp_rvalue(str(statement["cond"]))
+        lines = [f"{prefix}if ({cond}) {{"]
+        for child in _as_statement_list(statement.get("true")):
+            lines.extend(_emit_ff_structured_statement(child, indent_level + 1, staged_names))
+        false_branch = _as_statement_list(statement.get("false"))
+        if false_branch:
+            lines.append(f"{prefix}}} else {{")
+            for child in false_branch:
+                lines.extend(_emit_ff_structured_statement(child, indent_level + 1, staged_names))
+        lines.append(f"{prefix}}}")
+        return lines
+
+    node = statement.get("node", kind)
+    return [f"{prefix}// Unsupported statement: {node}"]
+
+
+def _emit_ff_process(process: ProcessIR) -> list[str]:
+    if not process.structured_statements:
+        return ["// Empty process."]
+
+    written_signals = _process_written_signals(process)
+    if not written_signals:
+        return _emit_structured_statements(process)
+
+    staged_names = set(written_signals)
+    lines: list[str] = []
+    for signal in written_signals:
+        sanitized = _sanitize_identifier(signal)
+        lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
+    for statement in process.structured_statements:
+        lines.extend(_emit_ff_structured_statement(statement, indent_level=0, staged_names=staged_names))
+    for signal in written_signals:
+        sanitized = _sanitize_identifier(signal)
+        lines.append(f"{sanitized}.write(__next_{sanitized});")
+    return lines
 
 
 def _as_statement_list(value: object) -> list[dict[str, object]]:
