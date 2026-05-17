@@ -15,7 +15,7 @@ def test_cli_writes_ir_and_systemc_header(tmp_path: Path, capsys) -> None:
 
     captured = capsys.readouterr()
     assert "wrote Phase 1 IR" in captured.out
-    assert "wrote SystemC header" in captured.out
+    assert "wrote SystemC module" in captured.out
 
     ir_path = out_dir / "ir.json"
     assert ir_path.is_file()
@@ -27,7 +27,9 @@ def test_cli_writes_ir_and_systemc_header(tmp_path: Path, capsys) -> None:
     assert assigns[0]["left"] == "y"
     assert assigns[0]["right"] == "a"
 
-    header = (out_dir / "prism_v2sc.hpp").read_text(encoding="utf-8")
+    # No umbrella anymore — the per-module file is the entry point.
+    assert not (out_dir / "prism_v2sc.hpp").exists()
+    header = (out_dir / "top.hpp").read_text(encoding="utf-8")
     assert "SC_MODULE(top)" in header
     assert "sc_in<bool> a;" in header
     assert "sc_out<bool> y;" in header

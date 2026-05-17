@@ -629,7 +629,8 @@
             "msb": "8"
           }
         }
-      ]
+      ],
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\alu_demo\\alu.v"
     }
   ],
   "top": "alu"

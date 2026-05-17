@@ -1,9 +1,12 @@
 # Sources for the multi_file equivalence fixture.
-# Exercises +incdir+, -D, multi-file listing.
+# Exercises +incdir+ with a subdir, -D, and a multi-folder RTL layout
+# (include/ + primitives/ + top/). The output mirrors this structure under
+# the SystemC build dir, so the equivalence harness exercises real
+# directory-mirror behavior end-to-end.
 
-+incdir+.
++incdir+include
 -D USE_REG
 
-sub_mux.v
-sub_register.v
-top_datapath.v
+primitives/sub_mux.v
+primitives/sub_register.v
+top/top_datapath.v

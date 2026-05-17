@@ -17,6 +17,7 @@ from prism_v2sc.ir.model import (
     GenerateForIR,
     InstanceIR,
     ModuleIR,
+    ModuleSignature,
     ParameterIR,
     PortIR,
     ProcessIR,
@@ -67,6 +68,7 @@ def lower_design(ast: object, top: str) -> DesignIR:
                 instances=module.instances,
                 generate_fors=module.generate_fors,
                 diagnostics=tuple(diagnostics),
+                source_path=module.source_path,
             )
         modules.append(module)
 
@@ -111,7 +113,7 @@ def _instantiated_modules(module: ModuleIR) -> list[str]:
     return instantiated_modules(module)
 
 
-def lower_module(module: vast.ModuleDef) -> ModuleIR:
+def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
     """Lower one Pyverilog module definition into module IR."""
     parameters: list[ParameterIR] = []
     ports: list[PortIR] = []
@@ -159,6 +161,27 @@ def lower_module(module: vast.ModuleDef) -> ModuleIR:
         instances=tuple(instances),
         generate_fors=tuple(generate_fors),
         diagnostics=tuple(diagnostics),
+        source_path=source_path,
+    )
+
+
+def extract_signature(module: vast.ModuleDef) -> ModuleSignature:
+    """Extract a lightweight port/parameter signature without lowering the body.
+
+    This is the cheap-to-keep summary that the streaming flow caches so that
+    parent modules can resolve positional / bit-bridge bindings against child
+    port lists after the child AST has been released.
+    """
+    parameters = _extract_paramlist(module.paramlist)
+    ports: list[PortIR] = []
+    for port in getattr(module.portlist, "ports", ()) or ():
+        lowered = _lower_port(port)
+        if lowered is not None:
+            ports.append(lowered)
+    return ModuleSignature(
+        name=module.name,
+        ports=tuple(ports),
+        parameters=tuple(parameters),
     )
 
 

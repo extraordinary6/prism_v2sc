@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .frontend.flow import compute_source_root
 from .frontend.preprocess import collect_sources
 from . import __version__
 from .verify.harness import convert_with_metrics, write_report
@@ -88,12 +89,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
 
+    source_root = compute_source_root(source_set.sources)
     artifacts = convert_with_metrics(
         source_set.sources,
         args.top,
         include_dirs=source_set.include_dirs,
         defines=source_set.defines,
         compare_verilator=args.compare_verilator,
+        out_dir=args.out,
+        source_root=source_root,
     )
     design = artifacts.design
     payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)
@@ -104,10 +108,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ir_path = args.out / "ir.json"
     ir_path.write_text(payload + "\n", encoding="utf-8")
-    header_path = args.out / "prism_v2sc.hpp"
-    header_path.write_text(artifacts.header, encoding="utf-8")
     print(f"wrote Phase 1 IR: {ir_path}")
-    print(f"wrote SystemC header: {header_path}")
+    for emitted in artifacts.emitted_files:
+        print(f"wrote SystemC module: {emitted}")
 
     if args.metrics or args.compare_verilator:
         metrics_path = args.out / "metrics.json"

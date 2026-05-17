@@ -5,7 +5,8 @@
 The project currently supports:
 
 - Pyverilog-based parsing and lowering into a structured JSON IR (with a tree-form expression sub-IR for expression-aware codegen)
-- Hierarchical module emission as single-header SystemC (`prism_v2sc.hpp`)
+- **Streaming, bottom-up SystemC emission**: one ``.hpp`` per module, mirroring the source RTL directory layout under the output dir. Each per-module header ``#include``s its instantiated children, so users only include the top module's hpp.
+- Top-down reachability with per-source eager lowering and AST release: each source is parsed at most once and dropped immediately after lowering; only lightweight ``ModuleSignature`` and IR objects stay live. Memory stays bounded by the largest single source, not by total design size.
 - Verilog constructs handled by the codegen:
   - module ports / signals / parameters / localparams
   - continuous `assign`
@@ -17,6 +18,7 @@ The project currently supports:
   - concatenation `{a, b, ...}` and replication `{N{x}}` in expressions
   - reduction operators `&x`, `|x`, `^x` and the inverted variants
   - ternary expressions and full binary/unary operator coverage
+  - module instantiation with both **named** and **positional** port bindings (positional bindings resolved against the child's cached signature)
   - module instantiation with parameter override
   - `generate for` instance arrays and `generate if` (statically resolvable conditions)
 - Phase 5/7 conversion metrics (time + memory + traversal counts + optional Verilator lint comparison)
@@ -82,7 +84,7 @@ python -m prism_v2sc --top <top_module> [options] [<verilog_sources...>]
 python -m prism_v2sc --top top --dump-ir rtl/top.v
 ```
 
-### 4.2 Generate IR + SystemC header
+### 4.2 Generate IR + per-module SystemC headers
 
 ```powershell
 python -m prism_v2sc --top top --out build/systemc rtl/top.v
@@ -91,7 +93,9 @@ python -m prism_v2sc --top top --out build/systemc rtl/top.v
 Outputs:
 
 - `build/systemc/ir.json`
-- `build/systemc/prism_v2sc.hpp`
+- `build/systemc/<module>.hpp` for each reachable module, mirroring the source directory layout under the output dir.
+
+For example, a design with `rtl/top/top.v` and `rtl/leaf/leaf.v` produces `build/systemc/top/top.hpp` and `build/systemc/leaf/leaf.hpp`; `top.hpp` will contain `#include "../leaf/leaf.hpp"`. Users only need to include the top module's hpp — children are pulled in transitively.
 
 ### 4.3 Generate with phase5 metrics
 
@@ -142,15 +146,18 @@ The same report also includes Phase 7 flow counters:
 - visited, missing, and ambiguous module lists
 - truncation flags for captured external-tool stdout/stderr
 
-## 5. Top-Down Reachability
+## 5. Top-Down Reachability and Streaming Emission
 
-Lowering/codegen is now driven by `--top` reachability using a lightweight module-to-source index:
+Lowering/codegen is driven by `--top` reachability using a lightweight module-to-source index:
 
 - only modules reachable from the top instance graph are parsed/lowered/emitted
+- each source is parsed at most once; on parse, every module it defines gets a lightweight `ModuleSignature` cached and gets fully lowered, then the AST is released
+- emission is **bottom-up (post-order DFS)**: a parent's hpp is written only after every child's hpp is already on disk, so the parent's `#include` paths point at files that exist
 - repeated instantiations lower each module definition once
 - unrelated modules present in input sources are ignored
 - unknown instance target modules are reported via diagnostics (`unresolved_instance_module`)
 - duplicate module definitions are reported via diagnostics (`ambiguous_module_definition`)
+- positional port bindings (e.g. `leaf u(a, b, y);`) are resolved against the child's cached signature, recovering port names by position
 
 ## 6. Diagnostics and Unsupported Constructs
 

@@ -291,6 +291,11 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
     ):
         return 1
 
+    top_header_path = _locate_top_header(sc_out_dir, fixture.top)
+    if top_header_path is None:
+        print(f"  ERROR: top hpp for '{fixture.top}' not found under {sc_out_dir}")
+        return 1
+
     stim_path = work / "stim.txt"
     write_stimulus(fixture, stim_path)
 
@@ -300,7 +305,7 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
     sctb_path = work / f"tb_{fixture.name}.cpp"
     vtb_path.write_text(render_verilog_tb(fixture, stim_path, rtl_trace), encoding="utf-8")
     sctb_path.write_text(
-        render_systemc_tb(fixture, stim_path, sc_trace, sc_out_dir / "prism_v2sc.hpp"),
+        render_systemc_tb(fixture, stim_path, sc_trace, top_header_path, sc_out_dir),
         encoding="utf-8",
     )
 
@@ -518,15 +523,22 @@ def render_systemc_tb(
     stim_path: Path,
     out_path: Path,
     header_path: Path,
+    include_root: Path,
 ) -> str:
     inputs = fixture.inputs
     outputs = fixture.outputs
+
+    try:
+        include_rel = header_path.resolve().relative_to(include_root.resolve())
+        include_directive = str(include_rel).replace(os.sep, "/")
+    except ValueError:
+        include_directive = header_path.name
 
     lines: list[str] = []
     lines.append("#include <fstream>")
     lines.append("#include <iostream>")
     lines.append("#include <string>")
-    lines.append(f"#include \"{header_path.name}\"")
+    lines.append(f'#include "{include_directive}"')
     lines.append("")
     lines.append("int sc_main(int argc, char* argv[]) {")
     lines.append("  (void)argc; (void)argv;")
@@ -645,6 +657,15 @@ def run_logged(cmd: list[str], log_path: Path, *, cwd: Path | None = None) -> in
     with log_path.open("w", encoding="utf-8") as log:
         result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=cwd)
     return result.returncode
+
+
+def _locate_top_header(sc_out_dir: Path, top: str) -> Path | None:
+    """Find the per-module hpp for ``top`` somewhere under ``sc_out_dir``."""
+    candidate = sc_out_dir / f"{top}.hpp"
+    if candidate.is_file():
+        return candidate
+    matches = sorted(sc_out_dir.rglob(f"{top}.hpp"))
+    return matches[0] if matches else None
 
 
 def _header_top_is_templated(header_path: Path, top: str) -> bool:

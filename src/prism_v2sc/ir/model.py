@@ -114,6 +114,20 @@ class DiagnosticIR:
 
 
 @dataclass(frozen=True)
+class ModuleSignature:
+    """Lightweight module signature used during streaming traversal.
+
+    Carries only the port list and parameter list needed to bind instances
+    (including positional bindings) without keeping the full lowered IR or
+    the Pyverilog AST alive.
+    """
+
+    name: str
+    ports: tuple[PortIR, ...] = field(default_factory=tuple)
+    parameters: tuple[ParameterIR, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class ModuleIR:
     """Module-level intermediate representation."""
 
@@ -126,6 +140,7 @@ class ModuleIR:
     instances: tuple[InstanceIR, ...] = field(default_factory=tuple)
     generate_fors: tuple[GenerateForIR, ...] = field(default_factory=tuple)
     diagnostics: tuple[DiagnosticIR, ...] = field(default_factory=tuple)
+    source_path: str = ""
 
 
 @dataclass(frozen=True)

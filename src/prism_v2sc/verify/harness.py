@@ -16,8 +16,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
-from prism_v2sc.codegen.systemc import generate_systemc_header
-from prism_v2sc.frontend.flow import lower_design_top_down
+from prism_v2sc.codegen.systemc import emit_systemc_files, generate_systemc_header
+from prism_v2sc.frontend.flow import compute_source_root, lower_design_top_down
 from prism_v2sc.ir.model import DesignIR
 
 T = TypeVar("T")
@@ -91,6 +91,7 @@ class ConversionArtifacts:
     design: DesignIR
     header: str
     report: ConversionReport
+    emitted_files: tuple[Path, ...] = field(default_factory=tuple)
 
 
 def smoke_result() -> str:
@@ -105,8 +106,15 @@ def convert_with_metrics(
     include_dirs: Sequence[Path] = (),
     defines: Sequence[str] = (),
     compare_verilator: bool = False,
+    out_dir: Path | None = None,
+    source_root: Path | None = None,
 ) -> ConversionArtifacts:
-    """Parse, lower, emit SystemC, and measure time and peak Python allocation."""
+    """Parse, lower, emit SystemC, and measure time and peak Python allocation.
+
+    When ``out_dir`` is provided, the per-module SystemC files are written
+    under it with directory mirroring rooted at ``source_root`` (defaulting
+    to the common parent of the inputs).
+    """
     normalized_sources = tuple(str(source) for source in sources)
     total_start = time.perf_counter()
 
@@ -127,7 +135,17 @@ def convert_with_metrics(
         elapsed_seconds=flow.traversal_elapsed_seconds,
         peak_python_bytes=0,
     )
-    codegen_measurement, header = _measure(lambda: generate_systemc_header(design))
+
+    resolved_root = source_root if source_root is not None else compute_source_root(sources)
+    emitted_files: tuple[Path, ...] = ()
+    if out_dir is not None:
+        codegen_measurement, written = _measure(
+            lambda: emit_systemc_files(design, Path(out_dir), Path(resolved_root), signatures=flow.signatures)
+        )
+        emitted_files = tuple(written)
+        header_text = generate_systemc_header(design)
+    else:
+        codegen_measurement, header_text = _measure(lambda: generate_systemc_header(design))
     total_elapsed = time.perf_counter() - total_start
 
     verilator_command = _find_verilator_command()
@@ -176,7 +194,7 @@ def convert_with_metrics(
         diagnostic_count=len(design.diagnostics),
         verilator_lint=verilator,
     )
-    return ConversionArtifacts(design=design, header=header, report=report)
+    return ConversionArtifacts(design=design, header=header_text, report=report, emitted_files=emitted_files)
 
 
 def write_report(report: ConversionReport, path: Path) -> None:

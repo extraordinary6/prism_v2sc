@@ -1,6 +1,6 @@
 # prism_v2sc Plan (Status-Based)
 
-Last updated: 2026-05-17
+Last updated: 2026-05-18
 
 This document reflects the **actual repository state** and defines the next phases.
 
@@ -14,17 +14,20 @@ Primary priorities:
 - avoid unnecessary global flatten/unroll
 - provide practical conversion for real RTL subsets
 - report unsupported/risky constructs instead of silently miscompiling
+- keep memory bounded for large SoC-scale designs (streaming, per-source AST release)
 
 ## 2. Current Status Summary
 
-Overall status: **Phase 0-9 completed; SystemVerilog expansion still deferred** as planned.
+Overall status: **Phase 0-10 completed; SystemVerilog expansion still deferred** as planned.
 
 What is implemented now:
 
 - multi-source Verilog input via positional CLI args and `--filelist`
 - Pyverilog parse + module index + structured IR with a tree-form expression sub-IR
 - top-down reachable-module lowering based on `--top`
-- SystemC single-header generation (`SC_MODULE`, instances, generate-for vectors, generate-if branch selection)
+- **streaming, bottom-up SystemC emission**: one ``.hpp`` per module, mirroring the source directory layout under the output dir; each per-module hpp ``#include``s its instantiated children's hpps; no umbrella header
+- **per-source eager lowering + AST release**: each source is parsed at most once and its AST dropped immediately after lowering; lightweight `ModuleSignature` is the only per-module residue
+- positional port bindings resolved against cached child signatures (named bindings continue to work as before)
 - Verilog expression coverage:
   - bit-select reads (`sig[i]`) and part-select reads (`sig[msb:lsb]`)
   - bit-select / part-select LHS in sequential blocks via staged `__next_*`
@@ -41,10 +44,10 @@ What is implemented now:
   - captured external-tool stdout/stderr truncation flags
   - optional Verilator lint timing/memory capture
 - **RTL vs SystemC functional differential CI on Linux** (`.github/workflows/equivalence.yml`):
-  - 8 hardware-style fixtures (mux2, adder with concat/bit-select, byteswap, alu with case, counter, shift register, FSM, pipeline with replicate)
+  - 9 hardware-style fixtures: mux2, adder (concat/bit-select), byteswap, alu (case + concat + bit-select), counter, shift_register, fsm_handshake (Moore FSM), pipeline8 (replicate), and **multi_file** (filelist-driven multi-source build with `+incdir+` and `-D`)
   - Icarus Verilog runs the RTL TB; libsystemc-dev runs the generated SystemC TB
   - per-cycle output trace diff with optional shift tolerance
-- tests passing (50+ unit/integration tests covering frontend, codegen, expression coverage, CLI, phase5/7/8, hardening)
+- tests passing (55 unit/integration tests covering frontend, codegen, expression coverage, CLI, phase5/7/8, hardening, multi-file output layout)
 
 What is not implemented yet:
 
@@ -141,6 +144,20 @@ Done:
 7. Phantom-sensitivity fix (sized literals no longer leak base prefixes into the sensitivity list).
 8. Added 4 new hardware-style fixtures (alu, byteswap, shift_register, fsm_handshake) and restored the replicate-based pipeline / concat-based adder.
 9. Added a GitHub Actions Linux workflow that iverilog/SystemC-co-simulates each fixture and diffs per-cycle traces.
+
+### Phase 10: Streaming Multi-File Emission
+
+Status: **Done**
+
+Done:
+
+1. Bottom-up (post-order DFS) emission: per-module hpp written only after all of its children are on disk.
+2. Per-source eager lowering + AST release: each source parsed at most once; AST dropped immediately, only IR and a lightweight `ModuleSignature` remain.
+3. Per-module file output mirroring RTL directory structure under the output dir; each hpp ``#include``s its children's hpps.
+4. Umbrella header removed (transitive `#include` chain replaces it).
+5. Positional port bindings now supported via cached child signatures.
+6. New equivalence fixture `multi_file` exercising filelist + `+incdir+` + `-D` end-to-end on Linux CI.
+7. Test suite extended with `tests/test_multifile_output.py` covering mirror layout, single-source flat output, post-order ordering, positional binding resolution, and one-parse-per-source behavior.
 
 ## 6. Risks and Mitigations
 

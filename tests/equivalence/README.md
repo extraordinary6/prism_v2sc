@@ -3,7 +3,7 @@
 This directory contains a small functional-equivalence harness used by the
 `equivalence` GitHub Actions workflow. For each fixture it:
 
-1. Runs `prism-v2sc` to lower the RTL into a single SystemC header.
+1. Runs `prism-v2sc` to lower the RTL into per-module SystemC headers.
 2. Generates a deterministic stimulus file (per-fixture seed).
 3. Generates a matching **Verilog testbench** and a **SystemC testbench**
    that both consume the same stimulus file and emit one trace line per
@@ -20,16 +20,25 @@ cycles in SystemC. Strict line-by-line matching is the default; pass
 diffing if a fixture's SystemC implementation legitimately lags the RTL
 by a fixed amount.
 
+The SystemC testbench `#include`s the *top module's* per-module hpp at
+its mirrored relative path under `build/equivalence/<fixture>/systemc/`.
+Children are pulled in transitively via the top hpp's `#include` chain.
+
 ## Fixtures
 
 Currently the following fixtures live under `fixtures/`:
 
-| name       | kind          | notes                                |
-| ---------- | ------------- | ------------------------------------ |
-| mux2       | combinational | 4-bit 2:1 mux                        |
-| adder      | combinational | 8-bit adder with carry-in            |
-| counter    | sequential    | 8-bit up counter with async reset    |
-| pipeline8  | sequential    | two-stage 8-bit valid/data pipeline  |
+| name           | kind          | notes                                                       |
+| -------------- | ------------- | ----------------------------------------------------------- |
+| mux2           | combinational | 4-bit 2:1 mux                                               |
+| adder          | combinational | 8-bit adder with carry-in, exercises concat / bit-select    |
+| byteswap       | combinational | 32-bit byte swap via concat                                 |
+| alu            | combinational | 8-bit ALU with `case`, concat, bit-select                   |
+| counter        | sequential    | 8-bit up counter with async reset                           |
+| shift_register | sequential    | 8-bit load/shift register, async reset                      |
+| fsm_handshake  | sequential    | Moore-style FSM handshake (start/data_valid/ready/done)     |
+| pipeline8      | sequential    | two-stage 8-bit valid/data pipeline, replicate constructions |
+| multi_file     | sequential    | filelist-driven build (`+incdir+`, `-D`, three sources)     |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py`
 (top module name, port directions/widths, clock/reset names, simulation

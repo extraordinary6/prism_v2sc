@@ -130,7 +130,8 @@
             "msb": "(8 - 1)"
           }
         }
-      ]
+      ],
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\top\\top_datapath.v"
     },
     {
       "continuous_assigns": [
@@ -203,7 +204,8 @@
         }
       ],
       "processes": [],
-      "signals": []
+      "signals": [],
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_mux.v"
     },
     {
       "continuous_assigns": [],
@@ -333,7 +335,8 @@
           ]
         }
       ],
-      "signals": []
+      "signals": [],
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_register.v"
     }
   ],
   "top": "top_datapath"

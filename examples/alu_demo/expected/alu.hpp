@@ -7,8 +7,8 @@
 using namespace sc_core;
 using namespace sc_dt;
 
-#ifndef PRISM_V2SC_ALU_HPP
-#define PRISM_V2SC_ALU_HPP
+#ifndef PRISM_V2SC_MOD_ALU_HPP
+#define PRISM_V2SC_MOD_ALU_HPP
 
 SC_MODULE(alu) {
   sc_in<sc_uint<8>> a;
@@ -90,4 +90,4 @@ SC_MODULE(alu) {
   }
 };
 
-#endif  // PRISM_V2SC_ALU_HPP
+#endif  // PRISM_V2SC_MOD_ALU_HPP

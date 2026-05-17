@@ -23,7 +23,7 @@ examples/alu_demo/
 ├── alu.v                       # 51-line ALU RTL
 ├── expected/
 │   ├── ir.json                 # Phase 1 JSON IR (one-shot dump)
-│   └── prism_v2sc.hpp          # Generated SystemC header
+│   └── alu.hpp                 # Generated SystemC per-module header
 └── README.md                   # This file
 ```
 
@@ -83,7 +83,8 @@ Two files are written:
 
 - `expected/ir.json` — the Phase 1 JSON IR (structural design dump used by
   the static checks and the metrics harness).
-- `expected/prism_v2sc.hpp` — the single-header SystemC model below.
+- `expected/alu.hpp` — the per-module SystemC header below. Single-module
+  design ⇒ flat output, no subdirectory.
 
 Re-running the command should produce a byte-identical header — the
 codegen is deterministic.
@@ -91,7 +92,7 @@ codegen is deterministic.
 ## Generated SystemC (highlights)
 
 The full output is committed at
-[`expected/prism_v2sc.hpp`](expected/prism_v2sc.hpp). The shape is:
+[`expected/alu.hpp`](expected/alu.hpp). The shape is:
 
 ```cpp
 SC_MODULE(alu) {
