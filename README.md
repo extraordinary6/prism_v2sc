@@ -50,6 +50,7 @@ Key paths:
 - `src/prism_v2sc/codegen/`: SystemC emission
 - `src/prism_v2sc/verify/harness.py`: phase5 metrics + optional Verilator comparison
 - `tests/`: unit/integration tests and RTL fixtures
+- `examples/alu_demo/`: standalone walkthrough (RTL + generated SystemC + reproduction command)
 
 ## 3. CLI Usage
 

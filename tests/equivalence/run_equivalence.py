@@ -62,6 +62,7 @@ class Fixture:
     reset_cycles: int = 3
     seed: int = 0xCAFEBABE
     sc_template_args: tuple[str, ...] = ()
+    filelist: str | None = None
 
 
 FIXTURES: tuple[Fixture, ...] = (
@@ -154,6 +155,19 @@ FIXTURES: tuple[Fixture, ...] = (
         reset_active_low=True,
         cycles=256,
     ),
+    Fixture(
+        name="multi_file",
+        sources=(),
+        filelist="multi_file/sources.f",
+        top="top_datapath",
+        inputs=(Port("en", 1), Port("sel", 1), Port("a", 8), Port("b", 8)),
+        outputs=(Port("y", 8),),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
 )
 
 
@@ -238,8 +252,43 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
             print(f"  ERROR: missing fixture source {source}")
             return 2
 
+    filelist_path: Path | None = None
+    extra_includes: list[Path] = []
+    extra_defines: list[str] = []
+    if fixture.filelist is not None:
+        filelist_path = FIXTURE_DIR / fixture.filelist
+        if not filelist_path.is_file():
+            print(f"  ERROR: missing filelist {filelist_path}")
+            return 2
+        # Reuse the prism preprocess parser so iverilog gets the same -I / -D set.
+        sys.path.insert(0, str(PROJECT_ROOT / "src"))
+        try:
+            from prism_v2sc.frontend.preprocess import collect_sources
+        finally:
+            sys.path.pop(0)
+        resolved = collect_sources([], [filelist_path])
+        sources.extend(resolved.sources)
+        extra_includes = list(resolved.include_dirs)
+        extra_defines = list(resolved.defines)
+        # Resolved sources from the filelist are absolute; dedupe deterministically.
+        seen: set[str] = set()
+        unique: list[Path] = []
+        for source in sources:
+            key = str(source.resolve()).casefold() if os.name == "nt" else str(source.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(source)
+        sources = unique
+
     sc_out_dir = work / "systemc"
-    if not convert_with_prism(sources, fixture.top, sc_out_dir, log_path=work / "prism.log"):
+    if not convert_with_prism(
+        sources if filelist_path is None else [],
+        fixture.top,
+        sc_out_dir,
+        log_path=work / "prism.log",
+        filelist=filelist_path,
+    ):
         return 1
 
     stim_path = work / "stim.txt"
@@ -263,6 +312,8 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
     iverilog_cmd = [
         "iverilog",
         "-g2012",
+        *[f"-I{include_dir}" for include_dir in extra_includes],
+        *[f"-D{define}" for define in extra_defines],
         "-o",
         str(vvp_path),
         str(vtb_path),
@@ -309,7 +360,14 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
     )
 
 
-def convert_with_prism(sources: list[Path], top: str, out_dir: Path, *, log_path: Path) -> bool:
+def convert_with_prism(
+    sources: list[Path],
+    top: str,
+    out_dir: Path,
+    *,
+    log_path: Path,
+    filelist: Path | None = None,
+) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
@@ -319,8 +377,10 @@ def convert_with_prism(sources: list[Path], top: str, out_dir: Path, *, log_path
         top,
         "--out",
         str(out_dir),
-        *[str(source) for source in sources],
     ]
+    if filelist is not None:
+        cmd.extend(["--filelist", str(filelist)])
+    cmd.extend(str(source) for source in sources)
     env = os.environ.copy()
     new_path = str(PROJECT_ROOT / "src")
     existing = env.get("PYTHONPATH", "")

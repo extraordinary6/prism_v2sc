@@ -1,0 +1,636 @@
+{
+  "diagnostics": [
+    {
+      "code": "event_scheduler_approximated",
+      "message": "module contains multiple procedural blocks; generated SystemC uses SC_METHOD scheduling and may differ from full Verilog event ordering",
+      "module": "alu",
+      "node": "Always",
+      "severity": "warning"
+    }
+  ],
+  "modules": [
+    {
+      "continuous_assigns": [
+        {
+          "left": "add_full",
+          "left_expr": {
+            "kind": "identifier",
+            "name": "add_full"
+          },
+          "right": "({1'b0, a} + {1'b0, b})",
+          "right_expr": {
+            "kind": "binop",
+            "left": {
+              "kind": "concat",
+              "parts": [
+                {
+                  "base": 2,
+                  "digits": "0",
+                  "has_xz": false,
+                  "kind": "intconst",
+                  "raw": "1'b0",
+                  "value": 0,
+                  "width": 1
+                },
+                {
+                  "kind": "identifier",
+                  "name": "a"
+                }
+              ]
+            },
+            "op": "+",
+            "right": {
+              "kind": "concat",
+              "parts": [
+                {
+                  "base": 2,
+                  "digits": "0",
+                  "has_xz": false,
+                  "kind": "intconst",
+                  "raw": "1'b0",
+                  "value": 0,
+                  "width": 1
+                },
+                {
+                  "kind": "identifier",
+                  "name": "b"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "event_scheduler_approximated",
+          "message": "module contains multiple procedural blocks; generated SystemC uses SC_METHOD scheduling and may differ from full Verilog event ordering",
+          "module": "alu",
+          "node": "Always",
+          "severity": "warning"
+        }
+      ],
+      "generate_fors": [],
+      "instances": [],
+      "name": "alu",
+      "parameters": [],
+      "ports": [
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "a",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "7"
+          }
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "b",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "7"
+          }
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "op",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "2"
+          }
+        },
+        {
+          "direction": "output",
+          "kind": "reg",
+          "name": "result",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "7"
+          }
+        },
+        {
+          "direction": "output",
+          "kind": "reg",
+          "name": "zero",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "output",
+          "kind": "reg",
+          "name": "carry",
+          "signed": false,
+          "width": null
+        }
+      ],
+      "processes": [
+        {
+          "kind": "always_comb",
+          "sensitivity": [
+            {
+              "edge": "all",
+              "signal": ""
+            }
+          ],
+          "statements": [
+            "CaseStatement"
+          ],
+          "structured_statements": [
+            {
+              "expr": "op",
+              "expr_tree": {
+                "kind": "identifier",
+                "name": "op"
+              },
+              "items": [
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "000",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b000",
+                      "value": 0,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b000"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a + b)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "+",
+                        "right": {
+                          "kind": "identifier",
+                          "name": "b"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "001",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b001",
+                      "value": 1,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b001"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a - b)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "-",
+                        "right": {
+                          "kind": "identifier",
+                          "name": "b"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "010",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b010",
+                      "value": 2,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b010"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a & b)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "&",
+                        "right": {
+                          "kind": "identifier",
+                          "name": "b"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "011",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b011",
+                      "value": 3,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b011"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a | b)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "|",
+                        "right": {
+                          "kind": "identifier",
+                          "name": "b"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "100",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b100",
+                      "value": 4,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b100"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a ^ b)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "^",
+                        "right": {
+                          "kind": "identifier",
+                          "name": "b"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "101",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b101",
+                      "value": 5,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b101"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(~a)",
+                      "right_expr": {
+                        "kind": "unop",
+                        "op": "~",
+                        "operand": {
+                          "kind": "identifier",
+                          "name": "a"
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "110",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b110",
+                      "value": 6,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b110"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a << 1)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": "<<",
+                        "right": {
+                          "base": 10,
+                          "digits": "1",
+                          "has_xz": false,
+                          "kind": "intconst",
+                          "raw": "1",
+                          "value": 1,
+                          "width": null
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [
+                    {
+                      "base": 2,
+                      "digits": "111",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "3'b111",
+                      "value": 7,
+                      "width": 3
+                    }
+                  ],
+                  "conds": [
+                    "3'b111"
+                  ],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "(a >> 1)",
+                      "right_expr": {
+                        "kind": "binop",
+                        "left": {
+                          "kind": "identifier",
+                          "name": "a"
+                        },
+                        "op": ">>",
+                        "right": {
+                          "base": 10,
+                          "digits": "1",
+                          "has_xz": false,
+                          "kind": "intconst",
+                          "raw": "1",
+                          "value": 1,
+                          "width": null
+                        }
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                },
+                {
+                  "cond_exprs": [],
+                  "conds": [],
+                  "statements": [
+                    {
+                      "left": "result",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "result"
+                      },
+                      "right": "8'h00",
+                      "right_expr": {
+                        "base": 16,
+                        "digits": "00",
+                        "has_xz": false,
+                        "kind": "intconst",
+                        "raw": "8'h00",
+                        "value": 0,
+                        "width": 8
+                      },
+                      "type": "blocking_assign"
+                    }
+                  ]
+                }
+              ],
+              "type": "case"
+            }
+          ]
+        },
+        {
+          "kind": "always_comb",
+          "sensitivity": [
+            {
+              "edge": "all",
+              "signal": ""
+            }
+          ],
+          "statements": [
+            "zero = (result == 8'h00)"
+          ],
+          "structured_statements": [
+            {
+              "left": "zero",
+              "left_expr": {
+                "kind": "identifier",
+                "name": "zero"
+              },
+              "right": "(result == 8'h00)",
+              "right_expr": {
+                "kind": "binop",
+                "left": {
+                  "kind": "identifier",
+                  "name": "result"
+                },
+                "op": "==",
+                "right": {
+                  "base": 16,
+                  "digits": "00",
+                  "has_xz": false,
+                  "kind": "intconst",
+                  "raw": "8'h00",
+                  "value": 0,
+                  "width": 8
+                }
+              },
+              "type": "blocking_assign"
+            }
+          ]
+        },
+        {
+          "kind": "always_comb",
+          "sensitivity": [
+            {
+              "edge": "all",
+              "signal": ""
+            }
+          ],
+          "statements": [
+            "if (op == 3'b000)"
+          ],
+          "structured_statements": [
+            {
+              "cond": "(op == 3'b000)",
+              "cond_expr": {
+                "kind": "binop",
+                "left": {
+                  "kind": "identifier",
+                  "name": "op"
+                },
+                "op": "==",
+                "right": {
+                  "base": 2,
+                  "digits": "000",
+                  "has_xz": false,
+                  "kind": "intconst",
+                  "raw": "3'b000",
+                  "value": 0,
+                  "width": 3
+                }
+              },
+              "false": [
+                {
+                  "left": "carry",
+                  "left_expr": {
+                    "kind": "identifier",
+                    "name": "carry"
+                  },
+                  "right": "1'b0",
+                  "right_expr": {
+                    "base": 2,
+                    "digits": "0",
+                    "has_xz": false,
+                    "kind": "intconst",
+                    "raw": "1'b0",
+                    "value": 0,
+                    "width": 1
+                  },
+                  "type": "blocking_assign"
+                }
+              ],
+              "true": [
+                {
+                  "left": "carry",
+                  "left_expr": {
+                    "kind": "identifier",
+                    "name": "carry"
+                  },
+                  "right": "add_full[8]",
+                  "right_expr": {
+                    "index": {
+                      "base": 10,
+                      "digits": "8",
+                      "has_xz": false,
+                      "kind": "intconst",
+                      "raw": "8",
+                      "value": 8,
+                      "width": null
+                    },
+                    "kind": "bitselect",
+                    "target": {
+                      "kind": "identifier",
+                      "name": "add_full"
+                    }
+                  },
+                  "type": "blocking_assign"
+                }
+              ],
+              "type": "if"
+            }
+          ]
+        }
+      ],
+      "signals": [
+        {
+          "kind": "wire",
+          "name": "add_full",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "8"
+          }
+        }
+      ]
+    }
+  ],
+  "top": "alu"
+}
