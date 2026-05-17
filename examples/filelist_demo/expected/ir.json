@@ -1,0 +1,340 @@
+{
+  "diagnostics": [],
+  "modules": [
+    {
+      "continuous_assigns": [],
+      "diagnostics": [],
+      "generate_fors": [],
+      "instances": [
+        {
+          "module": "sub_mux",
+          "name": "u_mux",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "sel",
+              "value": "sel"
+            },
+            {
+              "name": "a",
+              "value": "a"
+            },
+            {
+              "name": "b",
+              "value": "b"
+            },
+            {
+              "name": "y",
+              "value": "mux_out"
+            }
+          ]
+        },
+        {
+          "module": "sub_register",
+          "name": "u_reg",
+          "parameters": [],
+          "ports": [
+            {
+              "name": "clk",
+              "value": "clk"
+            },
+            {
+              "name": "rst_n",
+              "value": "rst_n"
+            },
+            {
+              "name": "en",
+              "value": "en"
+            },
+            {
+              "name": "data_in",
+              "value": "mux_out"
+            },
+            {
+              "name": "data_out",
+              "value": "y"
+            }
+          ]
+        }
+      ],
+      "name": "top_datapath",
+      "parameters": [],
+      "ports": [
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "clk",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "rst_n",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "en",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "sel",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "a",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "b",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        },
+        {
+          "direction": "output",
+          "kind": "wire",
+          "name": "y",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        }
+      ],
+      "processes": [],
+      "signals": [
+        {
+          "kind": "wire",
+          "name": "mux_out",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        }
+      ]
+    },
+    {
+      "continuous_assigns": [
+        {
+          "left": "y",
+          "left_expr": {
+            "kind": "identifier",
+            "name": "y"
+          },
+          "right": "(sel ? b : a)",
+          "right_expr": {
+            "cond": {
+              "kind": "identifier",
+              "name": "sel"
+            },
+            "false": {
+              "kind": "identifier",
+              "name": "a"
+            },
+            "kind": "cond",
+            "true": {
+              "kind": "identifier",
+              "name": "b"
+            }
+          }
+        }
+      ],
+      "diagnostics": [],
+      "generate_fors": [],
+      "instances": [],
+      "name": "sub_mux",
+      "parameters": [],
+      "ports": [
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "sel",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "a",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "b",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        },
+        {
+          "direction": "output",
+          "kind": "wire",
+          "name": "y",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        }
+      ],
+      "processes": [],
+      "signals": []
+    },
+    {
+      "continuous_assigns": [],
+      "diagnostics": [],
+      "generate_fors": [],
+      "instances": [],
+      "name": "sub_register",
+      "parameters": [],
+      "ports": [
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "clk",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "rst_n",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "en",
+          "signed": false,
+          "width": null
+        },
+        {
+          "direction": "input",
+          "kind": "wire",
+          "name": "data_in",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        },
+        {
+          "direction": "output",
+          "kind": "reg",
+          "name": "data_out",
+          "signed": false,
+          "width": {
+            "lsb": "0",
+            "msb": "(8 - 1)"
+          }
+        }
+      ],
+      "processes": [
+        {
+          "kind": "always_ff",
+          "sensitivity": [
+            {
+              "edge": "posedge",
+              "signal": "clk"
+            },
+            {
+              "edge": "negedge",
+              "signal": "rst_n"
+            }
+          ],
+          "statements": [
+            "if (!rst_n)"
+          ],
+          "structured_statements": [
+            {
+              "cond": "(!rst_n)",
+              "cond_expr": {
+                "kind": "unop",
+                "op": "!",
+                "operand": {
+                  "kind": "identifier",
+                  "name": "rst_n"
+                }
+              },
+              "false": [
+                {
+                  "cond": "en",
+                  "cond_expr": {
+                    "kind": "identifier",
+                    "name": "en"
+                  },
+                  "false": [],
+                  "true": [
+                    {
+                      "left": "data_out",
+                      "left_expr": {
+                        "kind": "identifier",
+                        "name": "data_out"
+                      },
+                      "right": "data_in",
+                      "right_expr": {
+                        "kind": "identifier",
+                        "name": "data_in"
+                      },
+                      "type": "nonblocking_assign"
+                    }
+                  ],
+                  "type": "if"
+                }
+              ],
+              "true": [
+                {
+                  "left": "data_out",
+                  "left_expr": {
+                    "kind": "identifier",
+                    "name": "data_out"
+                  },
+                  "right": "8'h00",
+                  "right_expr": {
+                    "base": 16,
+                    "digits": "00",
+                    "has_xz": false,
+                    "kind": "intconst",
+                    "raw": "8'h00",
+                    "value": 0,
+                    "width": 8
+                  },
+                  "type": "nonblocking_assign"
+                }
+              ],
+              "type": "if"
+            }
+          ]
+        }
+      ],
+      "signals": []
+    }
+  ],
+  "top": "top_datapath"
+}
