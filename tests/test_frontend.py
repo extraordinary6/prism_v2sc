@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from prism_v2sc.frontend.lower import lower_design
+from pyverilog.vparser import ast as vast
+
+from prism_v2sc.frontend.lower import _function_statement_diagnostics, lower_design
 from prism_v2sc.frontend.pyverilog_parser import parse_verilog
 
 
@@ -113,3 +115,31 @@ endmodule
     unresolved = [diagnostic for diagnostic in design.diagnostics if diagnostic.code == "unresolved_instance_module"]
     assert len(unresolved) == 1
     assert unresolved[0].module == "top"
+
+
+def test_lower_design_reports_nonblocking_in_function(tmp_path: Path) -> None:
+    rtl = tmp_path / "bad_function_nb.v"
+    rtl.write_text(
+        """
+module top(input wire a, output wire y);
+  function bad;
+    input x;
+    begin
+      bad <= x;
+    end
+  endfunction
+  assign y = bad(a);
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_design(parse_verilog([rtl]), "top")
+    codes = {diagnostic.code for diagnostic in design.diagnostics}
+    assert "unsupported_function_nonblocking" in codes
+
+
+def test_function_statement_diagnostics_reports_task_call() -> None:
+    task_call = vast.TaskCall(vast.Identifier("helper"), [vast.Identifier("x")])
+    diagnostics = _function_statement_diagnostics("top", "bad", [task_call])
+    assert any(diagnostic.code == "unsupported_task_call_in_function" for diagnostic in diagnostics)

@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from prism_v2sc.ir.model import ModuleIR, ParameterIR, PortIR, SignalIR
+from prism_v2sc.ir.model import FunctionDefIR, ModuleIR, ParameterIR, PortIR, SignalIR
 
 
 _BINARY_REDUCTION_OPS = {"&", "|", "^", "~&", "~|", "^~", "~^"}
@@ -55,6 +55,9 @@ class ModuleContext:
     parameter_names: frozenset[str]
     signal_widths: dict[str, int]
     parameter_values: dict[str, int]
+    value_names: frozenset[str] = field(default_factory=frozenset)
+    value_widths: dict[str, int] = field(default_factory=dict)
+    function_widths: dict[str, int] = field(default_factory=dict)
     loop_vars: frozenset[str] = field(default_factory=frozenset)
 
     def with_loop_var(self, name: str) -> "ModuleContext":
@@ -63,6 +66,9 @@ class ModuleContext:
             parameter_names=self.parameter_names,
             signal_widths=self.signal_widths,
             parameter_values=self.parameter_values,
+            value_names=self.value_names,
+            value_widths=self.value_widths,
+            function_widths=self.function_widths,
             loop_vars=frozenset(self.loop_vars | {name}),
         )
 
@@ -73,6 +79,7 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
     signal_widths: dict[str, int] = {}
     parameter_names: set[str] = set()
     parameter_values: dict[str, int] = {}
+    function_widths: dict[str, int] = {}
 
     for parameter in module.parameters:
         parameter_names.add(parameter.name)
@@ -86,12 +93,15 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
     for signal in module.signals:
         signal_names.add(signal.name)
         signal_widths[signal.name] = _signal_width(signal, parameter_values)
+    for function in module.functions:
+        function_widths[function.name] = _function_return_width(function, parameter_values)
 
     return ModuleContext(
         signal_names=frozenset(signal_names),
         parameter_names=frozenset(parameter_names),
         signal_widths=signal_widths,
         parameter_values=parameter_values,
+        function_widths=function_widths,
     )
 
 
@@ -138,6 +148,10 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
         return f"{target_str}.range({msb}, {lsb})"
     if kind == "syscall":
         return _render_syscall(expr, ctx)
+    if kind == "funcall":
+        name = sanitize_identifier(str(expr.get("name", "")))
+        args = ", ".join(render_rvalue(arg, ctx) for arg in expr.get("args", []))
+        return f"{name}({args})"
     if kind == "raw":
         text = str(expr.get("text", ""))
         return f"/* raw: {text} */ 0"
@@ -204,6 +218,8 @@ def collect_sensitivity(expr: dict[str, Any] | None, ctx: ModuleContext) -> list
                 return
             if name in ctx.parameter_names or name in ctx.loop_vars:
                 return
+            if name in ctx.value_names:
+                return
             if name not in ctx.signal_names:
                 return
             sanitized = sanitize_identifier(name)
@@ -238,6 +254,8 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
         return 1
     if kind == "identifier":
         name = str(expr.get("name", ""))
+        if name in ctx.value_names:
+            return max(1, ctx.value_widths.get(name, 1))
         return max(1, ctx.signal_widths.get(name, 1))
     if kind == "bitselect":
         return 1
@@ -265,6 +283,9 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
         return infer_width(expr.get("operand"), ctx)
     if kind == "cond":
         return max(infer_width(expr.get("true"), ctx), infer_width(expr.get("false"), ctx))
+    if kind == "funcall":
+        name = str(expr.get("name", ""))
+        return max(1, ctx.function_widths.get(name, 1))
     return 1
 
 
@@ -362,9 +383,17 @@ def _render_identifier_rvalue(name: str, ctx: ModuleContext) -> str:
         return sanitized
     if name in ctx.parameter_names:
         return sanitized
+    if name in ctx.value_names:
+        return sanitized
     if name in ctx.signal_names:
         return f"{sanitized}.read()"
     return sanitized
+
+
+def _function_return_width(function: FunctionDefIR, parameter_values: dict[str, int]) -> int:
+    if function.return_width is None:
+        return 1
+    return _width_from_pair(function.return_width.msb, function.return_width.lsb, parameter_values)
 
 
 def _render_aggregate_rvalue(node: dict[str, Any] | None, ctx: ModuleContext) -> str:

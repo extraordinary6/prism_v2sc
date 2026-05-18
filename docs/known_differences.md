@@ -19,6 +19,7 @@ Current known differences:
 - Direct instance bit-select bindings use scalar bridge signals for simple `vector[constant]` and `vector[index]` patterns.
 - Positional port bindings (e.g. ``mod u(a, b, c);``) are resolved against the child's cached signature, recovering port names from positions. Named bindings remain the recommended style.
 - Modules with multiple procedural blocks emit an event-scheduler approximation warning. Per-signal `always` style (one block per output) is the recommended pattern and is exercised in the equivalence fixtures.
+- Module-local Verilog `function`/`task` conversion supports a synthesizable subset: declarations and procedural statements (`=`/`<=`, `if`, `case`, and task calls). Unsupported timing/event controls still emit diagnostics. Functions are limited to input arguments only; output/inout function ports are diagnosed as unsupported.
 
 Policy:
 

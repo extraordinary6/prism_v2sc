@@ -6,5 +6,6 @@ parsetab.py
 .pytest_tmp/
 .pytest_*_tmp/
 build/
+*.egg-info/
 tests/tmp/
 .claude/

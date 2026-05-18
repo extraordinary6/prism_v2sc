@@ -24,6 +24,7 @@ import re
 from prism_v2sc.ir.model import (
     ContinuousAssignIR,
     DesignIR,
+    FunctionDefIR,
     GenerateForIR,
     InstanceIR,
     ModuleIR,
@@ -31,6 +32,7 @@ from prism_v2sc.ir.model import (
     PortIR,
     ProcessIR,
     SignalIR,
+    TaskDefIR,
     WidthIR,
 )
 
@@ -291,6 +293,17 @@ def _emit_module(
         writer.line()
 
     methods = _method_specs(module, ctx)
+    task_ports_by_name = {task.name: task.ports for task in module.tasks}
+
+    for signature, body_lines in _subprogram_specs(module, ctx, task_ports_by_name):
+        writer.line(f"{signature} {{")
+        writer.indent()
+        for body_line in body_lines:
+            writer.line(body_line)
+        writer.dedent()
+        writer.line("}")
+        writer.line()
+
     for method_name, body_lines in methods:
         writer.line(f"void {method_name}() {{")
         writer.indent()
@@ -476,8 +489,108 @@ def _resolve_instance_ports(
     return resolved
 
 
+def _subprogram_specs(
+    module: ModuleIR,
+    ctx: ModuleContext,
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+) -> list[tuple[str, list[str]]]:
+    specs: list[tuple[str, list[str]]] = []
+    for function in module.functions:
+        return_type = _value_type(function.return_width, function.signed)
+        signature = (
+            f"{return_type} {_sanitize_identifier(function.name)}"
+            f"({_subprogram_params(function.ports)})"
+        )
+        function_ctx = _with_value_context(
+            ctx,
+            function.ports,
+            function.signals,
+            extra_names={function.name},
+        )
+        body: list[str] = [f"{return_type} __result = 0;"]
+        for signal in function.signals:
+            body.append(f"{_value_type(signal.width, signal.signed)} {_sanitize_identifier(signal.name)} = 0;")
+        for statement in function.structured_statements:
+            body.extend(
+                _emit_structured_statement(
+                    statement,
+                    indent_level=0,
+                    ctx=function_ctx,
+                    staged_names=frozenset(),
+                    task_ports_by_name=task_ports_by_name,
+                    return_target=function.name,
+                )
+            )
+        body.append("return __result;")
+        specs.append((signature, body))
+
+    for task in module.tasks:
+        signature = f"void {_sanitize_identifier(task.name)}({_subprogram_params(task.ports)})"
+        task_ctx = _with_value_context(ctx, task.ports, task.signals)
+        body: list[str] = []
+        for signal in task.signals:
+            body.append(f"{_value_type(signal.width, signal.signed)} {_sanitize_identifier(signal.name)} = 0;")
+        if not task.structured_statements:
+            body.append("// Empty task.")
+        else:
+            for statement in task.structured_statements:
+                body.extend(
+                    _emit_structured_statement(
+                        statement,
+                        indent_level=0,
+                        ctx=task_ctx,
+                        staged_names=frozenset(),
+                        task_ports_by_name=task_ports_by_name,
+                    )
+                )
+        specs.append((signature, body))
+    return specs
+
+
+def _subprogram_params(ports: tuple[PortIR, ...]) -> str:
+    params: list[str] = []
+    for port in ports:
+        dtype = _value_type(port.width, port.signed)
+        name = _sanitize_identifier(port.name)
+        if port.direction == "input":
+            params.append(f"const {dtype}& {name}")
+        else:
+            params.append(f"{dtype}& {name}")
+    return ", ".join(params)
+
+
+def _with_value_context(
+    ctx: ModuleContext,
+    ports: tuple[PortIR, ...],
+    signals: tuple[SignalIR, ...],
+    *,
+    extra_names: set[str] | None = None,
+) -> ModuleContext:
+    value_names = set(ctx.value_names)
+    value_widths = dict(ctx.value_widths)
+    for port in ports:
+        value_names.add(port.name)
+        value_widths[port.name] = _width_hint(port.width)
+    for signal in signals:
+        value_names.add(signal.name)
+        value_widths[signal.name] = _width_hint(signal.width)
+    if extra_names:
+        value_names.update(extra_names)
+    return ModuleContext(
+        signal_names=ctx.signal_names,
+        parameter_names=ctx.parameter_names,
+        signal_widths=ctx.signal_widths,
+        parameter_values=ctx.parameter_values,
+        value_names=frozenset(value_names),
+        value_widths=value_widths,
+        function_widths=ctx.function_widths,
+        loop_vars=ctx.loop_vars,
+    )
+
+
 def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[str]]]:
     specs: list[tuple[str, list[str]]] = []
+    task_ports_by_name = {task.name: task.ports for task in module.tasks}
     for index, assign in enumerate(module.continuous_assigns):
         specs.append((f"assign_{index}", [_emit_continuous_assign(assign, ctx)]))
 
@@ -485,10 +598,10 @@ def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[
     ff_index = 0
     for process in module.processes:
         if process.kind == "always_comb":
-            specs.append((f"always_comb_{comb_index}", _emit_comb_process(process, ctx)))
+            specs.append((f"always_comb_{comb_index}", _emit_comb_process(process, ctx, task_ports_by_name)))
             comb_index += 1
         elif process.kind == "always_ff":
-            specs.append((f"always_ff_{ff_index}", _emit_ff_process(process, ctx)))
+            specs.append((f"always_ff_{ff_index}", _emit_ff_process(process, ctx, task_ports_by_name)))
             ff_index += 1
     return specs
 
@@ -714,6 +827,10 @@ def _collect_statement_rhs_sensitivity(statement: dict[str, object], ctx: Module
                     names.extend(collect_sensitivity(cond_expr, ctx))
             for child in _as_statement_list(item.get("statements")):
                 names.extend(_collect_statement_rhs_sensitivity(child, ctx))
+    if kind == "task_call":
+        for arg_expr in statement.get("arg_exprs", []) or []:
+            if isinstance(arg_expr, dict):
+                names.extend(collect_sensitivity(arg_expr, ctx))
     return names
 
 
@@ -738,7 +855,11 @@ def _collect_lvalue_index_sensitivity(expr: dict[str, object], ctx: ModuleContex
     return names
 
 
-def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
+def _emit_comb_process(
+    process: ProcessIR,
+    ctx: ModuleContext,
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+) -> list[str]:
     if not process.structured_statements:
         if process.statements:
             lines: list[str] = []
@@ -758,7 +879,15 @@ def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
     if not written_bases:
         lines: list[str] = []
         for statement in process.structured_statements:
-            lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=frozenset()))
+            lines.extend(
+                _emit_structured_statement(
+                    statement,
+                    indent_level=0,
+                    ctx=ctx,
+                    staged_names=frozenset(),
+                    task_ports_by_name=task_ports_by_name,
+                )
+            )
         return lines
 
     staged_names = frozenset(written_bases)
@@ -767,14 +896,26 @@ def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
         sanitized = _sanitize_identifier(base)
         lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
     for statement in process.structured_statements:
-        lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=staged_names))
+        lines.extend(
+            _emit_structured_statement(
+                statement,
+                indent_level=0,
+                ctx=ctx,
+                staged_names=staged_names,
+                task_ports_by_name=task_ports_by_name,
+            )
+        )
     for base in written_bases:
         sanitized = _sanitize_identifier(base)
         lines.append(f"{sanitized}.write(__next_{sanitized});")
     return lines
 
 
-def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
+def _emit_ff_process(
+    process: ProcessIR,
+    ctx: ModuleContext,
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+) -> list[str]:
     if not process.structured_statements:
         return ["// Empty process."]
 
@@ -782,7 +923,15 @@ def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
     if not written_bases:
         lines: list[str] = []
         for statement in process.structured_statements:
-            lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=frozenset()))
+            lines.extend(
+                _emit_structured_statement(
+                    statement,
+                    indent_level=0,
+                    ctx=ctx,
+                    staged_names=frozenset(),
+                    task_ports_by_name=task_ports_by_name,
+                )
+            )
         return lines
 
     staged_names = frozenset(written_bases)
@@ -791,7 +940,15 @@ def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
         sanitized = _sanitize_identifier(base)
         lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
     for statement in process.structured_statements:
-        lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=staged_names))
+        lines.extend(
+            _emit_structured_statement(
+                statement,
+                indent_level=0,
+                ctx=ctx,
+                staged_names=staged_names,
+                task_ports_by_name=task_ports_by_name,
+            )
+        )
     for base in written_bases:
         sanitized = _sanitize_identifier(base)
         lines.append(f"{sanitized}.write(__next_{sanitized});")
@@ -804,28 +961,58 @@ def _emit_structured_statement(
     *,
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+    return_target: str | None = None,
 ) -> list[str]:
     prefix = "  " * indent_level
     kind = statement.get("type")
 
     if kind in {"blocking_assign", "nonblocking_assign"}:
-        return [prefix + _emit_tree_assignment(statement, ctx, staged_names)]
+        return [prefix + _emit_tree_assignment(statement, ctx, staged_names, return_target=return_target)]
+
+    if kind == "task_call":
+        return [prefix + _emit_task_call(statement, ctx, task_ports_by_name)]
 
     if kind == "if":
         cond_text = _render_cond(statement, ctx)
         lines = [f"{prefix}if ({cond_text}) {{"]
         for child in _as_statement_list(statement.get("true")):
-            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level + 1,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    task_ports_by_name=task_ports_by_name,
+                    return_target=return_target,
+                )
+            )
         false_branch = _as_statement_list(statement.get("false"))
         if false_branch:
             lines.append(f"{prefix}}} else {{")
             for child in false_branch:
-                lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+                lines.extend(
+                    _emit_structured_statement(
+                        child,
+                        indent_level + 1,
+                        ctx=ctx,
+                        staged_names=staged_names,
+                        task_ports_by_name=task_ports_by_name,
+                        return_target=return_target,
+                    )
+                )
         lines.append(f"{prefix}}}")
         return lines
 
     if kind == "case":
-        return _emit_case_statement(statement, indent_level, ctx=ctx, staged_names=staged_names)
+        return _emit_case_statement(
+            statement,
+            indent_level,
+            ctx=ctx,
+            staged_names=staged_names,
+            task_ports_by_name=task_ports_by_name,
+            return_target=return_target,
+        )
 
     node = statement.get("node", kind)
     return [f"{prefix}// Unsupported statement: {node}"]
@@ -837,6 +1024,8 @@ def _emit_case_statement(
     *,
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+    return_target: str | None = None,
 ) -> list[str]:
     prefix = "  " * indent_level
     expr_tree = statement.get("expr_tree")
@@ -861,7 +1050,16 @@ def _emit_case_statement(
             else:
                 lines.append(f"{prefix}default:")
         for child in _as_statement_list(item.get("statements")):
-            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level + 1,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    task_ports_by_name=task_ports_by_name,
+                    return_target=return_target,
+                )
+            )
         lines.append(f"{prefix}  break;")
     lines.append(f"{prefix}}}")
     return lines
@@ -878,6 +1076,8 @@ def _emit_tree_assignment(
     statement: dict[str, object],
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    *,
+    return_target: str | None = None,
 ) -> str:
     left_expr = statement.get("left_expr")
     right_expr = statement.get("right_expr")
@@ -888,14 +1088,75 @@ def _emit_tree_assignment(
 
     if isinstance(left_expr, dict):
         base = lvalue_base_name(left_expr)
+        if return_target and base == return_target:
+            lhs = _render_lvalue_with_alias(left_expr, ctx, aliases={return_target: "__result"})
+            return f"{lhs} = {rhs};"
         if base in staged_names:
             lhs = render_lvalue(left_expr, ctx, staged_names=staged_names)
             return f"{lhs} = {rhs};"
+        if base in ctx.value_names:
+            lhs = render_lvalue(left_expr, ctx)
+            return f"{lhs} = {rhs};"
         if left_expr.get("kind") == "identifier":
+            name = str(left_expr.get("name", ""))
+            if name in ctx.value_names:
+                return f"{render_lvalue(left_expr, ctx)} = {rhs};"
             return f"{render_lvalue(left_expr, ctx)}.write({rhs});"
         return f"// unsupported lvalue without staging: {statement.get('left', '')}"
 
     return _emit_legacy_assignment(str(statement.get("left", "")), rhs, rhs_already_cpp=True)
+
+
+def _emit_task_call(
+    statement: dict[str, object],
+    ctx: ModuleContext,
+    task_ports_by_name: dict[str, tuple[PortIR, ...]],
+) -> str:
+    name = str(statement.get("name", ""))
+    task_name = _sanitize_identifier(name)
+    arg_exprs = statement.get("arg_exprs")
+    if not isinstance(arg_exprs, list):
+        arg_exprs = []
+    task_ports = task_ports_by_name.get(name, ())
+    args_cpp: list[str] = []
+    for index, arg_expr in enumerate(arg_exprs):
+        if not isinstance(arg_expr, dict):
+            continue
+        direction = task_ports[index].direction if index < len(task_ports) else "input"
+        if direction in {"output", "inout"}:
+            args_cpp.append(render_lvalue(arg_expr, ctx))
+        else:
+            args_cpp.append(render_rvalue(arg_expr, ctx))
+    return f"{task_name}({', '.join(args_cpp)});"
+
+
+def _render_lvalue_with_alias(
+    expr: dict[str, object],
+    ctx: ModuleContext,
+    *,
+    aliases: dict[str, str],
+) -> str:
+    kind = expr.get("kind")
+    if kind == "identifier":
+        name = str(expr.get("name", ""))
+        if name in aliases:
+            return aliases[name]
+        return _sanitize_identifier(name)
+    if kind == "bitselect":
+        target = expr.get("target")
+        index = expr.get("index")
+        if isinstance(target, dict) and isinstance(index, dict):
+            return f"{_render_lvalue_with_alias(target, ctx, aliases=aliases)}[{render_rvalue(index, ctx)}]"
+    if kind == "partselect":
+        target = expr.get("target")
+        msb = expr.get("msb")
+        lsb = expr.get("lsb")
+        if isinstance(target, dict) and isinstance(msb, dict) and isinstance(lsb, dict):
+            return (
+                f"{_render_lvalue_with_alias(target, ctx, aliases=aliases)}"
+                f".range({render_rvalue(msb, ctx)}, {render_rvalue(lsb, ctx)})"
+            )
+    return render_lvalue(expr, ctx)
 
 
 def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> str:
@@ -990,6 +1251,13 @@ def _signal_type(signal: SignalIR) -> str:
     return f"sc_signal<{_sc_type(signal.width, signal.signed)}>"
 
 
+def _value_type(width: WidthIR | None, signed: bool) -> str:
+    width_expr = _width_expr(width)
+    if width_expr == "1":
+        return "bool"
+    return f"sc_{'int' if signed else 'uint'}<{width_expr}>"
+
+
 def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
     if width_expr == "1":
@@ -1005,6 +1273,16 @@ def _width_expr(width: WidthIR | None) -> str:
     if msb.isdecimal() and lsb.isdecimal():
         return str(abs(int(msb) - int(lsb)) + 1)
     return f"(({msb}) - ({lsb}) + 1)"
+
+
+def _width_hint(width: WidthIR | None) -> int:
+    if width is None:
+        return 1
+    msb = _cpp_expr(width.msb)
+    lsb = _cpp_expr(width.lsb)
+    if msb.isdecimal() and lsb.isdecimal():
+        return abs(int(msb) - int(lsb)) + 1
+    return 1
 
 
 def _instance_type(instance: InstanceIR) -> str:

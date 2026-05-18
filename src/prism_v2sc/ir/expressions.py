@@ -21,6 +21,7 @@ JSON dump:
     {"kind": "repeat", "count": {...}, "value": {...}}
     {"kind": "bitselect", "target": {...}, "index": {...}}
     {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
+    {"kind": "funcall", "name": "f", "args": [{...}, ...]}
     {"kind": "syscall", "name": "signed", "args": [{...}]}
     {"kind": "raw", "text": "..."}     # safety fallback
 
@@ -134,6 +135,10 @@ def render_expr(node: object | None) -> str:
         args = ", ".join(render_expr(arg) for arg in getattr(node, "args", ()))
         return f"${node.syscall}({args})"
 
+    if cls_name == "FunctionCall":
+        args = ", ".join(render_expr(arg) for arg in getattr(node, "args", ()))
+        return f"{render_expr(getattr(node, 'name', None))}({args})"
+
     children = node.children() if hasattr(node, "children") else ()
     if children:
         return f"{cls_name}(" + ", ".join(render_expr(child) for child in children) + ")"
@@ -224,6 +229,13 @@ def lower_expr(node: object | None) -> dict[str, Any]:
             "kind": "syscall",
             "name": str(getattr(node, "syscall", "")),
             "args": [lower_expr(arg) for arg in getattr(node, "args", ())],
+        }
+
+    if cls_name == "FunctionCall":
+        return {
+            "kind": "funcall",
+            "name": render_expr(getattr(node, "name", None)),
+            "args": [lower_expr(arg) for arg in getattr(node, "args", ()) or ()],
         }
 
     return {"kind": "raw", "text": render_expr(node)}

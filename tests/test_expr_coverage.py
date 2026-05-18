@@ -7,6 +7,14 @@ from pathlib import Path
 from prism_v2sc.codegen.systemc import generate_systemc_header
 from prism_v2sc.frontend.lower import lower_design
 from prism_v2sc.frontend.pyverilog_parser import parse_verilog
+from prism_v2sc.ir.model import (
+    DesignIR,
+    ModuleIR,
+    PortIR,
+    ProcessIR,
+    SensitivityIR,
+    TaskDefIR,
+)
 
 
 def _design(tmp_path: Path, source: str, top: str):
@@ -233,3 +241,87 @@ endmodule
     assert "data.read().and_reduce()" in header
     assert "data.read().or_reduce()" in header
     assert "data.read().xor_reduce()" in header
+
+
+def test_function_call_in_expression(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module fn_top(
+  input  wire [3:0] a,
+  output wire [3:0] y
+);
+  function [3:0] inc;
+    input [3:0] x;
+    begin
+      inc = x + 4'd1;
+    end
+  endfunction
+
+  assign y = inc(a);
+endmodule
+""",
+        "fn_top",
+    )
+    payload = design.to_dict()
+    module = next(item for item in payload["modules"] if item["name"] == "fn_top")
+    assert module["functions"][0]["name"] == "inc"
+    assert module["continuous_assigns"][0]["right_expr"]["kind"] == "funcall"
+    header = generate_systemc_header(design)
+    assert "sc_uint<4> inc(const sc_uint<4>& x)" in header
+    assert "y.write(inc(a.read()));" in header
+
+
+def test_task_call_codegen_from_ir() -> None:
+    module = ModuleIR(
+        name="task_top",
+        ports=(
+            PortIR(name="a", direction="input"),
+            PortIR(name="b", direction="input"),
+            PortIR(name="y", direction="output", kind="reg"),
+        ),
+        tasks=(
+            TaskDefIR(
+                name="mix",
+                ports=(
+                    PortIR(name="x", direction="input"),
+                    PortIR(name="z", direction="input"),
+                ),
+                structured_statements=(
+                    {
+                        "type": "blocking_assign",
+                        "left": "y",
+                        "right": "(x ^ z)",
+                        "left_expr": {"kind": "identifier", "name": "y"},
+                        "right_expr": {
+                            "kind": "binop",
+                            "op": "^",
+                            "left": {"kind": "identifier", "name": "x"},
+                            "right": {"kind": "identifier", "name": "z"},
+                        },
+                    },
+                ),
+            ),
+        ),
+        processes=(
+            ProcessIR(
+                kind="always_comb",
+                sensitivity=(SensitivityIR(signal="*", edge="all"),),
+                structured_statements=(
+                    {
+                        "type": "task_call",
+                        "name": "mix",
+                        "args": ["a", "b"],
+                        "arg_exprs": [
+                            {"kind": "identifier", "name": "a"},
+                            {"kind": "identifier", "name": "b"},
+                        ],
+                    },
+                ),
+            ),
+        ),
+    )
+    design = DesignIR(top="task_top", modules=(module,))
+    header = generate_systemc_header(design)
+    assert "void mix(const bool& x, const bool& z)" in header
+    assert "mix(a.read(), b.read());" in header

@@ -73,6 +73,30 @@ class ProcessIR:
 
 
 @dataclass(frozen=True)
+class FunctionDefIR:
+    """Module-local function definition."""
+
+    name: str
+    return_width: WidthIR | None = None
+    signed: bool = False
+    ports: tuple[PortIR, ...] = field(default_factory=tuple)
+    signals: tuple[SignalIR, ...] = field(default_factory=tuple)
+    statements: tuple[str, ...] = field(default_factory=tuple)
+    structured_statements: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class TaskDefIR:
+    """Module-local task definition."""
+
+    name: str
+    ports: tuple[PortIR, ...] = field(default_factory=tuple)
+    signals: tuple[SignalIR, ...] = field(default_factory=tuple)
+    statements: tuple[str, ...] = field(default_factory=tuple)
+    structured_statements: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class ArgIR:
     """Named module argument."""
 
@@ -137,6 +161,8 @@ class ModuleIR:
     signals: tuple[SignalIR, ...] = field(default_factory=tuple)
     continuous_assigns: tuple[ContinuousAssignIR, ...] = field(default_factory=tuple)
     processes: tuple[ProcessIR, ...] = field(default_factory=tuple)
+    functions: tuple[FunctionDefIR, ...] = field(default_factory=tuple)
+    tasks: tuple[TaskDefIR, ...] = field(default_factory=tuple)
     instances: tuple[InstanceIR, ...] = field(default_factory=tuple)
     generate_fors: tuple[GenerateForIR, ...] = field(default_factory=tuple)
     diagnostics: tuple[DiagnosticIR, ...] = field(default_factory=tuple)

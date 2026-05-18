@@ -14,6 +14,7 @@ from prism_v2sc.ir.model import (
     ContinuousAssignIR,
     DiagnosticIR,
     DesignIR,
+    FunctionDefIR,
     GenerateForIR,
     InstanceIR,
     ModuleIR,
@@ -23,6 +24,7 @@ from prism_v2sc.ir.model import (
     ProcessIR,
     SensitivityIR,
     SignalIR,
+    TaskDefIR,
 )
 from prism_v2sc.ir.widths import extract_width
 
@@ -65,6 +67,8 @@ def lower_design(ast: object, top: str) -> DesignIR:
                 signals=module.signals,
                 continuous_assigns=module.continuous_assigns,
                 processes=module.processes,
+                functions=module.functions,
+                tasks=module.tasks,
                 instances=module.instances,
                 generate_fors=module.generate_fors,
                 diagnostics=tuple(diagnostics),
@@ -120,6 +124,8 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
     signals: list[SignalIR] = []
     continuous_assigns: list[ContinuousAssignIR] = []
     processes: list[ProcessIR] = []
+    functions: list[FunctionDefIR] = []
+    tasks: list[TaskDefIR] = []
     instances: list[InstanceIR] = []
     generate_fors: list[GenerateForIR] = []
     diagnostics: list[DiagnosticIR] = []
@@ -138,6 +144,8 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
         signals=signals,
         continuous_assigns=continuous_assigns,
         processes=processes,
+        functions=functions,
+        tasks=tasks,
         instances=instances,
         generate_fors=generate_fors,
         diagnostics=diagnostics,
@@ -158,6 +166,8 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
         signals=tuple(signals),
         continuous_assigns=tuple(continuous_assigns),
         processes=tuple(processes),
+        functions=tuple(functions),
+        tasks=tuple(tasks),
         instances=tuple(instances),
         generate_fors=tuple(generate_fors),
         diagnostics=tuple(diagnostics),
@@ -194,6 +204,8 @@ class _LoweringAccumulator:
     signals: list[SignalIR]
     continuous_assigns: list[ContinuousAssignIR]
     processes: list[ProcessIR]
+    functions: list[FunctionDefIR]
+    tasks: list[TaskDefIR]
     instances: list[InstanceIR]
     generate_fors: list[GenerateForIR]
     diagnostics: list[DiagnosticIR]
@@ -238,6 +250,16 @@ def _process_module_item(item: object, acc: _LoweringAccumulator) -> None:
             )
         )
         return
+    if isinstance(item, vast.Function):
+        function, diagnostics = _lower_function(item, acc.module_name)
+        acc.functions.append(function)
+        acc.diagnostics.extend(diagnostics)
+        return
+    if isinstance(item, vast.Task):
+        task, diagnostics = _lower_task(item, acc.module_name)
+        acc.tasks.append(task)
+        acc.diagnostics.extend(diagnostics)
+        return
     if isinstance(item, vast.InstanceList):
         acc.instances.extend(_lower_instance_list(item))
         return
@@ -255,6 +277,100 @@ def _process_module_item(item: object, acc: _LoweringAccumulator) -> None:
             )
         )
         return
+
+
+def _lower_function(function: vast.Function, module_name: str) -> tuple[FunctionDefIR, list[DiagnosticIR]]:
+    ports, signals, body_statements, diagnostics = _lower_subprogram_items(function.statement, module_name)
+    for port in ports:
+        if port.direction != "input":
+            diagnostics.append(
+                DiagnosticIR(
+                    severity="error",
+                    module=module_name,
+                    code="unsupported_function_port_direction",
+                    message=f"function '{function.name}' only supports input arguments in current lowering",
+                    node="Function",
+                )
+            )
+
+    for statement in body_statements:
+        diagnostics.extend(_statement_diagnostics(module_name, statement))
+    diagnostics.extend(_function_statement_diagnostics(module_name, function.name, body_statements))
+
+    return (
+        FunctionDefIR(
+            name=function.name,
+            return_width=extract_width(getattr(function, "retwidth", None)),
+            signed=bool(getattr(function, "signed", False)),
+            ports=tuple(ports),
+            signals=tuple(signals),
+            statements=_statement_summaries_from_list(body_statements),
+            structured_statements=_structured_statements_from_list(body_statements),
+        ),
+        diagnostics,
+    )
+
+
+def _lower_task(task: vast.Task, module_name: str) -> tuple[TaskDefIR, list[DiagnosticIR]]:
+    ports, signals, body_statements, diagnostics = _lower_subprogram_items(task.statement, module_name)
+    for statement in body_statements:
+        diagnostics.extend(_statement_diagnostics(module_name, statement))
+    return (
+        TaskDefIR(
+            name=task.name,
+            ports=tuple(ports),
+            signals=tuple(signals),
+            statements=_statement_summaries_from_list(body_statements),
+            structured_statements=_structured_statements_from_list(body_statements),
+        ),
+        diagnostics,
+    )
+
+
+def _lower_subprogram_items(
+    items: object,
+    module_name: str,
+) -> tuple[list[PortIR], list[SignalIR], list[object], list[DiagnosticIR]]:
+    ports: list[PortIR] = []
+    signals: list[SignalIR] = []
+    statements: list[object] = []
+    diagnostics: list[DiagnosticIR] = []
+
+    for item in items or ():
+        if isinstance(item, vast.Decl):
+            for decl_item in item.list:
+                if isinstance(decl_item, (vast.Input, vast.Output, vast.Inout)):
+                    ports.append(
+                        PortIR(
+                            name=decl_item.name,
+                            direction=_direction_of(decl_item),
+                            kind="wire",
+                            width=extract_width(getattr(decl_item, "width", None)),
+                            signed=bool(getattr(decl_item, "signed", False)),
+                        )
+                    )
+                    continue
+                if isinstance(decl_item, (vast.Reg, vast.Wire, vast.Integer)):
+                    signals.append(
+                        SignalIR(
+                            name=decl_item.name,
+                            kind=_kind_of(decl_item),
+                            width=extract_width(getattr(decl_item, "width", None)),
+                            signed=bool(getattr(decl_item, "signed", False)),
+                        )
+                    )
+                    continue
+                diagnostics.append(
+                    _diagnostic(
+                        module_name,
+                        "unsupported_subprogram_decl",
+                        "task/function declaration item is not supported by current lowering",
+                        decl_item,
+                    )
+                )
+            continue
+        statements.append(item)
+    return ports, signals, statements, diagnostics
 
 
 def _process_generate_statement(generate: vast.GenerateStatement, acc: _LoweringAccumulator) -> None:
@@ -517,6 +633,10 @@ def _statement_summaries(statement: object | None) -> tuple[str, ...]:
     return (_statement_summary(statement),)
 
 
+def _statement_summaries_from_list(statements: list[object]) -> tuple[str, ...]:
+    return tuple(_statement_summary(statement) for statement in statements)
+
+
 def _statement_summary(statement: object) -> str:
     if isinstance(statement, vast.BlockingSubstitution):
         return f"{render_expr(statement.left)} = {render_expr(statement.right)}"
@@ -524,6 +644,9 @@ def _statement_summary(statement: object) -> str:
         return f"{render_expr(statement.left)} <= {render_expr(statement.right)}"
     if isinstance(statement, vast.IfStatement):
         return f"if {render_expr(statement.cond)}"
+    if isinstance(statement, vast.TaskCall):
+        args = ", ".join(render_expr(arg) for arg in getattr(statement, "args", ()) or ())
+        return f"{render_expr(statement.name)}({args})"
     return statement.__class__.__name__
 
 
@@ -533,6 +656,10 @@ def _structured_statements(statement: object | None) -> tuple[dict[str, object],
     if isinstance(statement, vast.Block):
         return tuple(_structured_statement(child) for child in statement.statements)
     return (_structured_statement(statement),)
+
+
+def _structured_statements_from_list(statements: list[object]) -> tuple[dict[str, object], ...]:
+    return tuple(_structured_statement(statement) for statement in statements)
 
 
 def _structured_statement(statement: object) -> dict[str, object]:
@@ -574,6 +701,13 @@ def _structured_statement(statement: object) -> dict[str, object]:
                 for item in statement.caselist
             ],
         }
+    if isinstance(statement, vast.TaskCall):
+        return {
+            "type": "task_call",
+            "name": render_expr(statement.name),
+            "args": [render_expr(arg) for arg in getattr(statement, "args", ()) or ()],
+            "arg_exprs": [lower_expr(arg) for arg in getattr(statement, "args", ()) or ()],
+        }
     return {
         "type": "unsupported",
         "node": statement.__class__.__name__,
@@ -606,7 +740,7 @@ def _statement_diagnostics(module_name: str, statement: object | None) -> list[D
                 statement,
             )
         ]
-    if isinstance(statement, (vast.BlockingSubstitution, vast.NonblockingSubstitution)):
+    if isinstance(statement, (vast.BlockingSubstitution, vast.NonblockingSubstitution, vast.TaskCall)):
         return []
     return [
         _diagnostic(
@@ -616,6 +750,61 @@ def _statement_diagnostics(module_name: str, statement: object | None) -> list[D
             statement,
         )
     ]
+
+
+def _function_statement_diagnostics(
+    module_name: str,
+    function_name: str,
+    statements: list[object],
+) -> list[DiagnosticIR]:
+    diagnostics: list[DiagnosticIR] = []
+    for statement in statements:
+        diagnostics.extend(_walk_function_statement(module_name, function_name, statement))
+    return diagnostics
+
+
+def _walk_function_statement(
+    module_name: str,
+    function_name: str,
+    statement: object | None,
+) -> list[DiagnosticIR]:
+    if statement is None:
+        return []
+    if isinstance(statement, vast.Block):
+        diagnostics: list[DiagnosticIR] = []
+        for child in statement.statements:
+            diagnostics.extend(_walk_function_statement(module_name, function_name, child))
+        return diagnostics
+    if isinstance(statement, vast.IfStatement):
+        diagnostics = _walk_function_statement(module_name, function_name, statement.true_statement)
+        diagnostics.extend(_walk_function_statement(module_name, function_name, statement.false_statement))
+        return diagnostics
+    if isinstance(statement, vast.CaseStatement):
+        diagnostics: list[DiagnosticIR] = []
+        for item in statement.caselist:
+            diagnostics.extend(_walk_function_statement(module_name, function_name, item.statement))
+        return diagnostics
+    if isinstance(statement, vast.NonblockingSubstitution):
+        return [
+            DiagnosticIR(
+                severity="error",
+                module=module_name,
+                code="unsupported_function_nonblocking",
+                message=f"function '{function_name}' uses nonblocking assignment; only blocking '=' is supported",
+                node="NonblockingSubstitution",
+            )
+        ]
+    if isinstance(statement, vast.TaskCall):
+        return [
+            DiagnosticIR(
+                severity="error",
+                module=module_name,
+                code="unsupported_task_call_in_function",
+                message=f"function '{function_name}' contains a task call which is not supported",
+                node="TaskCall",
+            )
+        ]
+    return []
 
 
 def _lower_instance_list(instance_list: vast.InstanceList) -> list[InstanceIR]:
@@ -739,6 +928,12 @@ def _scan_statement_for_xz_literals(
                     _append_xz_literal_diagnostic(module_name, str(cond), diagnostics, seen)
             for child in _as_statement_list(item.get("statements")):
                 _scan_statement_for_xz_literals(module_name, child, diagnostics, seen)
+        return
+    if kind == "task_call":
+        args = statement.get("args")
+        if isinstance(args, list):
+            for arg in args:
+                _append_xz_literal_diagnostic(module_name, str(arg), diagnostics, seen)
 
 
 def _append_xz_literal_diagnostic(
