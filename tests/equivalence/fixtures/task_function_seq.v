@@ -16,7 +16,8 @@ module task_function_seq (
   task apply_mix;
     input [3:0] x;
     input [3:0] z;
-    y = blend(x, z);
+    reg [3:0] mixed;
+    mixed = blend(x, z);
   endtask
 
   assign fn_dbg = blend(a, b);
