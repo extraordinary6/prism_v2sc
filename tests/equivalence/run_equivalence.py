@@ -201,6 +201,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Generate SystemC, stimulus, and testbenches but skip iverilog/SystemC build and diff.",
     )
+    parser.add_argument(
+        "--frontend",
+        choices=("pyslang", "pyverilog"),
+        default="pyslang",
+        help="Which Verilog/SystemVerilog frontend to invoke through prism-v2sc.",
+    )
     args = parser.parse_args(argv)
     args.work.mkdir(parents=True, exist_ok=True)
 
@@ -225,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             args.work / fixture.name,
             shift_tolerance=args.shift_tolerance,
             dry_run=args.dry_run,
+            frontend=args.frontend,
         )
         summary.append((fixture.name, "PASS" if rc == 0 else "FAIL"))
         if rc != 0:
@@ -244,7 +251,7 @@ def require_tool(name: str) -> None:
         sys.exit(2)
 
 
-def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: bool = False) -> int:
+def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: bool = False, frontend: str = "pyslang") -> int:
     work.mkdir(parents=True, exist_ok=True)
     sources = [FIXTURE_DIR / source for source in fixture.sources]
     for source in sources:
@@ -288,6 +295,7 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
         sc_out_dir,
         log_path=work / "prism.log",
         filelist=filelist_path,
+        frontend=frontend,
     ):
         return 1
 
@@ -372,6 +380,7 @@ def convert_with_prism(
     *,
     log_path: Path,
     filelist: Path | None = None,
+    frontend: str = "pyslang",
 ) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -382,6 +391,8 @@ def convert_with_prism(
         top,
         "--out",
         str(out_dir),
+        "--frontend",
+        frontend,
     ]
     if filelist is not None:
         cmd.extend(["--filelist", str(filelist)])

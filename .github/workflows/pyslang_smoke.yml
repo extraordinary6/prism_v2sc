@@ -1,0 +1,39 @@
+name: pyslang smoke
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Independent of equivalence.yml: catches pyslang wheel breakage on any
+# supported platform before any of the rest of the migration depends on it.
+jobs:
+  pyslang-import:
+    name: import + parse trivial module
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pyslang
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pyslang>=11.0,<12.0"
+
+      - name: Import and parse trivial module
+        run: |
+          python -c "import pyslang; t = pyslang.syntax.SyntaxTree.fromText('module a; endmodule'); print('pyslang', pyslang.__version__, 'ok')"

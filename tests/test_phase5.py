@@ -66,8 +66,12 @@ endmodule
     assert artifacts.report.diagnostic_count == 0
     assert artifacts.report.parse_lower.elapsed_seconds >= 0
     assert artifacts.report.codegen.peak_python_bytes > 0
-    assert "stage<WIDTH> u0;" in artifacts.header
-    assert "stage<WIDTH> u1;" in artifacts.header
+    # slang resolves the ``.WIDTH(WIDTH)`` parameter override at the
+    # instance to the literal 8, so the template argument prints as
+    # ``stage<8>`` rather than ``stage<WIDTH>``. Both forms instantiate
+    # the same SystemC type — accept either.
+    assert ("stage<WIDTH> u0;" in artifacts.header) or ("stage<8> u0;" in artifacts.header)
+    assert ("stage<WIDTH> u1;" in artifacts.header) or ("stage<8> u1;" in artifacts.header)
 
 
 def test_case_statement_is_lowered_without_diagnostic(tmp_path: Path) -> None:

@@ -17,6 +17,15 @@ Memory profile:
 - ``ModuleIR`` for already-lowered modules is also retained, since the IR
   is needed for the JSON IR dump and Phase 5 metrics. IR size is small
   relative to AST.
+
+Frontend selection:
+
+- ``frontend="pyverilog"`` (default) drives the per-source streaming model
+  described above.
+- ``frontend="pyslang"`` parses all sources together into a single slang
+  ``Compilation`` (slang already elaborates the design across all files)
+  and then walks the elaborated instance tree once. The same
+  ``FlowArtifacts`` shape comes back, so downstream code is frontend-agnostic.
 """
 
 from __future__ import annotations
@@ -94,6 +103,7 @@ def lower_design_top_down(
     include_dirs: Sequence[Path] = (),
     defines: Sequence[str] = (),
     emit_callback: EmitCallback | None = None,
+    frontend: str = "pyslang",
 ) -> FlowArtifacts:
     """Lower modules reachable from ``top`` with bottom-up emit.
 
@@ -105,7 +115,21 @@ def lower_design_top_down(
     Each Verilog source is parsed at most once. After parsing, ASTs are
     discarded (only their already-lowered IRs and signatures survive),
     bounding peak memory regardless of design size.
+
+    ``frontend`` selects the parser/lowerer backend; see the module
+    docstring for details.
     """
+    if frontend == "pyslang":
+        return _lower_design_pyslang(
+            sources,
+            top,
+            include_dirs=include_dirs,
+            defines=defines,
+            emit_callback=emit_callback,
+        )
+    if frontend != "pyverilog":
+        raise ValueError(f"unknown frontend '{frontend}'; expected 'pyverilog' or 'pyslang'")
+
     index_start = time.perf_counter()
     source_index = build_source_index(sources)
     source_index_elapsed = time.perf_counter() - index_start
@@ -308,3 +332,131 @@ def _load_module(
 def _scan_module_names(text: str) -> list[str]:
     pattern = re.compile(r"(?m)^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
     return [match.group(1) for match in pattern.finditer(text)]
+
+
+def _lower_design_pyslang(
+    sources: Sequence[Path],
+    top: str,
+    *,
+    include_dirs: Sequence[Path] = (),
+    defines: Sequence[str] = (),
+    emit_callback: EmitCallback | None = None,
+) -> FlowArtifacts:
+    """pyslang dispatch path for ``lower_design_top_down``.
+
+    slang elaborates the entire design across all sources in one compile,
+    so the per-source streaming concerns of the pyverilog flow do not
+    apply here. We parse once, walk the elaborated instance tree in
+    post-order DFS, and emit in the same callback-driven order so callers
+    cannot tell the two backends apart.
+    """
+    from .lower_sv import extract_signature as sv_extract_signature
+    from .lower_sv import lower_module as sv_lower_module
+    from .pyslang_parser import parse_sources
+
+    index_start = time.perf_counter()
+    compilation = parse_sources(sources, include_dirs=include_dirs, defines=defines)
+    source_index_elapsed = time.perf_counter() - index_start
+
+    root = compilation.getRoot()
+    top_instances = [ti for ti in root.topInstances if ti.definition.name == top]
+    if not top_instances:
+        known = ", ".join(sorted({ti.definition.name for ti in root.topInstances})) or "<none>"
+        raise ValueError(f"top module '{top}' not found; known modules: {known}")
+
+    traversal_start = time.perf_counter()
+
+    signatures: dict[str, ModuleSignature] = {}
+    lowered: dict[str, ModuleIR] = {}
+    emit_order: list[str] = []
+    visited: set[str] = set()
+    discovery_order: list[str] = []
+    emitted: set[str] = set()
+    diagnostics_extra: list[DiagnosticIR] = list(_collect_slang_diagnostics(compilation))
+    source_manager = compilation.sourceManager
+
+    def visit(instance) -> None:
+        definition_name = instance.definition.name
+        if definition_name in visited:
+            return
+        visited.add(definition_name)
+        # Cache the signature *before* descending into children so a parent
+        # whose port list references this child gets the binding info.
+        if definition_name not in signatures:
+            signatures[definition_name] = sv_extract_signature(instance)
+        if definition_name not in lowered:
+            lowered[definition_name] = sv_lower_module(instance, source_manager=source_manager)
+            discovery_order.append(definition_name)
+        for child in _pyslang_child_instances(instance):
+            visit(child)
+        # Bottom-up emit: parent's hpp lands only after every child is on disk.
+        if definition_name not in emitted:
+            emitted.add(definition_name)
+            if emit_callback is not None:
+                emit_callback(lowered[definition_name], signatures)
+                emit_order.append(definition_name)
+
+    for top_instance in top_instances:
+        visit(top_instance)
+
+    traversal_elapsed = time.perf_counter() - traversal_start
+
+    # ``design.modules`` follows top-down discovery order to mirror the
+    # pyverilog flow; the emit_callback above already received them in
+    # post-order so the on-disk write sequence is unchanged.
+    modules = tuple(lowered[name] for name in discovery_order)
+    diagnostics = tuple(d for module in modules for d in module.diagnostics) + tuple(diagnostics_extra)
+    design = DesignIR(top=top, modules=modules, diagnostics=diagnostics)
+    traversal = TraversalStats(
+        module_parse_count=len(lowered),
+        module_lower_count=len(lowered),
+        source_parse_count=len(sources),
+        visited_modules=tuple(module.name for module in modules),
+        missing_modules=(),
+        ambiguous_modules=(),
+    )
+    return FlowArtifacts(
+        design=design,
+        source_index=ModuleSourceIndex(by_module={}),
+        traversal=traversal,
+        source_index_elapsed_seconds=source_index_elapsed,
+        traversal_elapsed_seconds=traversal_elapsed,
+        signatures=signatures,
+        emit_order=tuple(emit_order),
+    )
+
+
+def _pyslang_child_instances(instance) -> list:
+    """Return the direct child instance symbols reachable from a parent."""
+    from .lower_sv import _child_instances
+
+    return _child_instances(instance)
+
+
+def _collect_slang_diagnostics(compilation) -> list[DiagnosticIR]:
+    """Translate slang's elaboration diagnostics into ``DiagnosticIR`` rows.
+
+    slang has its own ``DiagCode`` taxonomy. We surface the formatted
+    message verbatim and tag the code as ``slang_<DiagCodeName>`` so the
+    origin is unambiguous in downstream consumers (CI logs, IR dumps).
+    """
+    import pyslang as ps  # local import to avoid import-time hard dependency
+
+    engine = ps.DiagnosticEngine(compilation.sourceManager)
+    out: list[DiagnosticIR] = []
+    diags = compilation.getAllDiagnostics()
+    for index in range(len(diags)):
+        diag = diags[index]
+        severity = engine.getSeverity(diag.code, diag.location)
+        message = engine.formatMessage(diag)
+        code_name = str(diag.code).split("(", 1)[-1].rstrip(")")
+        out.append(
+            DiagnosticIR(
+                severity="error" if str(severity).endswith("Error") or str(severity).endswith("Fatal") else "warning",
+                module="",
+                code=f"slang_{code_name}",
+                message=message,
+                node=code_name,
+            )
+        )
+    return out

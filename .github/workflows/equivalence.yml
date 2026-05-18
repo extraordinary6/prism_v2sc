@@ -9,9 +9,13 @@ on:
 
 jobs:
   rtl-vs-systemc:
-    name: RTL vs SystemC equivalence (Linux)
+    name: RTL vs SystemC equivalence (Linux, ${{ matrix.frontend }})
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: [pyverilog, pyslang]
 
     steps:
       - name: Checkout
@@ -45,15 +49,15 @@ jobs:
           mkdir -p build/pytest_tmp
           python -m pytest -q
 
-      - name: Run RTL vs SystemC equivalence harness
+      - name: Run RTL vs SystemC equivalence harness (${{ matrix.frontend }})
         run: |
-          python tests/equivalence/run_equivalence.py --keep-going
+          python tests/equivalence/run_equivalence.py --keep-going --frontend ${{ matrix.frontend }}
 
       - name: Upload equivalence artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: equivalence-artifacts
+          name: equivalence-artifacts-${{ matrix.frontend }}
           path: build/equivalence/
           if-no-files-found: ignore
           retention-days: 7
