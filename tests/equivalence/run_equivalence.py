@@ -156,6 +156,18 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=256,
     ),
     Fixture(
+        name="task_function_seq",
+        sources=("task_function_seq.v",),
+        top="task_function_seq",
+        inputs=(Port("en", 1), Port("a", 4), Port("b", 4)),
+        outputs=(Port("y", 4), Port("fn_dbg", 4)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
         name="multi_file",
         sources=(),
         filelist="multi_file/sources.f",

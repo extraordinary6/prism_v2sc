@@ -38,6 +38,7 @@ Currently the following fixtures live under `fixtures/`:
 | shift_register | sequential    | 8-bit load/shift register, async reset                      |
 | fsm_handshake  | sequential    | Moore-style FSM handshake (start/data_valid/ready/done)     |
 | pipeline8      | sequential    | two-stage 8-bit valid/data pipeline, replicate constructions |
+| task_function_seq | sequential | includes both `function` and `task` in clocked datapath      |
 | multi_file     | sequential    | filelist-driven build (`+incdir+`, `-D`, three sources)     |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py`
