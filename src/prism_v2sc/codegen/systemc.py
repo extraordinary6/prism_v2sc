@@ -31,6 +31,8 @@ from prism_v2sc.ir.model import (
     PortIR,
     ProcessIR,
     SignalIR,
+    SubroutineIR,
+    SubroutineParamIR,
     WidthIR,
 )
 
@@ -291,6 +293,8 @@ def _emit_module(
         writer.line()
 
     methods = _method_specs(module, ctx)
+    for subroutine in module.subroutines:
+        _emit_subroutine(writer, subroutine, ctx)
     for method_name, body_lines in methods:
         writer.line(f"void {method_name}() {{")
         writer.indent()
@@ -738,6 +742,43 @@ def _collect_lvalue_index_sensitivity(expr: dict[str, object], ctx: ModuleContex
     return names
 
 
+def _emit_subroutine(writer: CodeWriter, subroutine: SubroutineIR, ctx: ModuleContext) -> None:
+    """Emit a Verilog function as a const C++ class method.
+
+    Verilog's implicit "return value via function-name variable" maps to a
+    local C++ variable named after the function, written in the body and
+    returned at the end. Parameter names and the implicit return variable
+    are added to ``ctx.local_names`` so identifier rendering treats them as
+    plain locals rather than ``sc_signal`` reads.
+    """
+    if subroutine.kind != "function":
+        return
+
+    return_type = _sc_type(subroutine.return_width, subroutine.return_signed)
+    func_name = _sanitize_identifier(subroutine.name)
+    formal_params = []
+    local_names: set[str] = {subroutine.name}
+    for param in subroutine.params:
+        param_type = _sc_type(param.width, param.signed)
+        param_name = _sanitize_identifier(param.name)
+        formal_params.append(f"{param_type} {param_name}")
+        local_names.add(param.name)
+
+    body_ctx = ctx.with_locals(frozenset(local_names))
+    writer.line(f"{return_type} {func_name}({', '.join(formal_params)}) const {{")
+    writer.indent()
+    writer.line(f"{return_type} {func_name};")
+    for statement in subroutine.body_statements:
+        for body_line in _emit_structured_statement(
+            statement, indent_level=0, ctx=body_ctx, staged_names=frozenset()
+        ):
+            writer.line(body_line)
+    writer.line(f"return {func_name};")
+    writer.dedent()
+    writer.line("}")
+    writer.line()
+
+
 def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
     if not process.structured_statements:
         if process.statements:
@@ -890,6 +931,9 @@ def _emit_tree_assignment(
         base = lvalue_base_name(left_expr)
         if base in staged_names:
             lhs = render_lvalue(left_expr, ctx, staged_names=staged_names)
+            return f"{lhs} = {rhs};"
+        if base in ctx.local_names:
+            lhs = render_lvalue(left_expr, ctx)
             return f"{lhs} = {rhs};"
         if left_expr.get("kind") == "identifier":
             return f"{render_lvalue(left_expr, ctx)}.write({rhs});"

@@ -23,6 +23,8 @@ from prism_v2sc.ir.model import (
     ProcessIR,
     SensitivityIR,
     SignalIR,
+    SubroutineIR,
+    SubroutineParamIR,
 )
 from prism_v2sc.ir.widths import extract_width
 
@@ -67,6 +69,7 @@ def lower_design(ast: object, top: str) -> DesignIR:
                 processes=module.processes,
                 instances=module.instances,
                 generate_fors=module.generate_fors,
+                subroutines=module.subroutines,
                 diagnostics=tuple(diagnostics),
                 source_path=module.source_path,
             )
@@ -122,6 +125,7 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
     processes: list[ProcessIR] = []
     instances: list[InstanceIR] = []
     generate_fors: list[GenerateForIR] = []
+    subroutines: list[SubroutineIR] = []
     diagnostics: list[DiagnosticIR] = []
     port_names: set[str] = set()
 
@@ -140,6 +144,7 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
         processes=processes,
         instances=instances,
         generate_fors=generate_fors,
+        subroutines=subroutines,
         diagnostics=diagnostics,
         port_names=port_names,
     )
@@ -160,6 +165,7 @@ def lower_module(module: vast.ModuleDef, *, source_path: str = "") -> ModuleIR:
         processes=tuple(processes),
         instances=tuple(instances),
         generate_fors=tuple(generate_fors),
+        subroutines=tuple(subroutines),
         diagnostics=tuple(diagnostics),
         source_path=source_path,
     )
@@ -196,6 +202,7 @@ class _LoweringAccumulator:
     processes: list[ProcessIR]
     instances: list[InstanceIR]
     generate_fors: list[GenerateForIR]
+    subroutines: list[SubroutineIR]
     diagnostics: list[DiagnosticIR]
     port_names: set[str]
 
@@ -252,6 +259,21 @@ def _process_module_item(item: object, acc: _LoweringAccumulator) -> None:
                 "pragmas are ignored by the current lowering flow",
                 item,
                 severity="warning",
+            )
+        )
+        return
+    if isinstance(item, vast.Function):
+        subroutine, body_diagnostics = _lower_function(item, acc.module_name)
+        acc.subroutines.append(subroutine)
+        acc.diagnostics.extend(body_diagnostics)
+        return
+    if isinstance(item, vast.Task):
+        acc.diagnostics.append(
+            _diagnostic(
+                acc.module_name,
+                "unsupported_task_first_round",
+                "Verilog tasks are not lowered yet (first round supports functions only)",
+                item,
             )
         )
         return
@@ -497,6 +519,49 @@ def _lower_always(always: vast.Always) -> ProcessIR:
         sensitivity=sensitivity,
         statements=_statement_summaries(always.statement),
         structured_statements=_structured_statements(always.statement),
+    )
+
+
+def _lower_function(func: vast.Function, module_name: str) -> tuple[SubroutineIR, list[DiagnosticIR]]:
+    """Lower a Pyverilog function definition into SubroutineIR + body diagnostics.
+
+    The function body comes in as a ``tuple`` mixing parameter ``Decl``s and
+    a final ``Block`` for the statements. We split them, lower the params,
+    and reuse ``_structured_statements`` on the Block so the body shares the
+    same dict-tree schema as ``always_*`` blocks.
+    """
+    params: list[SubroutineParamIR] = []
+    body_block: vast.Block | None = None
+    for item in func.statement:
+        if isinstance(item, vast.Decl):
+            for decl_item in item.list:
+                if isinstance(decl_item, (vast.Input, vast.Output, vast.Inout)):
+                    direction = type(decl_item).__name__.lower()
+                    params.append(
+                        SubroutineParamIR(
+                            name=str(decl_item.name),
+                            direction=direction,
+                            width=extract_width(getattr(decl_item, "width", None)),
+                            signed=bool(getattr(decl_item, "signed", False)),
+                        )
+                    )
+        elif isinstance(item, vast.Block):
+            body_block = item
+
+    return_width = extract_width(func.retwidth) if func.retwidth is not None else None
+    body_statements = _structured_statements(body_block) if body_block is not None else ()
+    diagnostics = _statement_diagnostics(module_name, body_block) if body_block is not None else []
+
+    return (
+        SubroutineIR(
+            name=str(func.name),
+            kind="function",
+            return_width=return_width,
+            return_signed=False,
+            params=tuple(params),
+            body_statements=body_statements,
+        ),
+        diagnostics,
     )
 
 

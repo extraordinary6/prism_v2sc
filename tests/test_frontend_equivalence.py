@@ -39,6 +39,7 @@ BYTE_IDENTICAL_FIXTURES = (
     ("shift_register", ("shift_register.v",), None),
     ("alu", ("alu.v",), None),
     ("pipeline8", ("pipeline8.v",), None),
+    ("function_alu", ("function_alu.v",), None),
 )
 
 # Fixtures where the two frontends produce equivalent but textually

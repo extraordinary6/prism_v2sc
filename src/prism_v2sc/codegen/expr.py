@@ -56,6 +56,7 @@ class ModuleContext:
     signal_widths: dict[str, int]
     parameter_values: dict[str, int]
     loop_vars: frozenset[str] = field(default_factory=frozenset)
+    local_names: frozenset[str] = field(default_factory=frozenset)
 
     def with_loop_var(self, name: str) -> "ModuleContext":
         return ModuleContext(
@@ -64,6 +65,24 @@ class ModuleContext:
             signal_widths=self.signal_widths,
             parameter_values=self.parameter_values,
             loop_vars=frozenset(self.loop_vars | {name}),
+            local_names=self.local_names,
+        )
+
+    def with_locals(self, names: frozenset[str]) -> "ModuleContext":
+        """Return a context where ``names`` resolve as plain C++ locals.
+
+        Used when rendering function/task bodies: the parameter names and the
+        implicit return-value variable (named after the subroutine) are local
+        to the emitted method, so they must NOT be rendered as
+        ``.read()`` / ``.write()`` on sc_signals.
+        """
+        return ModuleContext(
+            signal_names=self.signal_names,
+            parameter_names=self.parameter_names,
+            signal_widths=self.signal_widths,
+            parameter_values=self.parameter_values,
+            loop_vars=self.loop_vars,
+            local_names=frozenset(self.local_names | names),
         )
 
 
@@ -138,6 +157,10 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
         return f"{target_str}.range({msb}, {lsb})"
     if kind == "syscall":
         return _render_syscall(expr, ctx)
+    if kind == "funcall":
+        name = sanitize_identifier(str(expr.get("name", "")))
+        args = [render_rvalue(arg, ctx) for arg in expr.get("args", []) if isinstance(arg, dict)]
+        return f"{name}({', '.join(args)})"
     if kind == "raw":
         text = str(expr.get("text", ""))
         return f"/* raw: {text} */ 0"
@@ -358,6 +381,8 @@ def sanitize_identifier(name: str) -> str:
 
 def _render_identifier_rvalue(name: str, ctx: ModuleContext) -> str:
     sanitized = sanitize_identifier(name)
+    if name in ctx.local_names:
+        return sanitized
     if name in ctx.loop_vars:
         return sanitized
     if name in ctx.parameter_names:

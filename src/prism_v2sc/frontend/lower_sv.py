@@ -38,6 +38,8 @@ from prism_v2sc.ir.model import (
     ProcessIR,
     SensitivityIR,
     SignalIR,
+    SubroutineIR,
+    SubroutineParamIR,
     WidthIR,
 )
 
@@ -111,6 +113,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
     continuous_assigns: list[ContinuousAssignIR] = []
     processes: list[ProcessIR] = []
     instances: list[InstanceIR] = []
+    subroutines: list[SubroutineIR] = []
     diagnostics: list[DiagnosticIR] = []
     port_names: set[str] = set()
 
@@ -152,9 +155,14 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             for sub in member.entries:
                 if not getattr(sub, "isUninstantiated", False):
                     _walk_generate_block(sub, name, signals, continuous_assigns, processes, instances, diagnostics, port_names)
+        elif kind == "SubroutineSymbol":
+            subroutine, body_diagnostics = _lower_subroutine(member, name)
+            if subroutine is not None:
+                subroutines.append(subroutine)
+            diagnostics.extend(body_diagnostics)
         elif kind in {"TypeAliasType", "TransparentMemberSymbol", "ForwardingTypedefSymbol",
                        "TypeParameterSymbol", "GenericClassDefSymbol", "ClassType",
-                       "SubroutineSymbol", "PropertySymbol", "SequenceSymbol", "AssertionPortSymbol",
+                       "PropertySymbol", "SequenceSymbol", "AssertionPortSymbol",
                        "ClockingBlockSymbol", "ModportSymbol", "SpecifyBlockSymbol",
                        "EmptyMemberSymbol", "AttributeSymbol", "DefParamSymbol",
                        "DefinitionSymbol", "PackageSymbol", "ProgramSymbol"}:
@@ -191,6 +199,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
         processes=tuple(processes),
         instances=tuple(instances),
         generate_fors=(),  # slang has unrolled generate-for; entries are in `instances`.
+        subroutines=tuple(subroutines),
         diagnostics=tuple(diagnostics),
         source_path=src_path,
     )
@@ -471,6 +480,62 @@ def _statement_summary(statement: Any) -> str:
     return kind_name
 
 
+def _lower_subroutine(symbol: Any, module_name: str) -> tuple[SubroutineIR | None, list[DiagnosticIR]]:
+    """Lower a slang ``SubroutineSymbol`` into ``SubroutineIR``.
+
+    First-round scope is function-only; task subroutines emit a diagnostic
+    and are not materialized in the IR (mirroring the pyverilog path).
+    """
+    kind_text = str(getattr(symbol, "subroutineKind", "")).rsplit(".", 1)[-1]
+    if kind_text != "Function":
+        return None, [
+            _diagnostic(
+                module_name,
+                "unsupported_task_first_round",
+                "SystemVerilog tasks are not lowered yet (first round supports functions only)",
+                "SubroutineSymbol",
+            )
+        ]
+
+    params: list[SubroutineParamIR] = []
+    for arg in getattr(symbol, "arguments", ()) or ():
+        params.append(
+            SubroutineParamIR(
+                name=str(arg.name),
+                direction=_arg_direction_text(getattr(arg, "direction", None)),
+                width=_width_from_type(getattr(arg, "type", None)),
+                signed=bool(getattr(getattr(arg, "type", None), "isSigned", False)),
+            )
+        )
+
+    body_diagnostics: list[DiagnosticIR] = []
+    body_statements = tuple(
+        _lower_statement(child, module_name, body_diagnostics)
+        for child in _flatten_statements(getattr(symbol, "body", None))
+    )
+
+    return_type = getattr(symbol, "returnType", None)
+    return_width = _width_from_type(return_type)
+    return_signed = bool(getattr(return_type, "isSigned", False))
+
+    return (
+        SubroutineIR(
+            name=str(symbol.name),
+            kind="function",
+            return_width=return_width,
+            return_signed=return_signed,
+            params=tuple(params),
+            body_statements=body_statements,
+        ),
+        body_diagnostics,
+    )
+
+
+def _arg_direction_text(direction: Any) -> str:
+    text = str(direction).rsplit(".", 1)[-1]
+    return {"In": "input", "Out": "output", "InOut": "inout", "Ref": "ref", "ConstRef": "ref"}.get(text, "input")
+
+
 # ---------------------------------------------------------------------------
 # Instance lowering
 # ---------------------------------------------------------------------------
@@ -676,6 +741,12 @@ def _render_expression(expr: Any) -> str:
         return f"{_render_expression(expr.left)} {op} {_render_expression(expr.right)}"
     if kind_name == "Conversion":
         return _render_expression(expr.operand)
+    if kind_name == "Call":
+        callee = getattr(expr, "subroutineName", "") or ""
+        args = ", ".join(_render_expression(arg) for arg in getattr(expr, "arguments", ()) or ())
+        if getattr(expr, "isSystemCall", False):
+            return f"${callee.lstrip('$')}({args})"
+        return f"{callee}({args})"
     syntax = getattr(expr, "syntax", None)
     if syntax is not None:
         return str(syntax).strip()
@@ -735,6 +806,12 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         return _lower_expression(expr.operand)
     if kind_name == "Assignment":
         return _lower_expression(expr.right)
+    if kind_name == "Call":
+        callee = getattr(expr, "subroutineName", "") or ""
+        args = [_lower_expression(arg) for arg in getattr(expr, "arguments", ()) or ()]
+        if getattr(expr, "isSystemCall", False):
+            return {"kind": "syscall", "name": callee.lstrip("$"), "args": args}
+        return {"kind": "funcall", "name": callee, "args": args}
     syntax = getattr(expr, "syntax", None)
     return {"kind": "raw", "text": str(syntax).strip() if syntax is not None else ""}
 

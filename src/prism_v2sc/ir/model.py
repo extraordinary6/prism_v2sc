@@ -114,6 +114,28 @@ class DiagnosticIR:
 
 
 @dataclass(frozen=True)
+class SubroutineParamIR:
+    """Formal parameter of a Verilog function or task."""
+
+    name: str
+    direction: str = "input"
+    width: WidthIR | None = None
+    signed: bool = False
+
+
+@dataclass(frozen=True)
+class SubroutineIR:
+    """Synthesizable function or task definition."""
+
+    name: str
+    kind: str = "function"
+    return_width: WidthIR | None = None
+    return_signed: bool = False
+    params: tuple[SubroutineParamIR, ...] = field(default_factory=tuple)
+    body_statements: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class ModuleSignature:
     """Lightweight module signature used during streaming traversal.
 
@@ -139,6 +161,7 @@ class ModuleIR:
     processes: tuple[ProcessIR, ...] = field(default_factory=tuple)
     instances: tuple[InstanceIR, ...] = field(default_factory=tuple)
     generate_fors: tuple[GenerateForIR, ...] = field(default_factory=tuple)
+    subroutines: tuple[SubroutineIR, ...] = field(default_factory=tuple)
     diagnostics: tuple[DiagnosticIR, ...] = field(default_factory=tuple)
     source_path: str = ""
 

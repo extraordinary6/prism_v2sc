@@ -22,6 +22,7 @@ JSON dump:
     {"kind": "bitselect", "target": {...}, "index": {...}}
     {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
     {"kind": "syscall", "name": "signed", "args": [{...}]}
+    {"kind": "funcall", "name": "add_one", "args": [{...}]}
     {"kind": "raw", "text": "..."}     # safety fallback
 
 When a sub-expression cannot be classified, a ``raw`` node is emitted with
@@ -134,6 +135,12 @@ def render_expr(node: object | None) -> str:
         args = ", ".join(render_expr(arg) for arg in getattr(node, "args", ()))
         return f"${node.syscall}({args})"
 
+    if cls_name == "FunctionCall":
+        name_node = getattr(node, "name", None)
+        callee = getattr(name_node, "name", "") if name_node is not None else ""
+        args = ", ".join(render_expr(arg) for arg in getattr(node, "args", ()))
+        return f"{callee}({args})"
+
     children = node.children() if hasattr(node, "children") else ()
     if children:
         return f"{cls_name}(" + ", ".join(render_expr(child) for child in children) + ")"
@@ -223,6 +230,15 @@ def lower_expr(node: object | None) -> dict[str, Any]:
         return {
             "kind": "syscall",
             "name": str(getattr(node, "syscall", "")),
+            "args": [lower_expr(arg) for arg in getattr(node, "args", ())],
+        }
+
+    if cls_name == "FunctionCall":
+        name_node = getattr(node, "name", None)
+        callee = getattr(name_node, "name", "") if name_node is not None else ""
+        return {
+            "kind": "funcall",
+            "name": str(callee),
             "args": [lower_expr(arg) for arg in getattr(node, "args", ())],
         }
 

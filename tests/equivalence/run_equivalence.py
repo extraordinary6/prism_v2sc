@@ -103,6 +103,15 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=256,
     ),
     Fixture(
+        name="function_alu",
+        sources=("function_alu.v",),
+        top="function_alu",
+        inputs=(Port("a", 8), Port("b", 8), Port("op", 3)),
+        outputs=(Port("result", 8),),
+        sequential=False,
+        cycles=256,
+    ),
+    Fixture(
         name="counter",
         sources=("counter.v",),
         top="counter",
