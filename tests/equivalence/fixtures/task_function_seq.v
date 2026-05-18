@@ -10,17 +10,13 @@ module task_function_seq (
   function [3:0] blend;
     input [3:0] x;
     input [3:0] z;
-    begin
-      blend = (x ^ z) + 4'd1;
-    end
+    blend = (x ^ z) + 4'd1;
   endfunction
 
   task apply_mix;
     input [3:0] x;
     input [3:0] z;
-    begin
-      y = blend(x, z);
-    end
+    y = blend(x, z);
   endtask
 
   assign fn_dbg = blend(a, b);
