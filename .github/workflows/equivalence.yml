@@ -45,6 +45,15 @@ jobs:
           mkdir -p build/pytest_tmp
           python -m pytest -q
 
+      - name: Run task/function focused regression tests
+        run: |
+          mkdir -p build/pytest_tmp
+          python -m pytest -q \
+            tests/test_expr_coverage.py::test_function_call_in_expression \
+            tests/test_expr_coverage.py::test_task_call_codegen_from_ir \
+            tests/test_frontend.py::test_lower_design_reports_nonblocking_in_function \
+            tests/test_frontend.py::test_function_statement_diagnostics_reports_task_call
+
       - name: Run RTL vs SystemC equivalence harness
         run: |
           python tests/equivalence/run_equivalence.py --keep-going
