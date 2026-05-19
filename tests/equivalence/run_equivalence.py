@@ -199,6 +199,36 @@ FIXTURES: tuple[Fixture, ...] = (
         reset_active_low=True,
         cycles=64,
     ),
+    Fixture(
+        name="sv_always_comb",
+        sources=("sv_always_comb.v",),
+        top="sv_always_comb",
+        inputs=(Port("a", 8), Port("b", 8), Port("sel", 1)),
+        outputs=(Port("y", 8),),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="sv_always_ff",
+        sources=("sv_always_ff.v",),
+        top="sv_always_ff",
+        inputs=(Port("d", 8),),
+        outputs=(Port("q", 8),),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
+        name="sv_always_latch",
+        sources=("sv_always_latch.v",),
+        top="sv_always_latch",
+        inputs=(Port("en", 1), Port("d", 8)),
+        outputs=(Port("q", 8),),
+        sequential=False,
+        cycles=128,
+    ),
 )
 
 
