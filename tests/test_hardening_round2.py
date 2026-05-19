@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from prism_v2sc.codegen.systemc import generate_systemc_header
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
 from prism_v2sc.verify.static_checks import check_generated_systemc
+
+from _pyslang_helper import lower_via_pyslang
 
 
 def test_multiple_procedural_blocks_emit_scheduler_warning(tmp_path: Path) -> None:
@@ -24,7 +24,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "sched")
+    design = lower_via_pyslang([rtl], "sched")
     diagnostics = [diagnostic for diagnostic in design.diagnostics if diagnostic.code == "event_scheduler_approximated"]
 
     assert len(diagnostics) == 1
@@ -46,7 +46,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "top")
+    design = lower_via_pyslang([rtl], "top")
     header = generate_systemc_header(design)
 
     assert "sc_signal<bool> __bridge_u0_a;" in header
@@ -77,7 +77,7 @@ def test_static_generated_systemc_checks_accept_supported_header(tmp_path: Path)
     rtl = tmp_path / "top.v"
     rtl.write_text("module top(input wire a, output wire y); assign y = a; endmodule\n", encoding="utf-8")
 
-    design = lower_design(parse_verilog([rtl]), "top")
+    design = lower_via_pyslang([rtl], "top")
     header = generate_systemc_header(design)
 
     assert check_generated_systemc(header) == ()

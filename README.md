@@ -1,230 +1,78 @@
 # prism_v2sc
 
-`prism_v2sc` is a lightweight prototype that converts a hierarchical Verilog RTL subset into approximate SystemC models.
+`prism_v2sc` converts a synthesizable Verilog / SystemVerilog RTL subset into hierarchical, approximate SystemC models. One ``.hpp`` per module, mirroring the source directory layout.
 
-The project currently supports:
+It uses [slang](https://sv-lang.com/) (via the [pyslang](https://pypi.org/project/pyslang/) Python bindings) for parsing and elaboration. slang resolves parameter overrides, folds `generate if`, unrolls `generate for`, and turns port widths into concrete integers before the lowerer ever sees the design.
 
-- Pyverilog-based parsing and lowering into a structured JSON IR (with a tree-form expression sub-IR for expression-aware codegen)
-- **Streaming, bottom-up SystemC emission**: one ``.hpp`` per module, mirroring the source RTL directory layout under the output dir. Each per-module header ``#include``s its instantiated children, so users only include the top module's hpp.
-- Top-down reachability with per-source eager lowering and AST release: each source is parsed at most once and dropped immediately after lowering; only lightweight ``ModuleSignature`` and IR objects stay live. Memory stays bounded by the largest single source, not by total design size.
-- Verilog constructs handled by the codegen:
-  - module ports / signals / parameters / localparams
-  - continuous `assign`
-  - `always @(*)` combinational processes (per-output style with proper staging)
-  - `always @(posedge/negedge ...)` sequential processes with async reset
-  - `if`/`else` and ordinary `case` statements
-  - bit-select reads (`sig[i]`) and part-select reads (`sig[msb:lsb]`)
-  - bit-select / part-select on the LHS of sequential assignments (via staged `__next_*`)
-  - concatenation `{a, b, ...}` and replication `{N{x}}` in expressions
-  - reduction operators `&x`, `|x`, `^x` and the inverted variants
-  - ternary expressions and full binary/unary operator coverage
-  - module instantiation with both **named** and **positional** port bindings (positional bindings resolved against the child's cached signature)
-  - module instantiation with parameter override
-  - `generate for` instance arrays and `generate if` (statically resolvable conditions)
-- Phase 5/7 conversion metrics (time + memory + traversal counts + optional Verilator lint comparison)
-- RTL vs SystemC functional equivalence CI (`.github/workflows/equivalence.yml`)
+The tool is intentionally a **practical RTL subset translator**, not a full SystemVerilog semantic equivalent. Unsupported constructs are surfaced as diagnostics rather than silently miscompiled.
 
-It intentionally does **not** guarantee full Verilog/SystemVerilog semantic equivalence.
-
-## 1. Requirements
-
-- Python 3.10+
-- `pyverilog>=1.3.0`
-
-Install dependencies in your environment:
+## Install
 
 ```powershell
 python -m pip install -e .
 ```
 
-or:
+Requirements: Python 3.10+; `pyslang>=11.0,<12.0` (pulled in transitively, ships as a prebuilt wheel on Windows and Linux).
+
+## CLI
 
 ```powershell
-python -m pip install pyverilog
+python -m prism_v2sc --top <module> [options] [<sources...>]
 ```
 
-## 2. Project Layout
+| flag | purpose |
+| --- | --- |
+| `--top <name>` | top-level module (required) |
+| `--filelist <path>` | `.f`-style filelist (can be repeated) |
+| `--out <dir>` | output directory (default `build/systemc`) |
+| `--dump-ir` | print the JSON IR to stdout instead of writing it |
+| `--metrics` | also write `metrics.json` (timing + memory + traversal counters) |
+| `--compare-verilator` | run `verilator --lint-only` alongside and capture its timing |
+| `--fail-on-diagnostics` | exit non-zero when error-level diagnostics are reported |
 
-Key paths:
+A `.f` filelist accepts one file per line plus `-I`/`+incdir+` includes, `-D` defines, `-f` nested filelists, and `#`/`//` comments.
 
-- `src/prism_v2sc/cli.py`: CLI entrypoint
-- `src/prism_v2sc/frontend/`: parse/lower pipeline
-- `src/prism_v2sc/codegen/`: SystemC emission
-- `src/prism_v2sc/verify/harness.py`: phase5 metrics + optional Verilator comparison
-- `tests/`: unit/integration tests and RTL fixtures
-- `examples/alu_demo/`: single-file walkthrough (RTL + generated SystemC + reproduction command)
-- `examples/filelist_demo/`: multi-file walkthrough driven by a `.f` filelist (covers `+incdir+`, `-D`, multi-source)
+## Output Layout
 
-## 3. CLI Usage
-
-Run via module:
-
-```powershell
-python -m prism_v2sc --top <top_module> [options] [<verilog_sources...>]
+```
+build/systemc/
+├── ir.json                       # Phase 1 JSON IR (every reachable module)
+├── <module>.hpp                  # per-module SystemC header
+└── <nested>/<module>.hpp         # nested paths mirror the source tree
 ```
 
-### Core options
+Each module's header `#include`s the headers of every child it instantiates, so users only include the top header — the rest is pulled in transitively. There is no umbrella header.
 
-- `--top <name>`: top module name (required)
-- `--filelist <path>`: `.f` style source list (can be provided multiple times)
-- `--out <dir>`: output directory (default: `build/systemc`)
-- `--dump-ir`: print JSON IR to stdout instead of writing output files
+## How It Works
 
-### Phase 5 options
+1. slang ingests every source file at once and produces an elaborated `Compilation` (parameter overrides applied, generate constructs resolved, widths concrete).
+2. The flow walks the elaborated instance tree rooted at `--top` and lowers each reachable module into `ModuleIR`. Unreachable definitions are ignored; repeated instantiations lower exactly once.
+3. Codegen emits one `.hpp` per module in **post-order DFS** (children first), so a parent's `#include` paths always point at files that already exist on disk.
+4. Diagnostics from slang's elaboration and from the lowerer itself surface on the `DesignIR` and are summarized at the end of the run.
 
-- `--metrics`: write `metrics.json`
-- `--compare-verilator`: run best-effort `verilator --lint-only` timing/memory measurement
-- `--fail-on-diagnostics`: return non-zero if error-level diagnostics are found
+## Examples
 
-## 4. Typical Workflows
+| location | scope |
+| --- | --- |
+| `examples/alu_demo/` | single-file 8-bit ALU showing `case`, concat, bit-select |
+| `examples/filelist_demo/` | multi-file build driven by a `.f` filelist with `+incdir+` and `-D` |
 
-### 4.1 Dump IR only
-
-```powershell
-python -m prism_v2sc --top top --dump-ir rtl/top.v
-```
-
-### 4.2 Generate IR + per-module SystemC headers
-
-```powershell
-python -m prism_v2sc --top top --out build/systemc rtl/top.v
-```
-
-Outputs:
-
-- `build/systemc/ir.json`
-- `build/systemc/<module>.hpp` for each reachable module, mirroring the source directory layout under the output dir.
-
-For example, a design with `rtl/top/top.v` and `rtl/leaf/leaf.v` produces `build/systemc/top/top.hpp` and `build/systemc/leaf/leaf.hpp`; `top.hpp` will contain `#include "../leaf/leaf.hpp"`. Users only need to include the top module's hpp — children are pulled in transitively.
-
-### 4.3 Generate with phase5 metrics
-
-```powershell
-python -m prism_v2sc --top top --metrics --out build/systemc rtl/top.v
-```
-
-Additional output:
-
-- `build/systemc/metrics.json`
-
-### 4.4 Use filelist input
-
-```powershell
-python -m prism_v2sc --top top --filelist rtl/sources.f --out build/systemc
-```
-
-`sources.f` currently supports:
-
-- one file path per line
-- `-I <dir>` and `-I<dir>` include directories
-- `+incdir+<dir>` include directories
-- `-D <macro[=value]>` and `-D<macro[=value]>` preprocessor defines
-- nested `-f <filelist>` and `-f<filelist>` entries
-- blank lines
-- comment lines starting with `#` or `//`
-
-You can combine positional sources and filelist sources. The tool resolves absolute paths and de-duplicates repeated entries deterministically.
-
-### 4.5 Include Verilator comparison
-
-```powershell
-python -m prism_v2sc --top top --metrics --compare-verilator --out build/systemc rtl/top.v
-```
-
-If Verilator is discoverable, `metrics.json` includes:
-
-- availability + executable path
-- lint elapsed time
-- peak observed Verilator process memory
-- captured stdout/stderr
-
-The same report also includes Phase 7 flow counters:
-
-- source-index and top-driven traversal timing
-- source files parsed during reachable traversal
-- modules parsed/lowered once after repeated-instantiation de-dup
-- visited, missing, and ambiguous module lists
-- truncation flags for captured external-tool stdout/stderr
-
-## 5. Top-Down Reachability and Streaming Emission
-
-Lowering/codegen is driven by `--top` reachability using a lightweight module-to-source index:
-
-- only modules reachable from the top instance graph are parsed/lowered/emitted
-- each source is parsed at most once; on parse, every module it defines gets a lightweight `ModuleSignature` cached and gets fully lowered, then the AST is released
-- emission is **bottom-up (post-order DFS)**: a parent's hpp is written only after every child's hpp is already on disk, so the parent's `#include` paths point at files that exist
-- repeated instantiations lower each module definition once
-- unrelated modules present in input sources are ignored
-- unknown instance target modules are reported via diagnostics (`unresolved_instance_module`)
-- duplicate module definitions are reported via diagnostics (`ambiguous_module_definition`)
-- positional port bindings (e.g. `leaf u(a, b, y);`) are resolved against the child's cached signature, recovering port names by position
-
-## 6. Diagnostics and Unsupported Constructs
-
-Lowering collects unsupported/risky constructs into IR diagnostics:
-
-- design-level: `design.diagnostics`
-- module-level: `module.diagnostics`
-
-Examples currently reported:
-
-- `initial` blocks (parsed but not emitted as executable SystemC behavior)
-- unsupported statements nested inside processes
-- procedural `for` loops in `always/initial`
-- unsupported generate items/patterns
-- X/Z/? literals that are approximated as zero in generated C++ expressions
-- modules with multiple procedural blocks where full Verilog event scheduling is approximated
-
-Use `--fail-on-diagnostics` in CI to hard-fail when error diagnostics are present.
-
-## 7. Testing
-
-Run all tests:
+## Tests
 
 ```powershell
 python -m pytest -q
 ```
 
-Current test coverage includes:
+Currently 59 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, and subroutines.
 
-- CLI behavior and output generation
-- frontend lowering checks
-- SystemC header generation for hierarchy/parameters/generate-for
-- phase5 metrics and diagnostics behavior
+## Equivalence CI
 
-### 7.1 RTL vs SystemC equivalence (CI)
+`.github/workflows/equivalence.yml` runs on Linux. For each fixture under `tests/equivalence/fixtures/` it co-simulates the original RTL (Icarus Verilog) and the generated SystemC (libsystemc-dev) against a shared deterministic stimulus and diffs the per-cycle output traces. See `tests/equivalence/README.md` for fixture list, local usage, and environment overrides.
 
-The `equivalence` GitHub Actions workflow (`.github/workflows/equivalence.yml`)
-runs on every push and pull request to `main`. For each fixture under
-`tests/equivalence/fixtures/`, it converts the RTL with `prism-v2sc`, then
-co-simulates the original Verilog (Icarus Verilog) and the generated
-SystemC (libsystemc-dev) with a shared deterministic stimulus file, and
-diffs the per-cycle output traces. The comparison is near-cycle-accurate
-(inputs driven on negedge, outputs sampled after posedge); the harness
-accepts a `--shift-tolerance` knob for designs whose SystemC model
-legitimately lags the RTL by a fixed number of cycles.
+## Further Reading
 
-See `tests/equivalence/README.md` for details on adding fixtures and
-running the harness locally.
-
-## 8. Notes on Verilator Detection (Windows/MSYS2/MinGW)
-
-The harness supports multiple discovery patterns, including common wrapper/binary layouts used by MSYS2/MinGW installs.
-
-If your environment still reports Verilator unavailable, confirm:
-
-1. the Verilator command is reachable from the same shell running Python
-2. required helper binaries/interpreter are in `PATH`
-3. `verilator --version` succeeds in that shell
-
-## 9. Scope and Limitations
-
-This tool is currently a pragmatic RTL-subset translator. It prioritizes:
-
-- hierarchy preservation
-- practical conversion and iteration speed
-- explicit diagnostics over silent mis-compilation
-
-The current development priority is Verilog functional correctness before broad SystemVerilog expansion. The project does not yet have a full golden functional differential harness; Verilator integration currently provides lint/tool comparison, not output-equivalence proof.
-
-See `docs/correctness_strategy.md`, `docs/known_differences.md`, and `docs/hardening_checks.md` for correctness priorities, known differences, and reproducible hardening commands.
+- `docs/correctness_strategy.md` — how correctness is established and what the golden loop looks like.
+- `docs/known_differences.md` — explicit list of where generated SystemC diverges from full Verilog/SV semantics.
+- `docs/hardening_checks.md` — reproducible local checks (unit suite, metrics smoke, static checks).
+- `docs/pyslang_migration.md` — historical record of the pyverilog → pyslang migration (Phases A/B/C, completed).
+- `plan.md` — current phase status and the upcoming SV feature rollout list.

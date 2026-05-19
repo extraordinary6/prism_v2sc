@@ -1,11 +1,30 @@
 """Tree-based SystemC expression rendering.
 
-Walks the structured-expression dicts produced by
-``prism_v2sc.ir.expressions.lower_expr`` and emits C++ SystemC source.
-This replaces the older regex/string-substitution approach that mishandled
-bit-select, part-select, concatenation, and replication and that picked up
-literal-suffix characters (``hAA`` from ``8'hAA``) as phantom identifiers
-in sensitivity lists.
+Consumes the structured-expression dicts produced by the frontend
+(``frontend.lower._lower_expression`` for the slang path) and emits C++
+SystemC source.
+
+The dict tree uses a stable schema so it can round-trip through the IR
+JSON dump:
+
+.. code-block:: python
+
+    {"kind": "identifier", "name": "data_i"}
+    {"kind": "intconst", "raw": "8'hAA", "value": 170, "width": 8, "base": 16}
+    {"kind": "binop", "op": "+", "left": {...}, "right": {...}}
+    {"kind": "unop", "op": "!", "operand": {...}}
+    {"kind": "cond", "cond": {...}, "true": {...}, "false": {...}}
+    {"kind": "concat", "parts": [{...}, ...]}
+    {"kind": "repeat", "count": {...}, "value": {...}}
+    {"kind": "bitselect", "target": {...}, "index": {...}}
+    {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
+    {"kind": "syscall", "name": "signed", "args": [{...}]}
+    {"kind": "funcall", "name": "add_one", "args": [{...}]}
+    {"kind": "raw", "text": "..."}     # safety fallback
+
+When a sub-expression cannot be classified, a ``raw`` node is emitted with
+the original Verilog text so codegen can still produce *some* output and
+the diagnostic path stays useful.
 """
 
 from __future__ import annotations

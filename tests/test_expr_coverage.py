@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from prism_v2sc.codegen.systemc import generate_systemc_header
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
+
+from _pyslang_helper import lower_via_pyslang
 
 
 def _design(tmp_path: Path, source: str, top: str):
     rtl = tmp_path / f"{top}.v"
     rtl.write_text(source, encoding="utf-8")
-    return lower_design(parse_verilog([rtl]), top)
+    return lower_via_pyslang([rtl], top)
 
 
 def test_concat_in_continuous_assign(tmp_path: Path) -> None:
@@ -233,3 +235,46 @@ endmodule
     assert "data.read().and_reduce()" in header
     assert "data.read().or_reduce()" in header
     assert "data.read().xor_reduce()" in header
+
+
+def test_sized_integer_literal_value_is_parsed_not_zero(tmp_path: Path) -> None:
+    """Regression: case-item values like ``3'b001`` were emitted as IR value=0
+    because ``int(str(SVInt))`` raises on slang's formatted output. The IR
+    ``value`` field must reflect the actual integer the literal represents."""
+    design = _design(
+        tmp_path,
+        """
+module case_demo(input wire [2:0] op, output reg [7:0] out);
+  always @(*) begin
+    case (op)
+      3'b001: out = 8'h11;
+      3'b010: out = 8'h22;
+      3'b111: out = 8'hFF;
+      default: out = 8'h00;
+    endcase
+  end
+endmodule
+""",
+        "case_demo",
+    )
+    module = design.modules[0]
+    case_items = module.processes[0].structured_statements[0]["items"]
+    seen_values = []
+    for item in case_items:
+        for cond in item.get("cond_exprs", ()):
+            if cond.get("kind") == "intconst":
+                seen_values.append((cond["raw"], cond["value"]))
+    assert ("3'b001", 1) in seen_values
+    assert ("3'b010", 2) in seen_values
+    assert ("3'b111", 7) in seen_values
+
+    # Also covers RHS hex literals (8'h11 = 17, 8'hFF = 255).
+    rhs_values = {}
+    for item in case_items:
+        for stmt in item.get("statements", ()):
+            rhs = stmt.get("right_expr", {})
+            if rhs.get("kind") == "intconst":
+                rhs_values[rhs["raw"]] = rhs["value"]
+    assert rhs_values["8'h11"] == 0x11
+    assert rhs_values["8'h22"] == 0x22
+    assert rhs_values["8'hFF"] == 0xFF

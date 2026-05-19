@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
 from prism_v2sc.verify import harness
 from prism_v2sc.verify.harness import convert_with_metrics
+
+from _pyslang_helper import lower_via_pyslang
 
 
 def test_phase5_realistic_rtl_subset_metrics(tmp_path: Path) -> None:
@@ -91,7 +91,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "decode")
+    design = lower_via_pyslang([rtl], "decode")
 
     assert design.diagnostics == ()
     process = design.modules[0].processes[0]

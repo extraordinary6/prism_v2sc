@@ -1,30 +1,27 @@
-# `alu_demo` — RTL → SystemC conversion walkthrough
+# `alu_demo` — single-file RTL → SystemC walkthrough
 
-A self-contained example you can read top-to-bottom: an 8-bit ALU written in
-synthesizable Verilog, the **exact SystemC header** prism_v2sc emits for it,
-and the one-line command that reproduces the conversion.
+A self-contained example: a small 8-bit ALU in synthesizable Verilog, the **exact** SystemC header `prism_v2sc` emits for it, and the one-line command that reproduces the conversion.
 
-The ALU is intentionally small but exercises most of the non-trivial Verilog
-constructs the converter supports:
+The ALU is intentionally compact but exercises most of the non-trivial Verilog constructs the converter supports.
 
-| construct                         | where it shows up                        |
-| --------------------------------- | ---------------------------------------- |
-| `case` statement                  | the `result` always block (8 ops)        |
-| concatenation `{1'b0, a}`         | `add_full` continuous assign             |
-| bit-select read `add_full[8]`     | the `carry` always block                 |
-| one always block per output       | `result` / `zero` / `carry` each have their own block |
-| `==` comparison                   | the `zero` flag and the `carry` guard    |
-| async-reset-free combinational    | `always @(*)` style throughout           |
+| construct | where it shows up |
+| --- | --- |
+| `case` statement | `result` always block, 8 ops |
+| concatenation `{1'b0, a}` | `add_full` continuous assign |
+| bit-select read `add_full[8]` | `carry` always block |
+| one always block per output | `result`, `zero`, and `carry` each get their own block |
+| equality `==` | `zero` flag and `carry` guard |
+| async-reset-free combinational | `always @(*)` throughout |
 
 ## Layout
 
 ```
 examples/alu_demo/
-├── alu.v                       # 51-line ALU RTL
+├── alu.v                  # 38-line ALU RTL
 ├── expected/
-│   ├── ir.json                 # Phase 1 JSON IR (one-shot dump)
-│   └── alu.hpp                 # Generated SystemC per-module header
-└── README.md                   # This file
+│   ├── ir.json            # Phase 1 JSON IR
+│   └── alu.hpp            # Generated SystemC header
+└── README.md              # This file
 ```
 
 ## RTL
@@ -68,7 +65,7 @@ endmodule
 
 (Full source: [`alu.v`](alu.v).)
 
-## One-line reproduction
+## Reproducing the conversion
 
 From the repository root:
 
@@ -76,23 +73,24 @@ From the repository root:
 python -m prism_v2sc --top alu --out examples/alu_demo/expected examples/alu_demo/alu.v
 ```
 
-On Windows / conda the command is the same with the project's Python on
-`PYTHONPATH` (e.g. `PYTHONPATH=src D:/anaconda/envs/pytorch/python.exe -m prism_v2sc ...`).
+On Windows / conda:
+
+```powershell
+$env:PYTHONPATH = 'src'
+D:/anaconda/envs/pytorch/python.exe -m prism_v2sc `
+  --top alu --out examples/alu_demo/expected examples/alu_demo/alu.v
+```
 
 Two files are written:
 
-- `expected/ir.json` — the Phase 1 JSON IR (structural design dump used by
-  the static checks and the metrics harness).
-- `expected/alu.hpp` — the per-module SystemC header below. Single-module
-  design ⇒ flat output, no subdirectory.
+- `expected/ir.json` — the Phase 1 JSON IR.
+- `expected/alu.hpp` — the per-module SystemC header below.
 
-Re-running the command should produce a byte-identical header — the
-codegen is deterministic.
+Single-module design ⇒ flat output, no subdirectory. Re-running the command should produce a byte-identical header — codegen is deterministic.
 
-## Generated SystemC (highlights)
+## Generated SystemC
 
-The full output is committed at
-[`expected/alu.hpp`](expected/alu.hpp). The shape is:
+The full output lives at [`expected/alu.hpp`](expected/alu.hpp). Shape:
 
 ```cpp
 SC_MODULE(alu) {
@@ -117,7 +115,7 @@ SC_MODULE(alu) {
     case 0b000: __next_result = (a.read() + b.read()); break;
     case 0b001: __next_result = (a.read() - b.read()); break;
     // ...
-    default:    __next_result = 0x00; break;
+    default:    __next_result = 0x00;                 break;
     }
     result.write(__next_result);
   }
@@ -131,7 +129,7 @@ SC_MODULE(alu) {
   void always_comb_2() {
     auto __next_carry = carry.read();
     if ((op.read() == 0b000)) {
-      __next_carry = add_full.read()[8];   // bit-select read
+      __next_carry = add_full.read()[8];  // bit-select read
     } else {
       __next_carry = 0b0;
     }
@@ -139,30 +137,21 @@ SC_MODULE(alu) {
   }
 
   SC_CTOR(alu) {
-    SC_METHOD(assign_0);
-    sensitive << a << b;          // no phantom 'b0' from 1'b0 literals
-    SC_METHOD(always_comb_0);
-    sensitive << op << a << b;
-    SC_METHOD(always_comb_1);
-    sensitive << result;
-    SC_METHOD(always_comb_2);
-    sensitive << op << add_full;
+    SC_METHOD(assign_0);    sensitive << a << b;
+    SC_METHOD(always_comb_0); sensitive << op << a << b;
+    SC_METHOD(always_comb_1); sensitive << result;
+    SC_METHOD(always_comb_2); sensitive << op << add_full;
   }
 };
 ```
 
 Things to notice:
 
-- The Verilog **concatenation** `{1'b0, a}` becomes
-  `((sc_uint<9>(0b0) << 8) | sc_uint<9>(a.read()))` — explicit shift-OR with
-  every operand cast to the result width so the sum stays a clean 9-bit value.
-- The Verilog **bit-select** `add_full[8]` becomes
-  `add_full.read()[8]` (sc_uint's `operator[]` returning a bit-ref).
-- Each `always @(*)` block is lowered to its own `SC_METHOD` with a
-  per-output `__next_<signal>` staging pattern, so a `case` `default:` and
-  the `zero`/`carry` overwrites all interact correctly.
-- The sensitivity list only contains real signals — sized literals like
-  `1'b0`, `8'h00`, `3'b000` no longer leak their base prefix into the list.
+- slang resolves `[7:0]` and `[8:0]` to concrete widths during elaboration, so the ports come out as `sc_uint<8>` / `sc_uint<9>` directly — no width arithmetic in the type names.
+- The Verilog **concatenation** `{1'b0, a}` becomes `((sc_uint<9>(0b0) << 8) | sc_uint<9>(a.read()))` — explicit shift-OR with each operand cast to the result width so the sum stays a clean 9-bit value.
+- The Verilog **bit-select** `add_full[8]` becomes `add_full.read()[8]` (sc_uint's `operator[]` returning a bit-ref).
+- Each `always @(*)` block lowers to its own `SC_METHOD` with a per-output `__next_<signal>` staging pattern, so `case` `default:` and `if`/`else` overwrites all interact correctly.
+- The sensitivity list only contains real signals — sized literals like `1'b0`, `8'h00`, `3'b000` no longer leak their base prefix into the list.
 
 ## Diagnostic
 
@@ -174,23 +163,14 @@ generated SystemC uses SC_METHOD scheduling and may differ from full Verilog
 event ordering
 ```
 
-It is informational — every output is driven by exactly one block, so there
-is no driver conflict and the SC_METHOD scheduling is functionally
-equivalent for this design. See [`docs/known_differences.md`](../../docs/known_differences.md).
+It is informational — every output is driven by exactly one block, so there is no driver conflict and `SC_METHOD` scheduling is functionally equivalent for this design. See [`docs/known_differences.md`](../../docs/known_differences.md).
 
-## Verifying functional equivalence
+## Functional equivalence
 
-The same ALU is registered as the `alu` fixture in
-`tests/equivalence/run_equivalence.py`. On Linux with `iverilog` + `libsystemc-dev`
-installed (or simply by pushing — the `equivalence` GitHub Actions workflow
-will run it):
+The same ALU is registered as the `alu` fixture in `tests/equivalence/run_equivalence.py`. On Linux with `iverilog` + `libsystemc-dev` (or simply by pushing — the `equivalence` workflow runs it on every push):
 
 ```bash
 python tests/equivalence/run_equivalence.py --fixtures alu
 ```
 
-This drives 256 random `(a, b, op)` stimulus rows through both the Verilog
-simulation (Icarus Verilog) and the generated SystemC simulation (libsystemc-dev),
-then diffs the per-cycle output traces. A passing run is the actual
-correctness signal — the generated header above is just the human-readable
-artifact that the converter produces along the way.
+This drives 256 random `(a, b, op)` stimulus rows through both the Verilog simulation (Icarus Verilog) and the generated SystemC simulation (libsystemc-dev), then diffs the per-cycle output traces. A passing run is the actual correctness signal — the generated header above is just the human-readable artifact along the way.

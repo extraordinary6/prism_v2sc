@@ -276,14 +276,9 @@ top.v
 
     payload = json.loads((out_dir / "ir.json").read_text(encoding="utf-8"))
     top_module = payload["modules"][0]
-    # slang resolves ``[WIDTH-1:0]`` to ``[7:0]`` during elaboration; the
-    # pyverilog path leaves the textual ``(8 - 1)`` form intact. Accept
-    # either — what matters for this test is that include-dir + define
-    # both flowed through to the parser at all.
-    assert top_module["ports"][0]["width"] in (
-        {"msb": "(8 - 1)", "lsb": "0"},
-        {"msb": "7", "lsb": "0"},
-    )
+    # slang resolves ``[WIDTH-1:0]`` to ``[7:0]`` during elaboration, which
+    # confirms include-dir + define both flowed through to the parser.
+    assert top_module["ports"][0]["width"] == {"msb": "7", "lsb": "0"}
     assigns = top_module["continuous_assigns"]
     assert len(assigns) == 1
     assert assigns[0]["left"] == "y"

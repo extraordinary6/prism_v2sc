@@ -139,7 +139,7 @@
             }
           ],
           "statements": [
-            "CaseStatement"
+            "Case"
           ],
           "structured_statements": [
             {
@@ -416,7 +416,7 @@
                           "kind": "intconst",
                           "raw": "1",
                           "value": 1,
-                          "width": null
+                          "width": 32
                         }
                       },
                       "type": "blocking_assign"
@@ -460,7 +460,7 @@
                           "kind": "intconst",
                           "raw": "1",
                           "value": 1,
-                          "width": null
+                          "width": 32
                         }
                       },
                       "type": "blocking_assign"
@@ -603,7 +603,7 @@
                       "kind": "intconst",
                       "raw": "8",
                       "value": 8,
-                      "width": null
+                      "width": 32
                     },
                     "kind": "bitselect",
                     "target": {
@@ -630,7 +630,8 @@
           }
         }
       ],
-      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\alu_demo\\alu.v"
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\alu_demo\\alu.v",
+      "subroutines": []
     }
   ],
   "top": "alu"

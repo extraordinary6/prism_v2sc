@@ -18,11 +18,11 @@ SC_MODULE(top_datapath) {
   sc_in<bool> rst_n;
   sc_in<bool> en;
   sc_in<bool> sel;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> a;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> b;
-  sc_out<sc_uint<(((8 - 1)) - (0) + 1)>> y;
+  sc_in<sc_uint<8>> a;
+  sc_in<sc_uint<8>> b;
+  sc_out<sc_uint<8>> y;
 
-  sc_signal<sc_uint<(((8 - 1)) - (0) + 1)>> mux_out;
+  sc_signal<sc_uint<8>> mux_out;
 
   sub_mux u_mux;
   sub_register u_reg;

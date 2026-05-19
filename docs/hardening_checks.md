@@ -1,44 +1,69 @@
 # Hardening Checks
 
-Use these commands to reproduce the current post-Phase 8 checks.
+Reproducible local checks you can run while developing. Everything here is intentionally cheap: nothing here builds SystemC or runs Icarus Verilog — for that see `tests/equivalence/README.md`.
 
-## Unit and Regression Suite
+## Unit Suite
 
 ```powershell
-D:\anaconda\envs\pytorch\python.exe -m pytest -q --basetemp=build\pytest_tmp_pytorch_hardening
+D:\anaconda\envs\pytorch\python.exe -m pytest -q
+```
+
+Covers IR lowering, codegen text, multi-file output layout, CLI behavior, expression coverage, hardening edges, diagnostics policy, and the pyslang helper. 59 tests at time of writing.
+
+For a hermetic temporary build directory:
+
+```powershell
+D:\anaconda\envs\pytorch\python.exe -m pytest -q --basetemp=build\pytest_tmp_hardening
 ```
 
 ## Metrics Smoke
 
+Exercises the full conversion pipeline on a representative pipeline RTL, including the Verilator comparison hook on Windows/MSYS2:
+
 ```powershell
-$env:PYTHONPATH='src'
-D:\anaconda\envs\pytorch\python.exe -m prism_v2sc --top pipeline_top --metrics --compare-verilator --out build/phase5_smoke tests/rtl/phase5_pipeline.v
+$env:PYTHONPATH = 'src'
+D:\anaconda\envs\pytorch\python.exe -m prism_v2sc `
+  --top pipeline_top `
+  --metrics --compare-verilator `
+  --out build\phase5_smoke `
+  tests\rtl\phase5_pipeline.v
 ```
 
-Expected `metrics.json` fields include:
+Expected fields in the resulting `metrics.json`:
 
-- `source_index`
-- `traversal`
-- `source_parse_count`
-- `module_lower_count`
-- `verilator_lint.stdout_truncated`
-- `verilator_lint.stderr_truncated`
+- `source_index` — elapsed time for slang's parse + elaborate step
+- `traversal` — elapsed time for the top-driven instance-tree walk
+- `source_parse_count` — number of input source files fed to slang
+- `module_lower_count` — number of modules lowered after repeated-instantiation dedup
+- `verilator_lint.stdout_truncated` / `stderr_truncated` — truncation flags when Verilator's output exceeded the configured cap
 
-On the current Windows/MSYS2 setup, Verilator discovery resolves the Perl wrapper to:
+On the maintainer's Windows/MSYS2 setup Verilator discovery resolves to:
 
-```text
+```
 D:\MinGW\mingw\mingw64\share\verilator\bin\verilator_bin.exe
 ```
 
+If your environment reports `verilator_lint.available = false`, confirm `verilator --version` works from the same shell that ran Python.
+
 ## Static Generated-Code Checks
 
-`prism_v2sc.verify.static_checks.check_generated_systemc()` flags obvious generated-code fallback markers:
+`prism_v2sc.verify.static_checks.check_generated_systemc()` flags obvious miscompile markers in any generated header:
 
-- `TODO:` text in generated output
+- `TODO:` text in the emitted output
 - `// Unsupported statement:` comments
 - missing `<systemc>` include
 - missing `SC_MODULE`
 
-## Diagnostic Policy
+Useful when you're triaging a regression and want a quick "is the output even structurally valid" answer.
 
-Warnings identify approximations that still emit SystemC. Error diagnostics identify unsupported constructs or unsafe lowering cases. Use `--fail-on-diagnostics` in CI when unsupported constructs should fail conversion.
+## Diagnostic Policy Check
+
+Run the CLI with `--fail-on-diagnostics` to assert no error-level diagnostics surface:
+
+```powershell
+D:\anaconda\envs\pytorch\python.exe -m prism_v2sc `
+  --top <top> --fail-on-diagnostics `
+  --out build\diag_check <sources...>
+```
+
+Warnings (e.g. `event_scheduler_approximated`) are informational and do not fail the run; errors (e.g. unsupported construct, `slang_UnknownModule`) cause exit code 2.

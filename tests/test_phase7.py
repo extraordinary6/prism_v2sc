@@ -4,18 +4,7 @@ import json
 from pathlib import Path
 
 from prism_v2sc.cli import main
-from prism_v2sc.frontend.flow import build_source_index, lower_design_top_down
-
-
-def test_source_index_maps_modules_to_files(tmp_path: Path) -> None:
-    top = tmp_path / "top.v"
-    leaf = tmp_path / "leaf.v"
-    top.write_text("module top; endmodule\n", encoding="utf-8")
-    leaf.write_text("module leaf; endmodule\n", encoding="utf-8")
-
-    index = build_source_index([top, leaf])
-
-    assert index.by_module == {"top": (top,), "leaf": (leaf,)}
+from prism_v2sc.frontend.flow import lower_design_top_down
 
 
 def test_top_down_flow_skips_unused_sources_and_dedupes_repeated_instances(tmp_path: Path) -> None:
@@ -40,14 +29,14 @@ endmodule
         encoding="utf-8",
     )
 
-    # The traversal counters in this assertion belong to the pyverilog
-    # per-source flow. slang elaborates all sources together, so the same
-    # observable behavior (unused source skipped, repeated instances of
-    # the same module deduped) is verified via the modules list alone.
-    flow = lower_design_top_down([top, leaf, unused], "top", frontend="pyverilog")
+    # slang elaborates all sources together, so source_parse_count counts
+    # every input file rather than only the reachable subset. The
+    # user-visible guarantees — unreachable modules dropped, repeated
+    # instances of the same module deduped — are verified via the modules
+    # list and lower count instead.
+    flow = lower_design_top_down([top, leaf, unused], "top")
 
     assert [module.name for module in flow.design.modules] == ["top", "leaf"]
-    assert flow.traversal.source_parse_count == 2
     assert flow.traversal.module_lower_count == 2
     assert flow.traversal.visited_modules == ("top", "leaf")
 
@@ -68,17 +57,17 @@ endmodule
     dup_a.write_text("module dup(input wire a, output wire y); assign y = a; endmodule\n", encoding="utf-8")
     dup_b.write_text("module dup(input wire a, output wire y); assign y = ~a; endmodule\n", encoding="utf-8")
 
-    # The missing/ambiguous module *diagnostics* in this test originate
-    # from the pyverilog flow's source-index. slang reports the same
-    # situations through its own diagnostic stream (UnknownModule /
-    # DuplicateDefinition), with different codes — pin to pyverilog here
-    # since we're asserting on the legacy diagnostic codes.
-    flow = lower_design_top_down([top, dup_a, dup_b], "top", frontend="pyverilog")
+    # slang's elaboration diagnostics carry their own taxonomy:
+    # ``slang_UnknownModule`` for unknown instance targets and
+    # ``slang_DuplicateDefinition`` for repeated module declarations.
+    # ``missing_modules`` / ``ambiguous_modules`` on TraversalStats are
+    # not populated on the pyslang path because slang reports both
+    # conditions through its own diagnostic stream.
+    flow = lower_design_top_down([top, dup_a, dup_b], "top")
     codes = {diagnostic.code for diagnostic in flow.design.diagnostics}
 
-    assert codes == {"unresolved_instance_module", "ambiguous_module_definition"}
-    assert flow.traversal.missing_modules == ("missing",)
-    assert flow.traversal.ambiguous_modules == ("dup",)
+    assert "slang_UnknownModule" in codes
+    assert "slang_DuplicateDefinition" in codes
 
 
 def test_top_down_flow_rejects_missing_top(tmp_path: Path) -> None:

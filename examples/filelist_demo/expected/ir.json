@@ -95,7 +95,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         },
         {
@@ -105,7 +105,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         },
         {
@@ -115,7 +115,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         }
       ],
@@ -127,11 +127,12 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         }
       ],
-      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\top\\top_datapath.v"
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\top\\top_datapath.v",
+      "subroutines": []
     },
     {
       "continuous_assigns": [
@@ -179,7 +180,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         },
         {
@@ -189,7 +190,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         },
         {
@@ -199,13 +200,14 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         }
       ],
       "processes": [],
       "signals": [],
-      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_mux.v"
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_mux.v",
+      "subroutines": []
     },
     {
       "continuous_assigns": [],
@@ -243,7 +245,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         },
         {
@@ -253,7 +255,7 @@
           "signed": false,
           "width": {
             "lsb": "0",
-            "msb": "(8 - 1)"
+            "msb": "7"
           }
         }
       ],
@@ -336,7 +338,8 @@
         }
       ],
       "signals": [],
-      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_register.v"
+      "source_path": "C:\\Users\\Xypher\\Desktop\\master\\ai_project\\prism_v2sc\\examples\\filelist_demo\\rtl\\primitives\\sub_register.v",
+      "subroutines": []
     }
   ],
   "top": "top_datapath"

@@ -108,17 +108,12 @@ def convert_with_metrics(
     compare_verilator: bool = False,
     out_dir: Path | None = None,
     source_root: Path | None = None,
-    frontend: str = "pyslang",
 ) -> ConversionArtifacts:
     """Parse, lower, emit SystemC, and measure time and peak Python allocation.
 
     When ``out_dir`` is provided, the per-module SystemC files are written
     under it with directory mirroring rooted at ``source_root`` (defaulting
     to the common parent of the inputs).
-
-    ``frontend`` selects the Verilog/SystemVerilog parser backend
-    (``"pyverilog"`` or ``"pyslang"``). The two share the same downstream
-    ``ModuleIR`` shape, so callers usually do not need to care.
     """
     normalized_sources = tuple(str(source) for source in sources)
     total_start = time.perf_counter()
@@ -129,7 +124,6 @@ def convert_with_metrics(
             top,
             include_dirs=include_dirs,
             defines=defines,
-            frontend=frontend,
         )
     )
     design = flow.design

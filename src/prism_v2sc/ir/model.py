@@ -140,8 +140,8 @@ class ModuleSignature:
     """Lightweight module signature used during streaming traversal.
 
     Carries only the port list and parameter list needed to bind instances
-    (including positional bindings) without keeping the full lowered IR or
-    the Pyverilog AST alive.
+    (including positional bindings) without keeping the full lowered IR
+    around.
     """
 
     name: str

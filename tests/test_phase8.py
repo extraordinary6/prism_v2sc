@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from prism_v2sc.codegen.systemc import generate_systemc_header
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
+
+from _pyslang_helper import lower_via_pyslang
 
 
 def test_case_statement_emits_switch(tmp_path: Path) -> None:
@@ -24,7 +26,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "decode")
+    design = lower_via_pyslang([rtl], "decode")
     header = generate_systemc_header(design)
 
     assert design.diagnostics == ()
@@ -53,12 +55,18 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "slices")
+    design = lower_via_pyslang([rtl], "slices")
 
     assert not any(diagnostic.code == "multiple_procedural_drivers" for diagnostic in design.diagnostics)
 
 
 def test_generate_bit_select_binding_uses_scalar_bridges(tmp_path: Path) -> None:
+    """slang elaborates the generate-for into ``WIDTH`` flattened instances
+    with disambiguated names (``g_0_u`` ... ``g_3_u``). Each per-iteration
+    instance gets its own pair of scalar bridge signals and its own bridge
+    SC_METHODs, and the genvar ``i`` in ``a[i]``/``y[i]`` resolves to the
+    iteration's concrete index.
+    """
     rtl = tmp_path / "generate.v"
     rtl.write_text(
         """
@@ -81,14 +89,19 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "gen_top")
+    design = lower_via_pyslang([rtl], "gen_top")
     header = generate_systemc_header(design)
 
     assert "TODO: bind bit-select" not in header
-    assert "sc_vector<sc_signal<bool>> __bridge_g_u_a;" in header
-    assert "sc_vector<sc_signal<bool>> __bridge_g_u_y;" in header
-    assert "g_u[i].a(__bridge_g_u_a[i]);" in header
-    assert "g_u[i].y(__bridge_g_u_y[i]);" in header
-    assert "__bridge_g_u_a[i].write(a.read()[i]);" in header
-    assert "__tmp[i] = __bridge_g_u_y[i].read();" in header
-    assert "y.write(__tmp);" in header
+    # Each unrolled iteration owns disambiguated instance + bridge signals.
+    for idx in range(4):
+        assert f"bitcell g_{idx}_u;" in header
+        assert f"sc_signal<bool> __bridge_g_{idx}_u_a;" in header
+        assert f"sc_signal<bool> __bridge_g_{idx}_u_y;" in header
+        assert f"g_{idx}_u.a(__bridge_g_{idx}_u_a);" in header
+        assert f"g_{idx}_u.y(__bridge_g_{idx}_u_y);" in header
+        # genvar `i` resolves to the iteration's concrete index in bridge methods.
+        assert f"__bridge_g_{idx}_u_a.write(a.read()[{idx}]);" in header
+        assert f"__tmp[{idx}] = __bridge_g_{idx}_u_y.read();" in header
+    # Genvar must not leak through to the generated C++.
+    assert "[i]" not in header

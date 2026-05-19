@@ -12,9 +12,9 @@ using namespace sc_dt;
 
 SC_MODULE(sub_mux) {
   sc_in<bool> sel;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> a;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> b;
-  sc_out<sc_uint<(((8 - 1)) - (0) + 1)>> y;
+  sc_in<sc_uint<8>> a;
+  sc_in<sc_uint<8>> b;
+  sc_out<sc_uint<8>> y;
 
   void assign_0() {
     y.write((sel.read() ? b.read() : a.read()));

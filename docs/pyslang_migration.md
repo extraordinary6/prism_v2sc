@@ -1,6 +1,6 @@
 # pyslang Migration Plan
 
-Status: **Phase A + B landed on `feat/pyslang-migration`** (not yet pushed). Last updated: 2026-05-18.
+Status: **Phase A + B + C landed on `feat/pyslang-migration`** (pyverilog fully removed). Last updated: 2026-05-19.
 
 This document is the agreed-upon roadmap for replacing the pyverilog frontend with pyslang, so that prism_v2sc can ingest synthesizable SystemVerilog (interfaces, packages, typedefs, packed structs, enums, `always_comb/ff/latch`, packed/unpacked arrays). Dynamic SV (classes, randomization, programs) stays out of scope.
 
@@ -167,6 +167,33 @@ removal.
 - `pip install -e .` does not pull pyverilog.
 
 **Rollback:** harder once we're here, but recoverable via revert. By design we don't move to Phase C until we've burned in Phase B for long enough that this is unlikely to be needed.
+
+**Phase C status (2026-05-19):**
+
+- Step 1 (drop the ``--frontend`` flag) done. ``cli.py``,
+  ``verify/harness.py``, ``frontend/flow.py``, and the equivalence
+  harness no longer expose or accept the flag.
+- Step 2 (delete ``frontend/pyverilog_parser.py``) done.
+- Step 3 (delete pyverilog-specific lowering) done. The old
+  ``vast.*`` / ``vparser`` lowering path, plus the const-fold helpers
+  (``_const_eval_expr``, ``_parameter_value_map``,
+  ``_parse_simple_constant``, ``codegen/expr._eval_text`` /
+  ``_width_from_pair``, ``codegen/systemc._convert_verilog_constants``)
+  that only existed to support that path are gone with it.
+- Step 4 (``lower_sv.py`` → ``lower.py``) done; ``frontend/lower.py``
+  is now the slang-only lowerer and ``frontend/module_index.py``
+  (pyverilog-only) was removed alongside the rename.
+- Step 5 (drop pyverilog from ``pyproject.toml``) done.
+- Step 6 (docs/CI cleanup) done. README installs pyslang;
+  ``.github/workflows/equivalence.yml`` runs a single (non-matrix)
+  pyslang job; this migration plan is the only remaining file in the
+  repo that mentions pyverilog, intentionally, as the migration record.
+
+Exit criteria status:
+
+- ✅ all tests green under the pyslang-only path
+- ✅ no ``pyverilog`` strings under ``src/``
+- ✅ ``pip install -e .`` no longer pulls pyverilog
 
 ## 5. After migration — SV feature rollout
 

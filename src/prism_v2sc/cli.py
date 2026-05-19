@@ -62,12 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit non-zero when error-level unsupported construct diagnostics are found.",
     )
     parser.add_argument(
-        "--frontend",
-        choices=("pyslang", "pyverilog"),
-        default="pyslang",
-        help="Verilog/SystemVerilog parser backend (default: pyslang).",
-    )
-    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -104,7 +98,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         compare_verilator=args.compare_verilator,
         out_dir=args.out,
         source_root=source_root,
-        frontend=args.frontend,
     )
     design = artifacts.design
     payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)

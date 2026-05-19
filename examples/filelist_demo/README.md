@@ -1,22 +1,17 @@
-# `filelist_demo` &mdash; multi-file build via a `.f` filelist
+# `filelist_demo` — multi-file build via a `.f` filelist
 
-A walk-through showing how prism_v2sc consumes a Verilog **filelist**
-(`.f`) instead of positional source arguments. The same `.f` carries the
-include-search path and the preprocessor define, so an `\`include` header
-and an `\`ifdef`-gated top body both resolve consistently across the
-converter and any downstream Verilog simulator.
+Walk-through showing how `prism_v2sc` consumes a Verilog **filelist** (`.f`) instead of positional source arguments. The same `.f` carries the include-search path and the preprocessor define, so a `` `include `` header and an `` `ifdef ``-gated top body resolve consistently across the converter and any downstream Verilog simulator.
 
-The design is intentionally small but covers everything you typically want
-out of a real `.f`:
+The design is small but covers everything you typically want out of a real `.f`:
 
-| filelist construct          | where it shows up                                          |
-| --------------------------- | ---------------------------------------------------------- |
-| `+incdir+<dir>`             | resolves `\`include "defs.vh"` from a sibling subdir       |
-| `-D <macro>`                | picks the `\`ifdef USE_REG` branch in `top_datapath.v`     |
-| multi-file source list      | three `.v` files spread across `primitives/` and `top/`    |
-| paths relative to the `.f`  | every entry is resolved against `rtl/`, not the `cwd`      |
-| nested directory layout     | the converter's output mirrors the RTL folder tree         |
-| comment lines (`#` or `//`) | the file is human-readable                                 |
+| filelist construct | where it shows up |
+| --- | --- |
+| `+incdir+<dir>` | resolves `` `include "defs.vh" `` from a sibling subdir |
+| `-D <macro>` | picks the `` `ifdef USE_REG `` branch in `top_datapath.v` |
+| multi-file source list | three `.v` files spread across `primitives/` and `top/` |
+| paths relative to the `.f` | every entry is resolved against `rtl/`, not `cwd` |
+| nested directory layout | the converter's output mirrors the RTL folder tree |
+| comment lines | `#` and `//` comments survive |
 
 ## Layout
 
@@ -24,28 +19,24 @@ out of a real `.f`:
 examples/filelist_demo/
 ├── rtl/
 │   ├── include/
-│   │   └── defs.vh          # `define WIDTH 8
+│   │   └── defs.vh             # `define WIDTH 8
 │   ├── primitives/
-│   │   ├── sub_mux.v        # vector-width 2:1 mux
-│   │   └── sub_register.v   # write-enable register, async reset
+│   │   ├── sub_mux.v           # vector-width 2:1 mux
+│   │   └── sub_register.v      # write-enable register, async reset
 │   ├── top/
-│   │   └── top_datapath.v   # mux feeding the register when USE_REG defined
-│   └── sources.f            # the filelist itself
+│   │   └── top_datapath.v      # mux → register, gated on USE_REG
+│   └── sources.f               # the filelist itself
 ├── expected/
-│   ├── ir.json              # Phase 1 JSON IR
+│   ├── ir.json                 # Phase 1 JSON IR (all three modules)
 │   ├── primitives/
-│   │   ├── sub_mux.hpp      # per-module SystemC header
-│   │   └── sub_register.hpp # per-module SystemC header
+│   │   ├── sub_mux.hpp
+│   │   └── sub_register.hpp
 │   └── top/
-│       └── top_datapath.hpp # top header (#include's children via "../primitives/...")
-└── README.md                # This file
+│       └── top_datapath.hpp    # #include's its children via "../primitives/..."
+└── README.md                   # This file
 ```
 
-Notice how `rtl/include/`, `rtl/primitives/`, `rtl/top/` are echoed under
-`expected/` as `expected/primitives/` and `expected/top/`. The
-`include/` directory has no `.hpp` because it only holds a Verilog header
-file (`defs.vh`) which gets preprocessed into the sources, not lowered to
-a SystemC module of its own.
+`rtl/include/`, `rtl/primitives/`, `rtl/top/` are echoed under `expected/` as `expected/primitives/` and `expected/top/`. The `include/` directory has no `.hpp` because it only holds a Verilog header that gets preprocessed into the sources, not lowered to a SystemC module of its own.
 
 ## The filelist
 
@@ -53,30 +44,23 @@ a SystemC module of its own.
 # Sources for the filelist_demo build.
 # Paths and include dirs are resolved relative to this file's directory.
 
-# Include search path: include/ subdir holds the macro header.
 +incdir+include
-
-# Preprocessor define: select the register-feeding-mux variant of the top.
 -D USE_REG
 
-# Sources organized by role; one module per file, deeper directory layout
-# than a flat dump so the converter's RTL-mirroring output is non-trivial.
 primitives/sub_mux.v
 primitives/sub_register.v
 top/top_datapath.v
 ```
 
-(Full source: [`rtl/sources.f`](rtl/sources.f).)
+Supported line forms (also documented in the top-level README):
 
-Supported line forms (also documented in the top README):
-
-- `path/to/file.v` &mdash; one source per line.
-- `-I <dir>`, `-I<dir>`, `+incdir+<dir>` &mdash; include search path.
-- `-D <macro>`, `-D<macro=value>`, `-D<macro>` &mdash; preprocessor defines.
-- `-f <other.f>` &mdash; nested filelist (cycle-detected).
+- `path/to/file.v` — one source per line.
+- `-I <dir>`, `-I<dir>`, `+incdir+<dir>` — include search path.
+- `-D <macro>`, `-D<macro=value>`, `-D<macro>` — preprocessor defines.
+- `-f <other.f>` — nested filelist (cycle-detected).
 - Blank lines and lines starting with `#` or `//` are ignored.
 
-## One-line reproduction
+## Reproducing the conversion
 
 From the repository root:
 
@@ -86,10 +70,11 @@ python -m prism_v2sc --top top_datapath \
                     --filelist examples/filelist_demo/rtl/sources.f
 ```
 
-On Windows / conda with the project source on `PYTHONPATH`:
+On Windows / conda:
 
 ```powershell
-PYTHONPATH=src D:/anaconda/envs/pytorch/python.exe -m prism_v2sc `
+$env:PYTHONPATH = 'src'
+D:/anaconda/envs/pytorch/python.exe -m prism_v2sc `
   --top top_datapath `
   --out examples/filelist_demo/expected `
   --filelist examples/filelist_demo/rtl/sources.f
@@ -97,27 +82,19 @@ PYTHONPATH=src D:/anaconda/envs/pytorch/python.exe -m prism_v2sc `
 
 Files written under `expected/` (regenerated byte-identically each run):
 
-- `expected/ir.json` &mdash; Phase 1 JSON IR (all three modules merged).
-- `expected/sub_mux.hpp`, `expected/sub_register.hpp`, `expected/top_datapath.hpp`
-  &mdash; one SystemC header per module. `top_datapath.hpp` `#include`s the
-  two sub-modules; users only need to include `top_datapath.hpp` to pull in
-  the whole hierarchy.
+- `expected/ir.json` — Phase 1 JSON IR for all three modules.
+- `expected/primitives/sub_mux.hpp`, `expected/primitives/sub_register.hpp`, `expected/top/top_datapath.hpp` — one SystemC header per module. `top_datapath.hpp` `#include`s the two sub-modules via `"../primitives/..."`; users only need to include `top_datapath.hpp` to pull in the whole hierarchy.
 
-You can also combine `--filelist` with positional source arguments &mdash;
-prism-v2sc merges them and deduplicates the resulting set. Multiple
-`--filelist` flags are accepted and parsed in order.
+You can also combine `--filelist` with positional source arguments — prism-v2sc merges them and deduplicates the resulting set. Multiple `--filelist` flags are accepted and parsed in order.
 
-## Generated SystemC (highlights)
-
-Three per-module headers are emitted, one per Verilog module. The top
-header pulls in its children via relative `#include` paths:
+## Generated SystemC
 
 ```cpp
 SC_MODULE(sub_mux) {
   sc_in<bool> sel;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> a;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> b;
-  sc_out<sc_uint<(((8 - 1)) - (0) + 1)>> y;
+  sc_in<sc_uint<8>> a;
+  sc_in<sc_uint<8>> b;
+  sc_out<sc_uint<8>> y;
 
   void assign_0() {
     y.write((sel.read() ? b.read() : a.read()));
@@ -129,8 +106,8 @@ SC_MODULE(sub_register) {
   sc_in<bool> clk;
   sc_in<bool> rst_n;
   sc_in<bool> en;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> data_in;
-  sc_out<sc_uint<(((8 - 1)) - (0) + 1)>> data_out;
+  sc_in<sc_uint<8>> data_in;
+  sc_out<sc_uint<8>> data_out;
 
   void always_ff_0() {
     auto __next_data_out = data_out.read();
@@ -146,7 +123,7 @@ SC_MODULE(sub_register) {
 
 SC_MODULE(top_datapath) {
   // ...
-  sc_signal<sc_uint<(((8 - 1)) - (0) + 1)>> mux_out;
+  sc_signal<sc_uint<8>> mux_out;
   sub_mux       u_mux;
   sub_register  u_reg;
 
@@ -162,37 +139,17 @@ SC_MODULE(top_datapath) {
 
 Things to notice:
 
-- `\`include "defs.vh"` is resolved via `+incdir+include`, so `\`WIDTH`
-  shows up as `8` in the generated port widths even though the macro
-  header lives in a different subdirectory from the sources that use it.
-- The `\`ifdef USE_REG` branch was selected, so `top_datapath` instantiates
-  both `sub_mux` and `sub_register` and threads an internal `mux_out`
-  wire between them. Drop `-D USE_REG` from the `.f` and the generated
-  top would instead route the mux output straight to `y`.
-- Each Verilog module produces its own `.hpp` in a directory that mirrors
-  its source location: `rtl/primitives/sub_mux.v` → `expected/primitives/sub_mux.hpp`,
-  `rtl/top/top_datapath.v` → `expected/top/top_datapath.hpp`. The top
-  file's `#include "../primitives/sub_mux.hpp"` walks up one level and
-  back down, so the chain is correct regardless of the depth of nesting.
-- The bottom-up emit order is `primitives/sub_mux.hpp` →
-  `primitives/sub_register.hpp` → `top/top_datapath.hpp`, so every parent
-  file is written only after its children already exist on disk.
+- `` `include "defs.vh" `` is resolved via `+incdir+include`, so `` `WIDTH `` shows up as `8` in the generated port widths even though the macro header lives in a different subdirectory from the sources that use it. slang fully elaborates the macro and parameter expression during parsing, so the SystemC widths are concrete integers (`sc_uint<8>`).
+- The `` `ifdef USE_REG `` branch was selected, so `top_datapath` instantiates both `sub_mux` and `sub_register` and threads an internal `mux_out` wire between them. Drop `-D USE_REG` from the `.f` and the generated top would instead route the mux output straight to `y`.
+- Each Verilog module produces its own `.hpp` in a directory that mirrors its source location: `rtl/primitives/sub_mux.v` → `expected/primitives/sub_mux.hpp`, `rtl/top/top_datapath.v` → `expected/top/top_datapath.hpp`. The top file's `#include "../primitives/sub_mux.hpp"` walks up one level and back down, so the chain stays correct regardless of nesting depth.
+- The bottom-up emit order is `primitives/sub_mux.hpp` → `primitives/sub_register.hpp` → `top/top_datapath.hpp`, so every parent file is written only after its children already exist on disk.
 
-## Verifying functional equivalence
+## Functional equivalence
 
-The same multi-file design is registered as the `multi_file` fixture in
-`tests/equivalence/run_equivalence.py` (sourced from
-`tests/equivalence/fixtures/multi_file/` &mdash; effectively a mirror of
-the files here). On Linux with `iverilog` + `libsystemc-dev`, or simply by
-pushing &mdash; the `equivalence` GitHub Actions workflow runs it on
-every push:
+The same multi-file design is registered as the `multi_file` fixture in `tests/equivalence/run_equivalence.py` (sourced from `tests/equivalence/fixtures/multi_file/` — effectively a mirror of the files here). On Linux with `iverilog` + `libsystemc-dev`:
 
 ```bash
 python tests/equivalence/run_equivalence.py --fixtures multi_file
 ```
 
-The harness reuses `prism_v2sc.frontend.preprocess.collect_sources` to
-parse the filelist exactly once, then feeds the same `-I` / `-D` set to
-**both** the prism-v2sc CLI and `iverilog`, so the converter and the
-golden Verilog simulator see identical preprocessing. Stimulus is
-deterministic and the per-cycle output traces are diffed line-by-line.
+The harness reuses `prism_v2sc.frontend.preprocess.collect_sources` to parse the filelist exactly once, then feeds the same `-I` / `-D` set to **both** the prism-v2sc CLI and `iverilog`, so the converter and the golden Verilog simulator see identical preprocessing.

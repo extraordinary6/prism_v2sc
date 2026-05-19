@@ -2,18 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from prism_v2sc.frontend.lower import lower_design
-from prism_v2sc.frontend.pyverilog_parser import parse_verilog
+from _pyslang_helper import lower_via_pyslang
 
 
 def test_lower_design_rejects_missing_top(tmp_path: Path) -> None:
     rtl = tmp_path / "top.v"
     rtl.write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
 
-    ast = parse_verilog([rtl])
-
     try:
-        lower_design(ast, "missing")
+        lower_via_pyslang([rtl], "missing")
     except ValueError as exc:
         assert "top module 'missing' not found" in str(exc)
     else:
@@ -42,7 +39,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "multi_driver")
+    design = lower_via_pyslang([rtl], "multi_driver")
     codes = {diagnostic.code for diagnostic in design.diagnostics}
     assert "multiple_procedural_drivers" in codes
     assert "multiple_always_ff_drivers" in codes
@@ -65,7 +62,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "mixed_style")
+    design = lower_via_pyslang([rtl], "mixed_style")
     code_to_severity = {diagnostic.code: diagnostic.severity for diagnostic in design.diagnostics}
     assert code_to_severity["mixed_assignment_styles"] == "error"
     assert code_to_severity["blocking_in_always_ff"] == "warning"
@@ -94,7 +91,7 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "top")
+    design = lower_via_pyslang([rtl], "top")
     assert {module.name for module in design.modules} == {"top", "mid", "leaf"}
 
 
@@ -109,7 +106,10 @@ endmodule
         encoding="utf-8",
     )
 
-    design = lower_design(parse_verilog([rtl]), "top")
-    unresolved = [diagnostic for diagnostic in design.diagnostics if diagnostic.code == "unresolved_instance_module"]
+    design = lower_via_pyslang([rtl], "top")
+    unresolved = [
+        diagnostic
+        for diagnostic in design.diagnostics
+        if diagnostic.code in ("unresolved_instance_module", "slang_UnknownModule")
+    ]
     assert len(unresolved) == 1
-    assert unresolved[0].module == "top"

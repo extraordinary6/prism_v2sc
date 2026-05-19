@@ -14,8 +14,8 @@ SC_MODULE(sub_register) {
   sc_in<bool> clk;
   sc_in<bool> rst_n;
   sc_in<bool> en;
-  sc_in<sc_uint<(((8 - 1)) - (0) + 1)>> data_in;
-  sc_out<sc_uint<(((8 - 1)) - (0) + 1)>> data_out;
+  sc_in<sc_uint<8>> data_in;
+  sc_out<sc_uint<8>> data_out;
 
   void always_ff_0() {
     auto __next_data_out = data_out.read();

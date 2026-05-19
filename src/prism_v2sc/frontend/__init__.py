@@ -1,2 +1,2 @@
-"""Frontend parsing and module indexing components."""
+"""Frontend parsing and lowering components."""
 
