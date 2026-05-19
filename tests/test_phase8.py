@@ -255,3 +255,44 @@ endmodule
 
     assert "(__sel & 0x8) == 0x8" in header
     assert "switch (op.read())" not in header
+
+
+def test_unpacked_array_emits_per_cell_sc_signal(tmp_path: Path) -> None:
+    """Regression: ``reg [W-1:0] mem [0:D-1]`` used to silently degrade —
+    the unpacked dimension was dropped and the packed dimension fell
+    back to ``bool``, so ``mem`` ended up as a single ``sc_signal<bool>``
+    and every read/write produced garbage. The codegen now lowers
+    unpacked arrays to per-cell sc_signal arrays and routes
+    ``mem[idx]`` to ``mem[idx].read()`` / ``mem[idx].write(...)``."""
+    rtl = tmp_path / "mem_demo.v"
+    rtl.write_text(
+        """
+module mem_demo(
+  input  wire        clk,
+  input  wire        we,
+  input  wire [3:0]  addr,
+  input  wire [7:0]  din,
+  output reg  [7:0]  dout
+);
+  reg [7:0] mem [0:15];
+  always @(posedge clk) begin
+    if (we) mem[addr] <= din;
+    dout <= mem[addr];
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "mem_demo")
+    header = generate_systemc_header(design)
+
+    # Array declared per-cell, not as a single signal.
+    assert "sc_signal<sc_uint<8>> mem[16];" in header
+    # Old buggy form must not appear.
+    assert "sc_signal<bool> mem;" not in header
+    # Per-cell read/write routes through .read() / .write().
+    assert "mem[addr.read()].write(din.read());" in header
+    assert "mem[addr.read()].read()" in header
+    # mem must not be in the __next_* staging set.
+    assert "auto __next_mem" not in header
+    assert "mem.write(__next_mem);" not in header

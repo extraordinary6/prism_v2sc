@@ -330,13 +330,37 @@ def _lower_net(net: Any) -> SignalIR:
 
 def _lower_variable(variable: Any) -> SignalIR:
     declared_reg = bool(getattr(variable.type, "isDeclaredReg", False))
-    kind = "reg" if declared_reg else _slang_type_kind(variable.type)
+    # Peel off any unpacked dimensions before classifying the cell type
+    # and computing the per-cell packed width.
+    cell_type, unpacked_dims = _peel_unpacked_dims(variable.type)
+    if not declared_reg:
+        declared_reg = bool(getattr(cell_type, "isDeclaredReg", False))
+    kind = "reg" if declared_reg else _slang_type_kind(cell_type)
     return SignalIR(
         name=variable.name,
         kind=kind,
-        width=_width_from_type(variable.type),
-        signed=bool(getattr(variable.type, "isSigned", False)),
+        width=_width_from_type(cell_type),
+        signed=bool(getattr(cell_type, "isSigned", False)),
+        unpacked_dims=unpacked_dims,
     )
+
+
+def _peel_unpacked_dims(slang_type: Any) -> tuple[Any, tuple[tuple[int, int], ...]]:
+    """Walk through ``FixedSizeUnpackedArrayType`` layers, returning the
+    inner cell type and a tuple of ``(msb, lsb)`` dimension bounds outermost
+    first. Non-array types fall through with an empty dim tuple.
+    """
+    dims: list[tuple[int, int]] = []
+    current = slang_type
+    while type(current).__name__ == "FixedSizeUnpackedArrayType":
+        slang_range = getattr(current, "range", None)
+        if slang_range is None:
+            break
+        msb = int(getattr(slang_range, "left", 0))
+        lsb = int(getattr(slang_range, "right", 0))
+        dims.append((msb, lsb))
+        current = current.elementType
+    return current, tuple(dims)
 
 
 def _lower_continuous_assign(assign: Any) -> ContinuousAssignIR:

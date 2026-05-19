@@ -256,6 +256,18 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=128,
     ),
+    Fixture(
+        name="regfile_mem",
+        sources=("regfile_mem.v",),
+        top="regfile_mem",
+        inputs=(Port("we", 1), Port("addr", 3), Port("din", 8)),
+        outputs=(Port("dout", 8),),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
 )
 
 

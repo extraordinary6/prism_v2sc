@@ -40,8 +40,8 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 68 unit/integration tests under `tests/` (`python -m pytest -q`).
-- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **18 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
+- 69 unit/integration tests under `tests/` (`python -m pytest -q`).
+- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **19 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
 ## Phases Completed
@@ -75,9 +75,8 @@ have already landed are struck through here for history.
 3. ~~**`$signed` / `$unsigned` casts.**~~ Done: codegen emits real
    `sc_int<W>` / `sc_uint<W>` casts so arithmetic shifts behave
    correctly. Trace fixture `signed_shift_cast` pins behavior.
-4. **Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`). The remaining
-   silent-risk candidate from D. Trace-equivalence will give a binary
-   answer; expect to need real codegen work.
+4. ~~**Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`).~~ Done:
+   per-cell `sc_signal` array codegen, verified by `regfile_mem`.
 5. **Procedural `for` loops** inside `always` blocks (bit-reverse,
    parity, parametric reduce). Lowering is mechanical; mainly needs
    loop unrolling against constant bounds.

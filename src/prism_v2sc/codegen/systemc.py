@@ -214,6 +214,12 @@ def _aggregate_multi_writer_processes(
             _walk_process_assignments(statement, sink)
         per_process.append([(stmt, _classify_lvalue_slot(stmt.get("left_expr"))) for stmt in sink])
 
+    # Signals declared as unpacked arrays already render as per-cell
+    # ``mem[i].write(...)``, so the parent multi-writer aggregation logic
+    # below mustn't try to shadow-rewrite them — they're not vector
+    # bit/part selects.
+    array_signal_names = {signal.name for signal in module.signals if signal.unpacked_dims}
+
     # Group by parent identifier across processes.
     writers_per_parent: dict[str, dict[int, list[tuple[dict, tuple[str, int, int]]]]] = {}
     has_whole_write: set[str] = set()
@@ -237,6 +243,10 @@ def _aggregate_multi_writer_processes(
                     has_whole_write.add(str(target.get("name", "")))
                 continue
             parent, msb, lsb = slot
+            if parent in array_signal_names:
+                # Array cells already route through their own sc_signal
+                # per cell; no parent-level shadow rewrite needed.
+                continue
             writers_per_parent.setdefault(parent, {}).setdefault(process_idx, []).append(
                 (stmt, slot)
             )
@@ -517,7 +527,12 @@ def _emit_module(
         writer.line()
 
     for signal in module.signals:
-        writer.line(f"{_signal_type(signal)} {_sanitize_identifier(signal.name)};")
+        suffix = "".join(
+            f"[{max(msb, lsb) - min(msb, lsb) + 1}]" for msb, lsb in signal.unpacked_dims
+        )
+        writer.line(
+            f"{_signal_type(signal)} {_sanitize_identifier(signal.name)}{suffix};"
+        )
     if module.signals:
         writer.line()
 
@@ -1085,7 +1100,7 @@ def _emit_comb_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
             return lines
         return ["// Empty process."]
 
-    written_bases = _collect_written_base_names(process)
+    written_bases = _collect_written_base_names(process, ctx)
     if not written_bases:
         lines: list[str] = []
         for statement in process.structured_statements:
@@ -1109,7 +1124,7 @@ def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
     if not process.structured_statements:
         return ["// Empty process."]
 
-    written_bases = _collect_written_base_names(process)
+    written_bases = _collect_written_base_names(process, ctx)
     if not written_bases:
         lines: list[str] = []
         for statement in process.structured_statements:
@@ -1338,6 +1353,20 @@ def _emit_tree_assignment(
         rhs = _cpp_rvalue(str(statement.get("right", "")))
 
     if isinstance(left_expr, dict):
+        # Array-cell write (``mem[idx] <= val``): each cell is its own
+        # sc_signal, so emit ``mem[idx].write(val);`` directly. The
+        # surrounding process doesn't stage these — SystemC's delta-cycle
+        # semantics already give nonblocking behavior per cell.
+        if left_expr.get("kind") == "bitselect":
+            target = left_expr.get("target")
+            if (
+                isinstance(target, dict)
+                and target.get("kind") == "identifier"
+                and str(target.get("name", "")) in ctx.array_signal_names
+            ):
+                target_name = sanitize_identifier(str(target["name"]))
+                idx = render_rvalue(left_expr.get("index"), ctx)
+                return f"{target_name}[{idx}].write({rhs});"
         base = lvalue_base_name(left_expr)
         if base in staged_names:
             lhs = render_lvalue(left_expr, ctx, staged_names=staged_names)
@@ -1372,14 +1401,19 @@ def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> s
     return _emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)
 
 
-def _collect_written_base_names(process: ProcessIR) -> list[str]:
+def _collect_written_base_names(process: ProcessIR, ctx: ModuleContext | None = None) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for statement in process.structured_statements:
         for base in _walk_lvalue_bases(statement):
-            if base and base not in seen:
-                seen.add(base)
-                ordered.append(base)
+            if not base or base in seen:
+                continue
+            if ctx is not None and base in ctx.array_signal_names:
+                # Array-cell writes route through ``mem[i].write(...)``
+                # directly; no whole-array staging needed.
+                continue
+            seen.add(base)
+            ordered.append(base)
     return ordered
 
 

@@ -42,6 +42,12 @@ class SignalIR:
     kind: str
     width: WidthIR | None = None
     signed: bool = False
+    # Outermost unpacked dimensions of the signal, outermost first. Each
+    # entry is the (msb, lsb) of one Verilog unpacked range. For a plain
+    # vector (``reg [7:0] x``) this is empty. For ``reg [7:0] mem [0:15]``
+    # it is ``((0, 15),)``. Codegen treats signals with non-empty
+    # ``unpacked_dims`` as ``sc_signal<inner> name[D0][D1]...;`` arrays.
+    unpacked_dims: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)

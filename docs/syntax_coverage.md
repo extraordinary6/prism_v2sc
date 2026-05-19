@@ -9,12 +9,13 @@ The classification is by **evidence strength**, not by syntactic category — th
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Eighteen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Nineteen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
 | **Structure** | module def / inst, named + positional port binding, parameter override (slang elaborates), nested hierarchy, multi-file build with `+incdir+` / `-D` / nested `-f` filelists |
 | **Ports & signals** | `input` / `output`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]` |
+| **Memories** | unpacked arrays (`reg [W-1:0] mem [0:D-1]`) lowered to a per-cell `sc_signal<sc_uint<W>>` array; per-cell `.write()` / `.read()` gives Verilog nonblocking semantics via SystemC delta cycles |
 | **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
 | **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
 | **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `casez` / `casex` lowered to mask/match if-else chain, `default` |
@@ -67,7 +68,6 @@ These are the dangerous ones: most either silently miscompile or take the `unsup
 | --- | --- | --- |
 | Procedural `for` / `while` / `repeat` | bus encoders/decoders, parity trees, parametric reduce | `unsupported_<kind>` diagnostic |
 | `inout` ports | bidirectional bus interfaces | no specific handling; needs an audit |
-| Unpacked arrays (`reg [7:0] mem [0:255]`) | every RAM / ROM / FIFO | likely `unsupported_<kind>` from slang's symbol kind; needs verification |
 | `defparam` | legacy code | slang resolves it at elaboration; **no fixture pins behavior** |
 | `signed`-declared ports in the equivalence harness | true signed-port designs (not just `$signed` casts) | the `Port` dataclass in `run_equivalence.py` doesn't carry a `signed` flag yet, so trace fixtures can't drive `sc_int` ports |
 
@@ -102,8 +102,8 @@ The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR
 1. ~~**Surface the silent risks first** — `casex` / `casez`.~~ Done: now in A with the mask/match if-else chain codegen.
 2. ~~**Pin the keyword variants** — `always_comb` / `always_ff` / `always_latch`.~~ Done: trace fixtures land them in A.
 3. ~~**`$signed` / `$unsigned` casts** previously discarded the sign change.~~ Done: codegen now emits real `sc_int<W>` / `sc_uint<W>` casts, verified by `signed_shift_cast`.
-4. **Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`). The other remaining silent risk: slang surfaces these as `VariableSymbol` with multi-dim dims, the lowerer probably rejects them with `unsupported_<kind>`. Confirm with a fixture, then add IR + codegen support for fixed-size arrays.
-5. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical.
+4. ~~**Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`).~~ Done: per-cell `sc_signal` array codegen, verified by `regfile_mem`.
+5. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical — slang gives constant-bounds-resolved loops.
 6. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
 7. **Packed `struct`.** Builds on the typedef work.
 8. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.

@@ -76,6 +76,12 @@ class ModuleContext:
     parameter_values: dict[str, int]
     loop_vars: frozenset[str] = field(default_factory=frozenset)
     local_names: frozenset[str] = field(default_factory=frozenset)
+    # Signals declared with one or more unpacked dimensions (e.g. memories
+    # like ``reg [7:0] mem [0:15]``). Such signals are emitted as a C
+    # array of ``sc_signal`` cells, so ``sig[i]`` reads/writes route to
+    # ``sig[i].read()`` / ``sig[i].write(...)`` rather than the
+    # ``sig.read()[i]`` bit-select form.
+    array_signal_names: frozenset[str] = field(default_factory=frozenset)
 
     def with_loop_var(self, name: str) -> "ModuleContext":
         return ModuleContext(
@@ -85,6 +91,7 @@ class ModuleContext:
             parameter_values=self.parameter_values,
             loop_vars=frozenset(self.loop_vars | {name}),
             local_names=self.local_names,
+            array_signal_names=self.array_signal_names,
         )
 
     def with_locals(self, names: frozenset[str]) -> "ModuleContext":
@@ -102,6 +109,7 @@ class ModuleContext:
             parameter_values=self.parameter_values,
             loop_vars=self.loop_vars,
             local_names=frozenset(self.local_names | names),
+            array_signal_names=self.array_signal_names,
         )
 
 
@@ -121,15 +129,19 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
     for port in module.ports:
         signal_names.add(port.name)
         signal_widths[port.name] = _port_width(port, parameter_values)
+    array_signal_names: set[str] = set()
     for signal in module.signals:
         signal_names.add(signal.name)
         signal_widths[signal.name] = _signal_width(signal, parameter_values)
+        if getattr(signal, "unpacked_dims", ()):
+            array_signal_names.add(signal.name)
 
     return ModuleContext(
         signal_names=frozenset(signal_names),
         parameter_names=frozenset(parameter_names),
         signal_widths=signal_widths,
         parameter_values=parameter_values,
+        array_signal_names=frozenset(array_signal_names),
     )
 
 
@@ -166,6 +178,14 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
     if kind == "repeat":
         return _render_repeat(expr.get("count"), expr.get("value"), ctx)
     if kind == "bitselect":
+        target = expr.get("target")
+        if isinstance(target, dict) and target.get("kind") == "identifier":
+            target_name = str(target.get("name", ""))
+            if target_name in ctx.array_signal_names:
+                # Array cell read: ``mem[i].read()`` rather than the
+                # vector bit-select ``mem.read()[i]``.
+                index_str = render_rvalue(expr.get("index"), ctx)
+                return f"{sanitize_identifier(target_name)}[{index_str}].read()"
         target_str = _render_aggregate_rvalue(expr.get("target"), ctx)
         index_str = render_rvalue(expr.get("index"), ctx)
         return f"{target_str}[{index_str}]"

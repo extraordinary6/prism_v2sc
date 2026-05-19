@@ -35,6 +35,7 @@ The SystemC testbench `#include`s the **top module's** per-module hpp at its mir
 | `casez_priority` | combinational | priority encoder using `casez` wildcards (mask/match lowering) |
 | `casex_priority` | combinational | priority encoder using `casex` wildcards |
 | `signed_shift_cast` | combinational | `$signed(x) >>> n` — verifies arithmetic right shift via the `sc_int` cast |
+| `regfile_mem` | sequential | 8-entry register file backed by an unpacked array `reg [7:0] mem [0:7]`; verifies the per-cell `sc_signal` array lowering |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
 
