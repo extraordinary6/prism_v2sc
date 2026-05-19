@@ -105,3 +105,54 @@ endmodule
         assert f"__tmp[{idx}] = __bridge_g_{idx}_u_y.read();" in header
     # Genvar must not leak through to the generated C++.
     assert "[i]" not in header
+
+
+def test_bit_select_outputs_to_same_parent_share_one_writer(tmp_path: Path) -> None:
+    """Regression: when slang unrolls a generate-for, each iteration becomes a
+    regular instance and ``_direct_bit_bridges`` produces N output bridges all
+    targeting the same parent signal. Emitting one ``SC_METHOD`` per bridge
+    would mean N writers on a single ``sc_signal``, which SystemC aborts at
+    runtime with ``SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_``. All N bridges sharing
+    a parent must collapse to a single assembler process."""
+    rtl = tmp_path / "gen_assemble.v"
+    rtl.write_text(
+        """
+module subcell(input wire a, output wire y);
+  assign y = ~a;
+endmodule
+
+module gen_assemble (
+  input  wire [3:0] a,
+  output wire [3:0] y
+);
+  genvar i;
+  generate
+    for (i = 0; i < 4; i = i + 1) begin : g
+      subcell u(.a(a[i]), .y(y[i]));
+    end
+  endgenerate
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "gen_assemble")
+    header = generate_systemc_header(design)
+
+    # Exactly one assembler method drives `y`; the per-bridge methods that
+    # used to do read-modify-write on `y` must not exist.
+    assert header.count("__bridge_assemble_y") >= 2  # method body + SC_METHOD line
+    assert "y.write(__tmp);" in header
+    assert header.count("y.write(__tmp);") == 1, "y must have exactly one writer"
+    for idx in range(4):
+        assert f"__bridge_method_g_{idx}_u_y" not in header, (
+            f"per-bridge output method __bridge_method_g_{idx}_u_y must not exist; "
+            "would cause SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_ at runtime"
+        )
+        # All bit assignments still land in the one assembler.
+        assert f"__tmp[{idx}] = __bridge_g_{idx}_u_y.read();" in header
+    # Sensitivity is the union of every contributing bridge.
+    assert (
+        "sensitive << __bridge_g_0_u_y << __bridge_g_1_u_y "
+        "<< __bridge_g_2_u_y << __bridge_g_3_u_y;" in header
+    )
