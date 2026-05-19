@@ -156,3 +156,46 @@ endmodule
         "sensitive << __bridge_g_0_u_y << __bridge_g_1_u_y "
         "<< __bridge_g_2_u_y << __bridge_g_3_u_y;" in header
     )
+
+
+def test_procedural_bit_writes_to_same_parent_share_one_writer(tmp_path: Path) -> None:
+    """Regression: when two procedural blocks each write a different bit of
+    the same parent signal, the previous codegen produced two SC_METHODs
+    that both ended with ``parent.write(__next_parent)`` — SystemC aborts
+    at runtime with ``SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_``. The codegen
+    aggregation pass must redirect each per-process write to a private
+    ``__shadow_<parent>_<idx>`` signal and emit a single ``__assemble_<parent>``
+    method as the only writer to ``parent``. Test pins the shape of the
+    rewrite for an always_ff parent; trace-level correctness is verified
+    by the ``slice_writers`` equivalence fixture."""
+    rtl = tmp_path / "slices.v"
+    rtl.write_text(
+        """
+module slices(input wire clk, input wire rst_n, input wire a, input wire b, output reg [1:0] q);
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q[0] <= 1'b0;
+    else        q[0] <= a;
+  end
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q[1] <= 1'b0;
+    else        q[1] <= b;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "slices")
+    header = generate_systemc_header(design)
+
+    # Shadow signals declared and each per-process method writes its own.
+    assert "sc_signal<bool> __shadow_q_0;" in header
+    assert "sc_signal<bool> __shadow_q_1;" in header
+    # Exactly one writer to q (the assembler).
+    assert header.count("q.write(__tmp);") == 1
+    # Per-process methods write the shadow, not q.
+    assert "__shadow_q_0.write(__next___shadow_q_0);" in header
+    assert "__shadow_q_1.write(__next___shadow_q_1);" in header
+    # No process writes ``q`` directly anymore.
+    assert "q.write(__next_q);" not in header
+    # Assembler sensitivity unions both shadows.
+    assert "sensitive << __shadow_q_0 << __shadow_q_1;" in header

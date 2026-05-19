@@ -89,6 +89,27 @@ class DirectOutputAssembler:
     bridges: tuple[DirectBitBridge, ...]
 
 
+@dataclass(frozen=True)
+class ProcessSliceAssembler:
+    """One method per parent signal whose bits are written by multiple
+    procedural processes. Same single-writer problem as
+    ``DirectOutputAssembler``: if N procedural blocks each do
+    ``parent.read(); __next_parent[i] = expr; parent.write(__next_parent);``
+    the resulting SystemC aborts at runtime with
+    ``SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_``.
+
+    The transformation pass redirects each per-process bit/part write to a
+    dedicated ``__shadow_<parent>_<slot>`` signal. This assembler is the
+    single writer to ``parent`` and reads all the shadows back.
+    """
+
+    parent_name: str
+    method_name: str
+    # Each slot: (shadow_signal_name, msb_index, lsb_index).
+    # msb == lsb for a 1-bit shadow.
+    slots: tuple[tuple[str, int, int], ...]
+
+
 def _direct_output_assemblers(
     direct_bit_bridges: list[DirectBitBridge],
 ) -> list[DirectOutputAssembler]:
@@ -109,6 +130,188 @@ def _direct_output_assemblers(
         )
         for parent in order
     ]
+
+
+def _classify_lvalue_slot(lvalue: object) -> tuple[str, int, int] | None:
+    """Return ``(parent_name, msb, lsb)`` for a constant-indexed bit/part
+    select lvalue. ``msb == lsb`` for a single bit. Returns ``None`` for
+    whole-signal writes, dynamic indices, or non-identifier targets.
+    """
+    if not isinstance(lvalue, dict):
+        return None
+    kind = lvalue.get("kind")
+    if kind == "bitselect":
+        target = lvalue.get("target")
+        if not isinstance(target, dict) or target.get("kind") != "identifier":
+            return None
+        idx = lvalue.get("index")
+        if not isinstance(idx, dict) or idx.get("kind") != "intconst":
+            return None
+        value = idx.get("value")
+        if not isinstance(value, int):
+            return None
+        return (str(target.get("name", "")), value, value)
+    if kind == "partselect":
+        target = lvalue.get("target")
+        if not isinstance(target, dict) or target.get("kind") != "identifier":
+            return None
+        msb_node = lvalue.get("msb")
+        lsb_node = lvalue.get("lsb")
+        if not isinstance(msb_node, dict) or msb_node.get("kind") != "intconst":
+            return None
+        if not isinstance(lsb_node, dict) or lsb_node.get("kind") != "intconst":
+            return None
+        msb = msb_node.get("value")
+        lsb = lsb_node.get("value")
+        if not isinstance(msb, int) or not isinstance(lsb, int):
+            return None
+        return (str(target.get("name", "")), msb, lsb)
+    return None
+
+
+def _walk_process_assignments(statement: object, sink: list) -> None:
+    """Yield every assignment dict reachable from ``statement``."""
+    if not isinstance(statement, dict):
+        return
+    kind = statement.get("type")
+    if kind in {"blocking_assign", "nonblocking_assign"}:
+        sink.append(statement)
+        return
+    if kind == "if":
+        for child in statement.get("true", ()) or ():
+            _walk_process_assignments(child, sink)
+        for child in statement.get("false", ()) or ():
+            _walk_process_assignments(child, sink)
+        return
+    if kind == "case":
+        for item in statement.get("items", ()) or ():
+            for child in (item.get("statements", ()) if isinstance(item, dict) else ()) or ():
+                _walk_process_assignments(child, sink)
+
+
+def _aggregate_multi_writer_processes(
+    module: ModuleIR,
+) -> tuple[ModuleIR, list[ProcessSliceAssembler]]:
+    """Rewrite per-process bit/part writes so that each parent signal driven
+    by multiple procedural processes has exactly one writer process.
+
+    Without this pass, two ``always`` blocks each doing
+    ``parent[i] <= expr`` codegen to two SC_METHODs that both do
+    ``parent.write(__next_parent)`` — SystemC aborts at runtime with
+    ``SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_``. The transformation redirects
+    each per-process write to a private ``__shadow_<parent>_<slot>`` signal
+    and emits one assembler that gathers all shadows into the parent.
+    Aggregation only fires when every contributing write is a
+    constant-indexed bit or part select; whole-signal writes or
+    dynamic-index writes leave the original IR untouched (and remain a
+    pre-existing real conflict for driver analysis to surface).
+    """
+    # Gather every assignment dict per process, classified by its lvalue.
+    per_process: list[list[tuple[dict, tuple[str, int, int] | None]]] = []
+    for process in module.processes:
+        sink: list = []
+        for statement in process.structured_statements:
+            _walk_process_assignments(statement, sink)
+        per_process.append([(stmt, _classify_lvalue_slot(stmt.get("left_expr"))) for stmt in sink])
+
+    # Group by parent identifier across processes.
+    writers_per_parent: dict[str, dict[int, list[tuple[dict, tuple[str, int, int]]]]] = {}
+    has_whole_write: set[str] = set()
+    for process_idx, assignments in enumerate(per_process):
+        for stmt, slot in assignments:
+            left_expr = stmt.get("left_expr")
+            if not isinstance(left_expr, dict):
+                continue
+            kind = left_expr.get("kind")
+            if kind == "identifier":
+                name = str(left_expr.get("name", ""))
+                if name:
+                    has_whole_write.add(name)
+                continue
+            if slot is None:
+                # bit/part-select but with a non-constant index — leave as is.
+                # The pre-existing driver-conflict analysis will surface any
+                # true conflict via its own diagnostic codes.
+                target = left_expr.get("target") if kind in {"bitselect", "partselect"} else None
+                if isinstance(target, dict) and target.get("kind") == "identifier":
+                    has_whole_write.add(str(target.get("name", "")))
+                continue
+            parent, msb, lsb = slot
+            writers_per_parent.setdefault(parent, {}).setdefault(process_idx, []).append(
+                (stmt, slot)
+            )
+
+    # Decide which parents qualify for aggregation: more than one writing
+    # process AND no writer does a whole-signal or dynamic write.
+    qualifying: dict[str, list[tuple[dict, tuple[str, int, int]]]] = {}
+    for parent, by_proc in writers_per_parent.items():
+        if len(by_proc) < 2:
+            continue
+        if parent in has_whole_write:
+            continue
+        flat: list[tuple[dict, tuple[str, int, int]]] = []
+        for sites in by_proc.values():
+            flat.extend(sites)
+        qualifying[parent] = flat
+
+    if not qualifying:
+        return module, []
+
+    # Apply the rewrite + collect shadow signals + assembler descriptors.
+    extra_signals: list[SignalIR] = []
+    extra_signal_names: set[str] = set()
+    assemblers: list[ProcessSliceAssembler] = []
+    for parent in sorted(qualifying):
+        slot_map: dict[tuple[int, int], str] = {}
+        sites = qualifying[parent]
+        for stmt, (_, msb, lsb) in sites:
+            if (msb, lsb) not in slot_map:
+                slot_id = f"{msb}" if msb == lsb else f"{msb}_{lsb}"
+                shadow_name = f"__shadow_{parent}_{slot_id}"
+                slot_map[(msb, lsb)] = shadow_name
+                if shadow_name not in extra_signal_names:
+                    extra_signal_names.add(shadow_name)
+                    slot_width = abs(msb - lsb) + 1
+                    width_ir: WidthIR | None
+                    if slot_width == 1:
+                        width_ir = None
+                    else:
+                        width_ir = WidthIR(msb=str(slot_width - 1), lsb="0")
+                    extra_signals.append(
+                        SignalIR(name=shadow_name, kind="reg", width=width_ir, signed=False)
+                    )
+            shadow_name = slot_map[(msb, lsb)]
+            # Mutate the lvalue dict in place: replace the bit/part select
+            # with a plain identifier pointing at the shadow signal.
+            left_expr = stmt["left_expr"]
+            left_expr.clear()
+            left_expr["kind"] = "identifier"
+            left_expr["name"] = shadow_name
+            stmt["left"] = shadow_name
+        assemblers.append(
+            ProcessSliceAssembler(
+                parent_name=parent,
+                method_name=f"__assemble_{parent}",
+                slots=tuple(
+                    (slot_map[(msb, lsb)], msb, lsb) for (msb, lsb) in sorted(slot_map)
+                ),
+            )
+        )
+
+    new_module = ModuleIR(
+        name=module.name,
+        ports=module.ports,
+        parameters=module.parameters,
+        signals=tuple(extra_signals) + module.signals,
+        continuous_assigns=module.continuous_assigns,
+        processes=module.processes,
+        instances=module.instances,
+        generate_fors=module.generate_fors,
+        subroutines=module.subroutines,
+        diagnostics=module.diagnostics,
+        source_path=module.source_path,
+    )
+    return new_module, assemblers
 
 
 def banner() -> str:
@@ -291,6 +494,11 @@ def _emit_module(
     include_children: bool,
 ) -> None:
     class_name = _sanitize_identifier(module.name)
+    # Rewrite per-process bit/part writes that share a parent signal so the
+    # generated SystemC has exactly one writer per signal. Must run before
+    # ``build_module_context`` so the new shadow signals end up in
+    # ``ctx.signal_widths``.
+    module, process_assemblers = _aggregate_multi_writer_processes(module)
     ctx = build_module_context(module)
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
@@ -350,8 +558,13 @@ def _emit_module(
     for assembler in _direct_output_assemblers(direct_bit_bridges):
         _emit_direct_output_assembler(writer, assembler)
         writer.line()
+    for assembler in process_assemblers:
+        _emit_process_slice_assembler(writer, assembler)
+        writer.line()
 
-    _emit_constructor(writer, module, ctx, methods, bit_bridges, direct_bit_bridges, signatures)
+    _emit_constructor(
+        writer, module, ctx, methods, bit_bridges, direct_bit_bridges, process_assemblers, signatures
+    )
     writer.dedent()
     writer.line("};")
 
@@ -363,6 +576,7 @@ def _emit_constructor(
     methods: list[tuple[str, list[str]]],
     bit_bridges: list[GenerateBitBridge],
     direct_bit_bridges: list[DirectBitBridge],
+    process_assemblers: list[ProcessSliceAssembler],
     signatures: dict[str, ModuleSignature],
 ) -> None:
     class_name = _sanitize_identifier(module.name)
@@ -455,6 +669,12 @@ def _emit_constructor(
     for assembler in _direct_output_assemblers(direct_bit_bridges):
         writer.line(f"SC_METHOD({assembler.method_name});")
         sensitivities = "".join(f" << {bridge.name}" for bridge in assembler.bridges)
+        writer.line(f"sensitive{sensitivities};")
+        writer.line()
+
+    for assembler in process_assemblers:
+        writer.line(f"SC_METHOD({assembler.method_name});")
+        sensitivities = "".join(f" << {shadow}" for shadow, _msb, _lsb in assembler.slots)
         writer.line(f"sensitive{sensitivities};")
         writer.line()
 
@@ -582,6 +802,20 @@ def _emit_direct_output_assembler(writer: CodeWriter, assembler: DirectOutputAss
     writer.line(f"auto __tmp = {assembler.parent_name}.read();")
     for bridge in assembler.bridges:
         writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
+    writer.line(f"{assembler.parent_name}.write(__tmp);")
+    writer.dedent()
+    writer.line("}")
+
+
+def _emit_process_slice_assembler(writer: CodeWriter, assembler: ProcessSliceAssembler) -> None:
+    writer.line(f"void {assembler.method_name}() {{")
+    writer.indent()
+    writer.line(f"auto __tmp = {assembler.parent_name}.read();")
+    for shadow, msb, lsb in assembler.slots:
+        if msb == lsb:
+            writer.line(f"__tmp[{msb}] = {shadow}.read();")
+        else:
+            writer.line(f"__tmp.range({msb}, {lsb}) = {shadow}.read();")
     writer.line(f"{assembler.parent_name}.write(__tmp);")
     writer.dedent()
     writer.line("}")

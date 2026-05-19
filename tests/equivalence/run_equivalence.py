@@ -186,6 +186,18 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=64,
     ),
+    Fixture(
+        name="slice_writers",
+        sources=("slice_writers.v",),
+        top="slice_writers",
+        inputs=(Port("a", 1), Port("b", 1)),
+        outputs=(Port("q", 2),),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=64,
+    ),
 )
 
 
