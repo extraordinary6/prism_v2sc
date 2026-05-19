@@ -9,7 +9,7 @@ The classification is by **evidence strength**, not by syntactic category — th
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Seventeen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Eighteen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
@@ -18,13 +18,14 @@ Seventeen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. An
 | **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
 | **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
 | **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `casez` / `casex` lowered to mask/match if-else chain, `default` |
-| **Operators** | full binary `+ - * / % == != < > <= >= && \|\| & \| ^ << >>`, ternary `?:`, unary `! ~ - +`, reduction `& \| ^ ~& ~\| ^~ ~^` |
+| **Operators** | full binary `+ - * / % == != < > <= >= && \|\| & \| ^ << >>`, ternary `?:`, unary `! ~ - +`, reduction `& \| ^ ~& ~\| ^~ ~^`; arithmetic `>>>` via `$signed` cast |
 | **Selects** | bit-select `sig[i]` (read + write), part-select `sig[msb:lsb]` (read + write); LHS uses staged `__next_*` |
 | **Aggregates** | `{a, b}` concat, `{N{x}}` replication |
 | **Literals** | sized (`8'hFF`, `3'b010`, `4'd5`), unsized decimal; integer `value` field reflects the actual bit pattern |
 | **Generate** | `generate for` (slang unrolls), `generate if` (slang folds), bit-select bindings on the unrolled instances aggregate into a single writer per parent signal |
 | **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)` |
 | **Multi-writer aggregation** | multiple procedural blocks writing different bit/part-select slices of the same parent signal land in one shadow-driven assembler — verified by the `slice_writers` fixture |
+| **System calls** | `$signed(x)` / `$unsigned(x)` emit real `sc_int<W>` / `sc_uint<W>` casts (was a no-op before — silently dropped sign information) |
 
 ## B. Diagnostic-CI-verified (rejection / approximation contract)
 
@@ -67,8 +68,8 @@ These are the dangerous ones: most either silently miscompile or take the `unsup
 | Procedural `for` / `while` / `repeat` | bus encoders/decoders, parity trees, parametric reduce | `unsupported_<kind>` diagnostic |
 | `inout` ports | bidirectional bus interfaces | no specific handling; needs an audit |
 | Unpacked arrays (`reg [7:0] mem [0:255]`) | every RAM / ROM / FIFO | likely `unsupported_<kind>` from slang's symbol kind; needs verification |
-| `signed` arithmetic | DSP paths, signed comparators, arithmetic shifts | `<<<` / `>>>` are mapped to **unsigned** shifts in `_CPP_BINARY_OP_MAP` and labeled "approximated" — silent miscompile on negative values |
 | `defparam` | legacy code | slang resolves it at elaboration; **no fixture pins behavior** |
+| `signed`-declared ports in the equivalence harness | true signed-port designs (not just `$signed` casts) | the `Port` dataclass in `run_equivalence.py` doesn't carry a `signed` flag yet, so trace fixtures can't drive `sc_int` ports |
 
 ## E. Priority 2 — SystemVerilog feature rollout
 
@@ -100,12 +101,13 @@ The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR
 
 1. ~~**Surface the silent risks first** — `casex` / `casez`.~~ Done: now in A with the mask/match if-else chain codegen.
 2. ~~**Pin the keyword variants** — `always_comb` / `always_ff` / `always_latch`.~~ Done: trace fixtures land them in A.
-3. **Surface the remaining silent risks** — `signed` shift (`<<<` / `>>>` map to unsigned in codegen) and unpacked-array memory (`reg [W-1:0] mem [0:D-1]`).
-4. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical.
-5. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
-6. **Packed `struct`.** Builds on the typedef work.
-7. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.
-8. **`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.
-9. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
+3. ~~**`$signed` / `$unsigned` casts** previously discarded the sign change.~~ Done: codegen now emits real `sc_int<W>` / `sc_uint<W>` casts, verified by `signed_shift_cast`.
+4. **Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`). The other remaining silent risk: slang surfaces these as `VariableSymbol` with multi-dim dims, the lowerer probably rejects them with `unsupported_<kind>`. Confirm with a fixture, then add IR + codegen support for fixed-size arrays.
+5. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical.
+6. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
+7. **Packed `struct`.** Builds on the typedef work.
+8. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.
+9. **`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.
+10. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
 
 Updated whenever a row in C / D / E moves into A or B.

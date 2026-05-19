@@ -545,9 +545,17 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
 
 def _render_syscall(expr: dict[str, Any], ctx: ModuleContext) -> str:
     name = str(expr.get("name", ""))
-    args = [render_rvalue(arg, ctx) for arg in expr.get("args", [])]
+    args_nodes = expr.get("args", []) or []
+    args = [render_rvalue(arg, ctx) for arg in args_nodes]
     if name in {"signed", "unsigned"} and args:
-        return args[0]
+        # ``$signed`` and ``$unsigned`` change the type of an expression for
+        # operations that care about sign — most importantly ``>>>``, which
+        # arithmetic-shifts iff its LHS is signed. Treating them as no-ops
+        # silently turns ``$signed(x) >>> n`` into a logical shift on the
+        # underlying unsigned representation.
+        width = infer_width(args_nodes[0], ctx) if args_nodes else 1
+        target_type = "sc_int" if name == "signed" else "sc_uint"
+        return f"{target_type}<{width}>({args[0]})"
     return f"/* $${name}() unsupported */ 0"
 
 

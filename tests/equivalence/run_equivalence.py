@@ -247,6 +247,15 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=64,
     ),
+    Fixture(
+        name="signed_shift_cast",
+        sources=("signed_shift_cast.v",),
+        top="signed_shift_cast",
+        inputs=(Port("x", 8), Port("n", 3)),
+        outputs=(Port("y", 8),),
+        sequential=False,
+        cycles=128,
+    ),
 )
 
 

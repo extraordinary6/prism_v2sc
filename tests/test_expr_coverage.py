@@ -347,3 +347,41 @@ endmodule
     # to ``ctx.signal_widths``. We must NOT rewrite to ``!`` here.
     assert "inv8 = (~x);" in header
     assert "inv8 = (!x);" not in header
+
+
+def test_dollar_signed_emits_sc_int_cast(tmp_path: Path) -> None:
+    """``$signed(x)`` was previously a no-op in codegen, which silently
+    turned ``$signed(x) >>> n`` into a logical right shift on the
+    underlying ``sc_uint`` operand. The fix emits a real ``sc_int<W>``
+    cast so the ``>>`` lands on a signed type and arithmetic-shifts."""
+    design = _design(
+        tmp_path,
+        """
+module sshift(input wire [7:0] x, input wire [2:0] n, output wire [7:0] y);
+  assign y = $signed(x) >>> n;
+endmodule
+""",
+        "sshift",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_int<8>(x.read())" in header
+    # Plain ``x.read() >> n.read()`` (the old buggy form) must not appear.
+    assert "y.write((x.read() >> n.read())" not in header
+
+
+def test_dollar_unsigned_emits_sc_uint_cast(tmp_path: Path) -> None:
+    """``$unsigned(x)`` becomes a real ``sc_uint<W>`` cast (counterpart to
+    the ``$signed`` fix). On already-unsigned operands the cast is
+    redundant but harmless; on signed operands it suppresses the
+    arithmetic-shift behavior, matching Verilog semantics."""
+    design = _design(
+        tmp_path,
+        """
+module ushift(input wire signed [7:0] x, input wire [2:0] n, output wire [7:0] y);
+  assign y = $unsigned(x) >>> n;
+endmodule
+""",
+        "ushift",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_uint<8>(x.read())" in header
