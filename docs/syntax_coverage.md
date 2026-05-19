@@ -2,11 +2,14 @@
 
 What `prism_v2sc` actually supports today, what it explicitly rejects, and where the silent risks are. Sourced from `frontend/lower.py` kind dispatch, `codegen/expr.py` operator map, the diagnostic table, and the `tests/equivalence/fixtures/` set. Update this doc whenever the lowerer's behavior changes.
 
-The classification is by **evidence strength**, not by syntactic category — because the question "is this safe to feed in?" is really "do we have a trace-level proof?"
+The classification is by **evidence strength**, not by syntactic category — the question "is this safe to feed in?" is really "do we have a CI-level proof?" CI gives that proof in two flavors:
 
-## A. Equivalence-CI-verified (cycle-accurate trace match)
+- **Trace-equivalence fixtures** (section A): co-simulate the RTL with `iverilog` and the generated SystemC with `libsystemc-dev`, diff per-cycle outputs.
+- **Diagnostic fixtures** (section B): run `prism-v2sc` on RTL that's *supposed* to be rejected or flagged, assert the expected diagnostic codes land in `ir.json`. Lets us pin the contract for rejection/approximation paths that trace equivalence can't reach.
 
-Eleven fixtures under `tests/equivalence/fixtures/` co-simulate the RTL with `iverilog` and the generated SystemC with `libsystemc-dev`. Anything in this table is verified at trace-diff granularity.
+## A. Trace-equivalence-verified (cycle-accurate trace match)
+
+Twelve fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
@@ -21,19 +24,29 @@ Eleven fixtures under `tests/equivalence/fixtures/` co-simulate the RTL with `iv
 | **Literals** | sized (`8'hFF`, `3'b010`, `4'd5`), unsized decimal; integer `value` field reflects the actual bit pattern |
 | **Generate** | `generate for` (slang unrolls), `generate if` (slang folds), bit-select bindings on the unrolled instances aggregate into a single writer per parent signal |
 | **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)` |
+| **Multi-writer aggregation** | multiple procedural blocks writing different bit/part-select slices of the same parent signal land in one shadow-driven assembler — verified by the `slice_writers` fixture |
 
-## B. Unit-test-only (no equivalence fixture yet)
+## B. Diagnostic-CI-verified (rejection / approximation contract)
 
-Behavior is pinned by unit tests but never compiled and trace-diffed:
+Six fixtures under `tests/equivalence/fixtures/diagnostics/`. Each runs `prism-v2sc` on RTL designed to trigger specific diagnostic codes and asserts those codes appear in the resulting `ir.json`. These cover behavior trace equivalence can't reach: rejection cases, configurations the converter intentionally approximates, and slang's own elaboration diagnostics.
 
-- multiple procedural blocks in one module — `event_scheduler_approximated` warning behaves correctly
-- driver-conflict diagnostics: `multiple_procedural_drivers`, `multiple_always_ff_drivers`, `mixed_assignment_styles`, `blocking_in_always_ff`, bit-select slice-aware variant
-- X/Z literals collapse to 0 with `x_z_literal_approximated` diagnostic
-- slang elaboration diagnostics (`slang_UnknownModule`, `slang_DuplicateDefinition`, …) reach `DesignIR.diagnostics`
+| Fixture | Asserts diagnostic code(s) | Why it's not a trace fixture |
+| --- | --- | --- |
+| `driver_conflict_procedural` | `multiple_procedural_drivers`, `multiple_always_ff_drivers` | two `always_ff` blocks writing the same whole signal — a real conflict that must be reported, not lowered |
+| `mixed_assignment_styles` | `mixed_assignment_styles` | same signal driven with both `=` and `<=` — a style conflict |
+| `blocking_in_always_ff` | `blocking_in_always_ff` | blocking `=` inside `always_ff` — fires as a warning |
+| `xz_literal_approximated` | `x_z_literal_approximated` | X/Z literals are collapsed to 0; iverilog propagates X, so traces would necessarily diverge |
+| `slang_unknown_module` | `slang_UnknownModule` | unknown instance target — iverilog also fails to elaborate, no trace to compare |
+| `slang_duplicate_definition` | `slang_DuplicateDefinition` | duplicate module definition — same reason |
 
-Moving these into the equivalence fixture set is cheap and removes a class of "looked fine in unit tests, blew up in real RTL" surprises.
+The driver-conflict-slice-aware variant moved out of this section into A: the
+underlying multi-writer aggregation (`slice_writers` fixture) now verifies
+trace-level correctness too.
 
 ## C. Explicitly rejected (loud diagnostic, no silent miscompile)
+
+These all surface through diagnostic fixtures or unit tests already. Listed
+here for documentation of the rejection contract.
 
 | Diagnostic | What it rejects |
 | --- | --- |
@@ -47,7 +60,7 @@ Use `--fail-on-diagnostics` in CI when error-level diagnostics must hard-fail th
 
 ## D. Priority 1 — common RTL that we *don't* fully support yet
 
-These are the dangerous ones: most either silently miscompile or take the `unsupported_<kind>` exit path even though the construct is common in real designs. Each item needs an equivalence fixture before we can claim either way.
+These are the dangerous ones: most either silently miscompile or take the `unsupported_<kind>` exit path even though the construct is common in real designs. Each item needs a fixture (trace or diagnostic) before we can claim either way.
 
 | Gap | Why it matters | Current behavior |
 | --- | --- | --- |
@@ -85,9 +98,9 @@ Stays rejected. These are either non-synthesizable or require runtime infrastruc
 
 ## Ordering for the next phase
 
-The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR with a corresponding equivalence fixture.
+The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR with its corresponding fixture (trace or diagnostic, whichever fits).
 
-1. **Surface the silent risks first.** Add fixtures for `casex` / `casez`, `signed` shift, unpacked-array memory. Let the equivalence harness give a binary answer on the current state before we change any code.
+1. **Surface the silent risks first.** Add fixtures for `casex` / `casez`, `signed` shift, unpacked-array memory. Let the harness give a binary answer on the current state before we change any code.
 2. **Pin the keyword variants.** Add `always_comb` / `always_ff` / `always_latch` fixtures. Likely zero code changes; pure coverage win.
 3. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
 4. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical.

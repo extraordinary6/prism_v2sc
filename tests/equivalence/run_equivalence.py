@@ -19,6 +19,7 @@ an optional uniform shift tolerance for "near cycle accurate" alignment.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import re
@@ -201,6 +202,66 @@ FIXTURES: tuple[Fixture, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class DiagnosticFixture:
+    """A fixture asserting that ``prism-v2sc`` emits specific diagnostic codes.
+
+    Used for rejection-class behavior that can't be trace-equivalence tested
+    (driver conflicts, unknown modules, duplicate definitions, X/Z literal
+    approximation, etc.). Each entry runs prism-v2sc on the given RTL,
+    reads the resulting ``ir.json``, and asserts every code in
+    ``expected_codes`` appears in either the design-level or any module-level
+    ``diagnostics`` list.
+    """
+
+    name: str
+    sources: tuple[str, ...]
+    top: str
+    expected_codes: tuple[str, ...]
+
+
+DIAGNOSTIC_FIXTURES: tuple[DiagnosticFixture, ...] = (
+    DiagnosticFixture(
+        name="driver_conflict_procedural",
+        sources=("diagnostics/driver_conflict_procedural.v",),
+        top="dc_proc",
+        # Two always_ff blocks writing the same whole signal trigger both
+        # the generic procedural-driver check and the always_ff-specific one.
+        expected_codes=("multiple_procedural_drivers", "multiple_always_ff_drivers"),
+    ),
+    DiagnosticFixture(
+        name="mixed_assignment_styles",
+        sources=("diagnostics/mixed_assignment_styles.v",),
+        top="mixed_assign",
+        expected_codes=("mixed_assignment_styles",),
+    ),
+    DiagnosticFixture(
+        name="blocking_in_always_ff",
+        sources=("diagnostics/blocking_in_always_ff.v",),
+        top="blk_in_ff",
+        expected_codes=("blocking_in_always_ff",),
+    ),
+    DiagnosticFixture(
+        name="xz_literal_approximated",
+        sources=("diagnostics/xz_literal.v",),
+        top="xz_lit",
+        expected_codes=("x_z_literal_approximated",),
+    ),
+    DiagnosticFixture(
+        name="slang_unknown_module",
+        sources=("diagnostics/slang_unknown_module.v",),
+        top="su_top",
+        expected_codes=("slang_UnknownModule",),
+    ),
+    DiagnosticFixture(
+        name="slang_duplicate_definition",
+        sources=("diagnostics/slang_duplicate_definition.v",),
+        top="dup",
+        expected_codes=("slang_DuplicateDefinition",),
+    ),
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -237,11 +298,16 @@ def main(argv: list[str] | None = None) -> int:
     selected: list[Fixture] = [
         fixture for fixture in FIXTURES if args.fixtures is None or fixture.name in args.fixtures
     ]
-    if not selected:
+    selected_diag: list[DiagnosticFixture] = [
+        fixture
+        for fixture in DIAGNOSTIC_FIXTURES
+        if args.fixtures is None or fixture.name in args.fixtures
+    ]
+    if not selected and not selected_diag:
         print("error: no fixtures match the selection", file=sys.stderr)
         return 2
 
-    if not args.dry_run:
+    if selected and not args.dry_run:
         require_tool("iverilog")
         require_tool("vvp")
         require_tool(os.environ.get("CXX", "g++"))
@@ -262,6 +328,16 @@ def main(argv: list[str] | None = None) -> int:
             if not args.keep_going:
                 break
 
+    if overall == 0 or args.keep_going:
+        for fixture in selected_diag:
+            print(f"\n=== diagnostic fixture: {fixture.name} ===")
+            rc = run_diagnostic_fixture(fixture, args.work / fixture.name)
+            summary.append((fixture.name, "PASS" if rc == 0 else "FAIL"))
+            if rc != 0:
+                overall = rc
+                if not args.keep_going:
+                    break
+
     print("\n=== summary ===")
     for name, status in summary:
         print(f"  {name}: {status}")
@@ -272,6 +348,72 @@ def require_tool(name: str) -> None:
     if shutil.which(name) is None:
         print(f"error: required tool '{name}' not found on PATH", file=sys.stderr)
         sys.exit(2)
+
+
+def run_diagnostic_fixture(fixture: DiagnosticFixture, work: Path) -> int:
+    """Run ``prism-v2sc`` on a fixture and assert every expected diagnostic
+    code appears in the resulting ``ir.json``. Returns 0 on PASS, 1 on FAIL.
+    """
+    work.mkdir(parents=True, exist_ok=True)
+    sources = [FIXTURE_DIR / source for source in fixture.sources]
+    for source in sources:
+        if not source.is_file():
+            print(f"  ERROR: missing fixture source {source}")
+            return 2
+
+    out_dir = work / "systemc"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = work / "prism.log"
+    cmd = [
+        sys.executable,
+        "-m",
+        "prism_v2sc",
+        "--top",
+        fixture.top,
+        "--out",
+        str(out_dir),
+        *(str(source) for source in sources),
+    ]
+    env = os.environ.copy()
+    new_path = str(PROJECT_ROOT / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = new_path + (os.pathsep + existing if existing else "")
+    print(f"  $ {' '.join(cmd)}")
+    with log_path.open("w", encoding="utf-8") as log:
+        # prism-v2sc may exit non-zero for some diagnostic cases (e.g. when
+        # slang refuses to elaborate); we still want to inspect ir.json if
+        # it was produced. So we don't fail on a non-zero return code here.
+        subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+
+    ir_path = out_dir / "ir.json"
+    if not ir_path.is_file():
+        print(f"  ERROR: ir.json was not produced (see {log_path})")
+        return 1
+    try:
+        payload = json.loads(ir_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"  ERROR: ir.json is malformed: {exc} (see {log_path})")
+        return 1
+
+    seen_codes: set[str] = set()
+    for diagnostic in payload.get("diagnostics", ()):
+        if isinstance(diagnostic, dict):
+            seen_codes.add(str(diagnostic.get("code", "")))
+    for module in payload.get("modules", ()):
+        if not isinstance(module, dict):
+            continue
+        for diagnostic in module.get("diagnostics", ()):
+            if isinstance(diagnostic, dict):
+                seen_codes.add(str(diagnostic.get("code", "")))
+
+    missing = [code for code in fixture.expected_codes if code not in seen_codes]
+    if missing:
+        print(f"  MISSING: expected diagnostic codes not found: {', '.join(missing)}")
+        print(f"    seen codes: {sorted(seen_codes) or '<none>'}")
+        print(f"    log: {log_path}")
+        return 1
+    print(f"  PASS: all {len(fixture.expected_codes)} expected diagnostic(s) present")
+    return 0
 
 
 def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: bool = False) -> int:

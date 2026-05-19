@@ -28,8 +28,26 @@ The SystemC testbench `#include`s the **top module's** per-module hpp at its mir
 | `pipeline8` | sequential | two-stage 8-bit valid/data pipeline (replicate constructions) |
 | `multi_file` | sequential | filelist-driven build with `+incdir+`, `-D`, three sources |
 | `gen_demo` | combinational | `generate` constructs that slang unrolls during elaboration |
+| `slice_writers` | sequential | two `always_ff` blocks each writing one bit of the same 2-bit register; verifies the multi-writer aggregation pass produces a single-writer SystemC build |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
+
+## Diagnostic Fixtures
+
+Trace equivalence can't reach rejection cases (driver conflicts, unknown modules, duplicate definitions) or intentional approximations (X/Z literals collapsed to 0). These get a second kind of fixture: `prism-v2sc` runs on the RTL and the harness asserts every expected diagnostic code appears in the resulting `ir.json`.
+
+Diagnostic fixtures live under `fixtures/diagnostics/` and are described by a `DiagnosticFixture` dataclass in `run_equivalence.py`. Current set:
+
+| Fixture | Asserts diagnostic code(s) |
+| --- | --- |
+| `driver_conflict_procedural` | `multiple_procedural_drivers`, `multiple_always_ff_drivers` |
+| `mixed_assignment_styles` | `mixed_assignment_styles` |
+| `blocking_in_always_ff` | `blocking_in_always_ff` |
+| `xz_literal_approximated` | `x_z_literal_approximated` |
+| `slang_unknown_module` | `slang_UnknownModule` |
+| `slang_duplicate_definition` | `slang_DuplicateDefinition` |
+
+Diagnostic fixtures don't need `iverilog` / SystemC — only `prism-v2sc`. They share the same `--fixtures` selection mechanism and `--keep-going` flag as the trace fixtures.
 
 ## Local Usage
 
