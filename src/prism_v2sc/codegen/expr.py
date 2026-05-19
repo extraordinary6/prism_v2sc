@@ -422,6 +422,53 @@ def _render_aggregate_rvalue(node: dict[str, Any] | None, ctx: ModuleContext) ->
     return render_rvalue(node, ctx)
 
 
+def _is_definitely_one_bit(expr: dict[str, Any] | None, ctx: ModuleContext) -> bool:
+    """True only when the operand is provably 1-bit.
+
+    Used to gate Verilog-``~`` → C++-``!`` rewriting. Unknown widths must
+    return False so we keep ``~`` (the only safe fallback for multi-bit
+    bitwise inversion). ``infer_width`` cannot answer this on its own
+    because it conflates "unknown identifier" with "width 1".
+    """
+    if not isinstance(expr, dict):
+        return False
+    kind = expr.get("kind")
+    if kind == "intconst":
+        width = expr.get("width")
+        return isinstance(width, int) and width == 1
+    if kind == "identifier":
+        name = str(expr.get("name", ""))
+        width = ctx.signal_widths.get(name)
+        return isinstance(width, int) and width == 1
+    if kind == "bitselect":
+        return True
+    if kind == "partselect":
+        msb = const_eval(expr.get("msb"), ctx)
+        lsb = const_eval(expr.get("lsb"), ctx)
+        return msb is not None and lsb is not None and msb == lsb
+    if kind == "unop":
+        op = str(expr.get("op", ""))
+        # ``!`` and reduction operators always yield 1 bit; ``~`` and ``-``
+        # preserve operand width.
+        if op in {"!", "&", "|", "^", "~&", "~|", "^~", "~^"}:
+            return True
+        if op in {"~", "-", "+"}:
+            return _is_definitely_one_bit(expr.get("operand"), ctx)
+        return False
+    if kind == "binop":
+        op = str(expr.get("op", ""))
+        if op in {"==", "!=", "===", "!==", "<", ">", "<=", ">=", "&&", "||"}:
+            return True
+        return _is_definitely_one_bit(expr.get("left"), ctx) and _is_definitely_one_bit(
+            expr.get("right"), ctx
+        )
+    if kind == "cond":
+        return _is_definitely_one_bit(expr.get("true"), ctx) and _is_definitely_one_bit(
+            expr.get("false"), ctx
+        )
+    return False
+
+
 def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContext) -> str:
     operand_text = render_rvalue(operand_node, ctx)
     if op == "!":
@@ -430,8 +477,11 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
         # On a bool/sc_uint<1> operand, C++'s ``~`` widens to int and inverts
         # all the int bits, so ``~true`` is -2 and ``~false`` is -1 — both
         # round-trip back to ``true``. Verilog ``~`` on a 1-bit signal is
-        # logical inversion, so emit ``!`` instead when the operand is 1-bit.
-        if infer_width(operand_node, ctx) == 1:
+        # logical inversion, so emit ``!`` instead, but only when we can
+        # *prove* the operand is 1-bit. ``infer_width`` falls back to 1 for
+        # unknown identifiers (e.g. function-local params), so a width==1
+        # answer there would be ambiguous and we must keep ``~``.
+        if _is_definitely_one_bit(operand_node, ctx):
             return f"(!{operand_text})"
         return f"(~{operand_text})"
     if op == "-":

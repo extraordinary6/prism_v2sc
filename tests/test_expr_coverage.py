@@ -316,3 +316,34 @@ endmodule
     )
     header = generate_systemc_header(design)
     assert "y.write((~a.read()));" in header
+
+
+def test_unary_bitwise_not_on_unknown_width_keeps_tilde(tmp_path: Path) -> None:
+    """Regression for over-correction: the previous fix gated ``~`` → ``!``
+    on ``infer_width == 1``, but ``infer_width`` falls back to 1 for unknown
+    identifiers (notably function-local params), which silently turned every
+    ``~x`` inside a synthesizable Verilog ``function`` into a logical ``!``.
+    Unknown widths must stay as ``~`` — only *provably* 1-bit operands get
+    rewritten."""
+    design = _design(
+        tmp_path,
+        """
+module fn_inv(input wire [7:0] a, output reg [7:0] y);
+  function [7:0] inv8;
+    input [7:0] x;
+    begin
+      inv8 = ~x;
+    end
+  endfunction
+  always @(*) begin
+    y = inv8(a);
+  end
+endmodule
+""",
+        "fn_inv",
+    )
+    header = generate_systemc_header(design)
+    # Inside the function, ``x`` is a parameter — its width is not visible
+    # to ``ctx.signal_widths``. We must NOT rewrite to ``!`` here.
+    assert "inv8 = (~x);" in header
+    assert "inv8 = (!x);" not in header
