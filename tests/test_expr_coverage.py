@@ -278,3 +278,41 @@ endmodule
     assert rhs_values["8'h11"] == 0x11
     assert rhs_values["8'h22"] == 0x22
     assert rhs_values["8'hFF"] == 0xFF
+
+
+def test_unary_bitwise_not_on_one_bit_signal_uses_logical_not(tmp_path: Path) -> None:
+    """Regression: ``~`` on a ``sc_in<bool>`` widens to int in C++ and inverts
+    every bit of the int, so ``~true`` (== -2) and ``~false`` (== -1) both
+    round-trip back to ``true``. Verilog ``~`` on a 1-bit signal is logical
+    inversion, so codegen must emit ``!`` instead when the operand is 1-bit.
+    The bug stayed hidden under pyverilog because generate-for left bit-level
+    inverters wrapped in vector contexts; once slang unrolled them into
+    scalar-port subcells the equivalence harness caught it."""
+    design = _design(
+        tmp_path,
+        """
+module inv1(input wire a, output wire y);
+  assign y = ~a;
+endmodule
+""",
+        "inv1",
+    )
+    header = generate_systemc_header(design)
+    assert "y.write((!a.read()));" in header
+    assert "~a.read()" not in header
+
+
+def test_unary_bitwise_not_on_multi_bit_signal_still_uses_tilde(tmp_path: Path) -> None:
+    """Counterpart: on multi-bit ``sc_uint<N>`` operands ``~`` is the correct
+    bitwise inverter, so we must not over-correct and replace it with ``!``."""
+    design = _design(
+        tmp_path,
+        """
+module inv8(input wire [7:0] a, output wire [7:0] y);
+  assign y = ~a;
+endmodule
+""",
+        "inv8",
+    )
+    header = generate_systemc_header(design)
+    assert "y.write((~a.read()));" in header

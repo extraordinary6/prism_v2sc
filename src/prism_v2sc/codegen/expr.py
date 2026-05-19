@@ -427,6 +427,12 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
     if op == "!":
         return f"(!{operand_text})"
     if op == "~":
+        # On a bool/sc_uint<1> operand, C++'s ``~`` widens to int and inverts
+        # all the int bits, so ``~true`` is -2 and ``~false`` is -1 — both
+        # round-trip back to ``true``. Verilog ``~`` on a 1-bit signal is
+        # logical inversion, so emit ``!`` instead when the operand is 1-bit.
+        if infer_width(operand_node, ctx) == 1:
+            return f"(!{operand_text})"
         return f"(~{operand_text})"
     if op == "-":
         return f"(-{operand_text})"
