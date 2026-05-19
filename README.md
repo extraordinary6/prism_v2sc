@@ -72,6 +72,7 @@ Currently 59 tests covering IR lowering, codegen output shape, CLI behavior, mul
 ## Further Reading
 
 - `docs/correctness_strategy.md` — how correctness is established and what the golden loop looks like.
+- `docs/syntax_coverage.md` — what RTL surface is verified by the equivalence CI, what is explicitly rejected, and what is queued for Phase 11.
 - `docs/known_differences.md` — explicit list of where generated SystemC diverges from full Verilog/SV semantics.
 - `docs/hardening_checks.md` — reproducible local checks (unit suite, metrics smoke, static checks).
 - `docs/pyslang_migration.md` — historical record of the pyverilog → pyslang migration (Phases A/B/C, completed).

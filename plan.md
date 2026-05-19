@@ -40,7 +40,7 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 59 unit/integration tests under `tests/` (`python -m pytest -q`).
+- 63 unit/integration tests under `tests/` (`python -m pytest -q`).
 - 11-fixture differential CI co-simulating RTL via Icarus Verilog and generated SystemC via libsystemc-dev (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
@@ -61,20 +61,41 @@ Metrics & verification:
 | 10 – Streaming multi-file emission | Per-module `.hpp` files, mirrored directory layout, positional bindings. |
 | A/B/C – pyslang migration | pyverilog frontend deleted; slang is the only frontend (see `docs/pyslang_migration.md`). |
 
-## Up Next
+## Up Next — Phase 11 (SV feature rollout + closing silent-risk gaps)
 
-The pyslang migration finished the substrate work. The current priority is **broadening the SystemVerilog feature surface that has differential-CI coverage**, one feature at a time, each with its own fixture:
+The full supported / unsupported / queued breakdown lives in
+[`docs/syntax_coverage.md`](docs/syntax_coverage.md). Each step below
+lands as an isolated PR with its own equivalence fixture; ordering is
+chosen so the dangerous silent-miscompile candidates get a binary
+"pass/fail" answer from CI before we change any code.
 
-1. `always_comb` / `always_ff` / `always_latch` keyword recognition (slang parses these; lowering needs minor tweaks).
-2. `typedef` + `enum` flattened to bit-widths in `ModuleIR`.
-3. Packed `struct` (flatten to a single `sc_uint<N>` with summed width).
-4. `package` + `import` (slang resolves; we consume).
-5. `interface` + `modport` (larger — needs an `InterfaceIR` design doc).
-6. Unpacked arrays (need an array signal IR).
+1. **Surface the silent risks.** Add equivalence fixtures for
+   `casex` / `casez` (wildcard semantics are silently dropped to a
+   plain `switch` today), `signed` arithmetic shifts (`<<<` / `>>>`
+   map to unsigned shifts in the codegen — flagged "approximated"),
+   and unpacked-array memory (likely `unsupported_<kind>` but no fixture
+   pins behavior). Let the equivalence harness give the ground truth
+   before we patch anything.
+2. **Pin the keyword variants.** Equivalence fixtures for `always_comb` /
+   `always_ff` / `always_latch`. slang already recognizes these; this
+   is pure coverage, not new code.
+3. **`typedef` + `enum`** flattened to bit-widths in `ModuleIR`.
+   Cheapest SV feature with broad payoff; small IR change.
+4. **Procedural `for` loops** inside `always` blocks (bit-reverse,
+   parity, parametric reduce). Lowering is mechanical; mainly needs
+   loop unrolling against constant bounds.
+5. **Packed `struct`** (and `union`) flattened to a single
+   `sc_uint<sum>` with field bit-offsets threaded through bit/part
+   selects. Builds directly on the typedef work.
+6. **`package` + `import`.** slang already resolves the names; mostly
+   a "release the brake" change in the lowerer.
+7. **`inout` ports.** Single-feature audit + fixture; needs to decide
+   how to model bidirectional bus semantics under `SC_METHOD`.
+8. **`interface` + `modport`.** Large enough to warrant its own design
+   doc and an `InterfaceIR` concept. Park here until 1–7 land.
 
-Alongside the SV rollout:
+Cross-cutting hardening that runs alongside the above:
 
-- expand the equivalence fixture catalog (FSM variants, RAM-style memories, wider arithmetic, `casex`/`casez`)
 - tighten width inference for nested concat/repeat constructions
 - extend driver-conflict analysis to recognize concat-LHS targets
 
