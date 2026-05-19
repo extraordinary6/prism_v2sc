@@ -40,8 +40,8 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 64 unit/integration tests under `tests/` (`python -m pytest -q`).
-- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **12 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
+- 66 unit/integration tests under `tests/` (`python -m pytest -q`).
+- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **17 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
 ## Phases Completed
@@ -65,34 +65,32 @@ Metrics & verification:
 
 The full supported / unsupported / queued breakdown lives in
 [`docs/syntax_coverage.md`](docs/syntax_coverage.md). Each step below
-lands as an isolated PR with its own equivalence fixture; ordering is
-chosen so the dangerous silent-miscompile candidates get a binary
-"pass/fail" answer from CI before we change any code.
+lands as an isolated PR with its own equivalence fixture; items that
+have already landed are struck through here for history.
 
-1. **Surface the silent risks.** Add equivalence fixtures for
-   `casex` / `casez` (wildcard semantics are silently dropped to a
-   plain `switch` today), `signed` arithmetic shifts (`<<<` / `>>>`
-   map to unsigned shifts in the codegen — flagged "approximated"),
-   and unpacked-array memory (likely `unsupported_<kind>` but no fixture
-   pins behavior). Let the equivalence harness give the ground truth
-   before we patch anything.
-2. **Pin the keyword variants.** Equivalence fixtures for `always_comb` /
-   `always_ff` / `always_latch`. slang already recognizes these; this
-   is pure coverage, not new code.
-3. **`typedef` + `enum`** flattened to bit-widths in `ModuleIR`.
-   Cheapest SV feature with broad payoff; small IR change.
+1. ~~**Wildcard `case`** — `casez` / `casex` lowered to a mask/match
+   if-else chain.~~ Done.
+2. ~~**SV `always_*` keywords** — `always_comb` / `always_ff` /
+   `always_latch` trace fixtures.~~ Done.
+3. **Remaining silent risks.** Add fixtures for `signed` shift (`<<<` /
+   `>>>` currently map to unsigned shifts and label themselves
+   "approximated") and unpacked-array memory (`reg [W-1:0] mem [0:D-1]`).
+   Trace-equivalence will give a binary answer; expect both to fail and
+   need real codegen work.
 4. **Procedural `for` loops** inside `always` blocks (bit-reverse,
    parity, parametric reduce). Lowering is mechanical; mainly needs
    loop unrolling against constant bounds.
-5. **Packed `struct`** (and `union`) flattened to a single
+5. **`typedef` + `enum`** flattened to bit-widths in `ModuleIR`. Small
+   IR change with broad payoff.
+6. **Packed `struct`** (and `union`) flattened to a single
    `sc_uint<sum>` with field bit-offsets threaded through bit/part
    selects. Builds directly on the typedef work.
-6. **`package` + `import`.** slang already resolves the names; mostly
+7. **`package` + `import`.** slang already resolves the names; mostly
    a "release the brake" change in the lowerer.
-7. **`inout` ports.** Single-feature audit + fixture; needs to decide
+8. **`inout` ports.** Single-feature audit + fixture; needs to decide
    how to model bidirectional bus semantics under `SC_METHOD`.
-8. **`interface` + `modport`.** Large enough to warrant its own design
-   doc and an `InterfaceIR` concept. Park here until 1–7 land.
+9. **`interface` + `modport`.** Large enough to warrant its own design
+   doc and an `InterfaceIR` concept. Park here until 1–8 land.
 
 Cross-cutting hardening that runs alongside the above:
 

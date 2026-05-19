@@ -1169,6 +1169,11 @@ def _emit_case_statement(
     ctx: ModuleContext,
     staged_names: frozenset[str],
 ) -> list[str]:
+    case_kind = str(statement.get("case_kind", "case"))
+    if case_kind in {"casez", "casex"}:
+        return _emit_wildcard_case_statement(
+            statement, indent_level, ctx=ctx, staged_names=staged_names, case_kind=case_kind
+        )
     prefix = "  " * indent_level
     expr_tree = statement.get("expr_tree")
     if isinstance(expr_tree, dict):
@@ -1194,6 +1199,121 @@ def _emit_case_statement(
         for child in _as_statement_list(item.get("statements")):
             lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
         lines.append(f"{prefix}  break;")
+    lines.append(f"{prefix}}}")
+    return lines
+
+
+_WILDCARD_CHARS_CASEZ = "zZ?"
+_WILDCARD_CHARS_CASEX = "xXzZ?"
+_BITS_PER_DIGIT = {2: 1, 8: 3, 16: 4}
+
+
+def _pattern_mask_and_match(
+    pattern: dict[str, object], case_kind: str, fallback_width: int
+) -> tuple[int, int, int] | None:
+    """Return ``(mask, match, width)`` for a wildcard-aware pattern literal.
+
+    ``casez`` treats only ``z`` / ``Z`` / ``?`` as wildcards. ``casex`` also
+    treats ``x`` / ``X`` as wildcards. For digits in any of the wildcard
+    sets, the corresponding bit is cleared in ``mask`` and forced to 0 in
+    ``match``. Returns ``None`` for non-intconst patterns (caller falls
+    back to a strict equality compare).
+    """
+    if pattern.get("kind") != "intconst":
+        return None
+    digits = str(pattern.get("digits", ""))
+    base = pattern.get("base")
+    if not isinstance(base, int) or base not in _BITS_PER_DIGIT:
+        return None
+    wildcard_chars = _WILDCARD_CHARS_CASEX if case_kind == "casex" else _WILDCARD_CHARS_CASEZ
+    bits_per_digit = _BITS_PER_DIGIT[base]
+    full_mask_digit = (1 << bits_per_digit) - 1
+    mask = 0
+    match = 0
+    for ch in digits:
+        mask <<= bits_per_digit
+        match <<= bits_per_digit
+        if ch in wildcard_chars:
+            continue
+        mask |= full_mask_digit
+        digit_val = int(ch, base)
+        match |= digit_val
+    width = pattern.get("width")
+    if not isinstance(width, int) or width <= 0:
+        width = max(fallback_width, len(digits) * bits_per_digit, 1)
+    truncate = (1 << width) - 1
+    return mask & truncate, match & truncate, width
+
+
+def _emit_wildcard_case_statement(
+    statement: dict[str, object],
+    indent_level: int,
+    *,
+    ctx: ModuleContext,
+    staged_names: frozenset[str],
+    case_kind: str,
+) -> list[str]:
+    """Lower ``casez`` / ``casex`` to an if / else-if / else chain.
+
+    SystemC ``sc_uint`` provides bitwise ``&``, so each pattern becomes a
+    ``(__sel & MASK) == MATCH`` test. Multiple patterns per item are OR'd
+    together. The selector is read once into ``__sel`` so each test sees
+    the same value even if the underlying signal is volatile in a
+    multi-cycle simulation.
+    """
+    prefix = "  " * indent_level
+    expr_tree = statement.get("expr_tree")
+    if isinstance(expr_tree, dict):
+        sel_text = render_rvalue(expr_tree, ctx)
+        sel_width = infer_width(expr_tree, ctx)
+    else:
+        sel_text = _cpp_rvalue(str(statement.get("expr", "")))
+        sel_width = 1
+
+    lines: list[str] = []
+    lines.append(f"{prefix}{{")
+    lines.append(f"{prefix}  auto __sel = {sel_text};")
+
+    items = _as_case_items(statement.get("items"))
+    first = True
+    default_body: list[dict[str, object]] | None = None
+    for item in items:
+        cond_exprs = item.get("cond_exprs")
+        if not (isinstance(cond_exprs, list) and cond_exprs):
+            default_body = _as_statement_list(item.get("statements"))
+            continue
+        terms: list[str] = []
+        for cond_expr in cond_exprs:
+            if not isinstance(cond_expr, dict):
+                continue
+            spec = _pattern_mask_and_match(cond_expr, case_kind, sel_width)
+            if spec is None:
+                # Pattern isn't a sized literal we can mask — fall back to
+                # an equality test (loses wildcard semantics, but only if
+                # the user wrote a non-literal in the case label, which is
+                # already unusual).
+                terms.append(f"(__sel == {render_rvalue(cond_expr, ctx)})")
+                continue
+            mask, match, _width = spec
+            terms.append(f"((__sel & {hex(mask)}) == {hex(match)})")
+        condition = " || ".join(terms) if terms else "false"
+        keyword = "if" if first else "else if"
+        lines.append(f"{prefix}  {keyword} ({condition}) {{")
+        for child in _as_statement_list(item.get("statements")):
+            lines.extend(_emit_structured_statement(child, indent_level + 2, ctx=ctx, staged_names=staged_names))
+        lines.append(f"{prefix}  }}")
+        first = False
+    if default_body is not None:
+        keyword = "" if first else "else "
+        if first:
+            # No labeled items at all — emit the default body unconditionally.
+            for child in default_body:
+                lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+        else:
+            lines.append(f"{prefix}  {keyword}{{".rstrip())
+            for child in default_body:
+                lines.extend(_emit_structured_statement(child, indent_level + 2, ctx=ctx, staged_names=staged_names))
+            lines.append(f"{prefix}  }}")
     lines.append(f"{prefix}}}")
     return lines
 

@@ -9,15 +9,15 @@ The classification is by **evidence strength**, not by syntactic category — th
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Twelve fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Seventeen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
 | **Structure** | module def / inst, named + positional port binding, parameter override (slang elaborates), nested hierarchy, multi-file build with `+incdir+` / `-D` / nested `-f` filelists |
 | **Ports & signals** | `input` / `output`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]` |
-| **Combinational** | `always @(*)`, continuous `assign` |
-| **Sequential** | `always @(posedge clk)`, async reset (`posedge clk or negedge rst_n` style) |
-| **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `default` |
+| **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
+| **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
+| **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `casez` / `casex` lowered to mask/match if-else chain, `default` |
 | **Operators** | full binary `+ - * / % == != < > <= >= && \|\| & \| ^ << >>`, ternary `?:`, unary `! ~ - +`, reduction `& \| ^ ~& ~\| ^~ ~^` |
 | **Selects** | bit-select `sig[i]` (read + write), part-select `sig[msb:lsb]` (read + write); LHS uses staged `__next_*` |
 | **Aggregates** | `{a, b}` concat, `{N{x}}` replication |
@@ -64,7 +64,6 @@ These are the dangerous ones: most either silently miscompile or take the `unsup
 
 | Gap | Why it matters | Current behavior |
 | --- | --- | --- |
-| `casex` / `casez` | FSM optimization, ROM decode, instruction decode | falls through to plain `switch`; **wildcard matching is silently lost** |
 | Procedural `for` / `while` / `repeat` | bus encoders/decoders, parity trees, parametric reduce | `unsupported_<kind>` diagnostic |
 | `inout` ports | bidirectional bus interfaces | no specific handling; needs an audit |
 | Unpacked arrays (`reg [7:0] mem [0:255]`) | every RAM / ROM / FIFO | likely `unsupported_<kind>` from slang's symbol kind; needs verification |
@@ -80,7 +79,6 @@ slang already parses every entry here; the gap is `ModuleIR` doesn't carry the s
 | `typedef` + `enum` flattened to bit-width | `frontend/lower._lower_module` recognizes the symbols and records the width mapping | small |
 | Packed `struct` / `union` (flatten to one `sc_uint<sum>` with field bit-offsets) | extends the typedef work + threads offsets through bit/part-select | medium |
 | `package` + `import` | slang already resolves names; lowerer just consumes the resulting symbols | small (mostly free) |
-| `always_comb` / `always_ff` / `always_latch` keywords | already recognized; needs explicit fixtures, not new code | trivial |
 | `interface` + `modport` | a new `InterfaceIR` concept end-to-end; currently rejected outright | large — needs its own design doc |
 
 ## F. Priority 3 — intentionally out of scope
@@ -98,15 +96,16 @@ Stays rejected. These are either non-synthesizable or require runtime infrastruc
 
 ## Ordering for the next phase
 
-The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR with its corresponding fixture (trace or diagnostic, whichever fits).
+The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR with its corresponding fixture (trace or diagnostic, whichever fits). Items that have moved into A/B since the last revision are struck through.
 
-1. **Surface the silent risks first.** Add fixtures for `casex` / `casez`, `signed` shift, unpacked-array memory. Let the harness give a binary answer on the current state before we change any code.
-2. **Pin the keyword variants.** Add `always_comb` / `always_ff` / `always_latch` fixtures. Likely zero code changes; pure coverage win.
-3. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
+1. ~~**Surface the silent risks first** — `casex` / `casez`.~~ Done: now in A with the mask/match if-else chain codegen.
+2. ~~**Pin the keyword variants** — `always_comb` / `always_ff` / `always_latch`.~~ Done: trace fixtures land them in A.
+3. **Surface the remaining silent risks** — `signed` shift (`<<<` / `>>>` map to unsigned in codegen) and unpacked-array memory (`reg [W-1:0] mem [0:D-1]`).
 4. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical.
-5. **Packed `struct`.** Builds on the typedef work.
-6. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.
-7. **`inout` ports.** Single-feature audit + fixture.
-8. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
+5. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
+6. **Packed `struct`.** Builds on the typedef work.
+7. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.
+8. **`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.
+9. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
 
 Updated whenever a row in C / D / E moves into A or B.

@@ -507,8 +507,17 @@ def _lower_case_statement(statement: Any, module_name: str, diagnostics: list[Di
         default_stmts = [_lower_statement(s, module_name, diagnostics) for s in _flatten_statements(default_stmt)]
     if default_stmts:
         items.append({"conds": [], "cond_exprs": [], "statements": default_stmts})
+    condition_name = str(getattr(statement, "condition", "")).rsplit(".", 1)[-1]
+    # slang's CaseStatementCondition: Normal, WildcardJustZ, WildcardXOrZ, Inside.
+    if condition_name == "WildcardJustZ":
+        case_kind = "casez"
+    elif condition_name == "WildcardXOrZ":
+        case_kind = "casex"
+    else:
+        case_kind = "case"
     return {
         "type": "case",
+        "case_kind": case_kind,
         "expr": _render_expression(statement.expr),
         "expr_tree": _lower_expression(statement.expr),
         "items": items,

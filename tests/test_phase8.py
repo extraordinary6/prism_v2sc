@@ -199,3 +199,59 @@ endmodule
     assert "q.write(__next_q);" not in header
     # Assembler sensitivity unions both shadows.
     assert "sensitive << __shadow_q_0 << __shadow_q_1;" in header
+
+
+def test_casez_lowers_to_mask_match_if_chain(tmp_path: Path) -> None:
+    """casez/casex must lower to a mask+match if/elif chain rather than a
+    plain ``switch``. A naive switch silently drops wildcard semantics,
+    which is the silent-miscompile path docs/syntax_coverage's section D
+    used to flag. Verifies the codegen for casez (casex is identical for
+    our zero-X model)."""
+    rtl = tmp_path / "casez_demo.v"
+    rtl.write_text(
+        """
+module casez_demo(input wire [3:0] op, output reg [1:0] y);
+  always @(*) casez (op)
+    4'b1???: y = 2'd0;
+    4'b01??: y = 2'd1;
+    4'b001?: y = 2'd2;
+    default: y = 2'd3;
+  endcase
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "casez_demo")
+    header = generate_systemc_header(design)
+
+    # Mask/match form for each pattern.
+    assert "(__sel & 0x8) == 0x8" in header   # 4'b1???
+    assert "(__sel & 0xc) == 0x4" in header   # 4'b01??
+    assert "(__sel & 0xe) == 0x2" in header   # 4'b001?
+    # Selector cached once, not re-read per branch.
+    assert "auto __sel = op.read();" in header
+    # No plain switch on the wildcard case — that would lose wildcards.
+    assert "switch (op.read())" not in header
+
+
+def test_casex_lowers_to_mask_match_if_chain(tmp_path: Path) -> None:
+    """casex shares the same lowering path as casez. Under our zero-X
+    model, X is treated identically to Z, but the keyword must still be
+    recognized."""
+    rtl = tmp_path / "casex_demo.v"
+    rtl.write_text(
+        """
+module casex_demo(input wire [3:0] op, output reg q);
+  always @(*) casex (op)
+    4'b1xxx: q = 1'b1;
+    default: q = 1'b0;
+  endcase
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "casex_demo")
+    header = generate_systemc_header(design)
+
+    assert "(__sel & 0x8) == 0x8" in header
+    assert "switch (op.read())" not in header

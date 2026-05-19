@@ -229,6 +229,24 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=128,
     ),
+    Fixture(
+        name="casez_priority",
+        sources=("casez_priority.v",),
+        top="casez_priority",
+        inputs=(Port("op", 4),),
+        outputs=(Port("y", 2),),
+        sequential=False,
+        cycles=64,
+    ),
+    Fixture(
+        name="casex_priority",
+        sources=("casex_priority.v",),
+        top="casex_priority",
+        inputs=(Port("op", 4),),
+        outputs=(Port("y", 2),),
+        sequential=False,
+        cycles=64,
+    ),
 )
 
 

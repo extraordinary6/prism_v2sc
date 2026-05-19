@@ -29,6 +29,11 @@ The SystemC testbench `#include`s the **top module's** per-module hpp at its mir
 | `multi_file` | sequential | filelist-driven build with `+incdir+`, `-D`, three sources |
 | `gen_demo` | combinational | `generate` constructs that slang unrolls during elaboration |
 | `slice_writers` | sequential | two `always_ff` blocks each writing one bit of the same 2-bit register; verifies the multi-writer aggregation pass produces a single-writer SystemC build |
+| `sv_always_comb` | combinational | SystemVerilog `always_comb` keyword |
+| `sv_always_ff` | sequential | SystemVerilog `always_ff` keyword with async reset |
+| `sv_always_latch` | combinational | SystemVerilog `always_latch` (enable-gated transparent latch) |
+| `casez_priority` | combinational | priority encoder using `casez` wildcards (mask/match lowering) |
+| `casex_priority` | combinational | priority encoder using `casex` wildcards |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
 
