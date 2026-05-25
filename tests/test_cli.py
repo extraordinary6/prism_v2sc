@@ -103,14 +103,16 @@ def test_cli_writes_phase5_metrics(tmp_path: Path, capsys) -> None:
 
 
 def test_cli_can_fail_on_error_diagnostics(tmp_path: Path, capsys) -> None:
-    rtl = tmp_path / "for_top.v"
+    rtl = tmp_path / "while_top.v"
     rtl.write_text(
         """
-module for_top(input wire [1:0] a, output reg [1:0] y);
+module while_top(input wire [1:0] a, output reg [1:0] y);
   integer i;
   always @(*) begin
-    for (i = 0; i < 2; i = i + 1) begin
+    i = 0;
+    while (i < 2) begin
       y[i] = a[i];
+      i = i + 1;
     end
   end
 endmodule
@@ -119,7 +121,7 @@ endmodule
     )
     out_dir = tmp_path / "systemc"
 
-    assert main(["--top", "for_top", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
+    assert main(["--top", "while_top", "--fail-on-diagnostics", "--out", str(out_dir), str(rtl)]) == 2
     assert "diagnostics: 1 error(s)" in capsys.readouterr().out
 
 
