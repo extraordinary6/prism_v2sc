@@ -268,6 +268,18 @@ FIXTURES: tuple[Fixture, ...] = (
         reset_active_low=True,
         cycles=128,
     ),
+    Fixture(
+        name="procedural_for",
+        sources=("procedural_for.v",),
+        top="procedural_for",
+        inputs=(Port("din", 8),),
+        outputs=(Port("reversed", 8), Port("parity", 1), Port("cleared", 8)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
 )
 
 

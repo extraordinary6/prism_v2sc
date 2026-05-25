@@ -464,6 +464,8 @@ def _lower_statement(statement: Any, module_name: str, diagnostics: list[Diagnos
         return _lower_conditional_statement(statement, module_name, diagnostics)
     if kind_name == "Case":
         return _lower_case_statement(statement, module_name, diagnostics)
+    if kind_name == "ForLoop":
+        return _lower_for_loop_statement(statement, module_name, diagnostics)
     if kind_name == "Block":
         children = [_lower_statement(child, module_name, diagnostics) for child in _flatten_statements(statement)]
         if len(children) == 1:
@@ -546,6 +548,189 @@ def _lower_case_statement(statement: Any, module_name: str, diagnostics: list[Di
         "expr_tree": _lower_expression(statement.expr),
         "items": items,
     }
+
+
+def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: list[DiagnosticIR]) -> dict[str, Any]:
+    """Lower a slang ``ForLoopStatement`` into an unrolled block.
+
+    slang gives us constant-resolved bounds for synthesizable loops, so we
+    unroll them into sequential statements. The loop structure is:
+    - initializers: list of Assignment expressions (e.g., i = 0)
+    - stopExpr: BinaryOp condition (e.g., i < WIDTH)
+    - steps: list of Assignment expressions (e.g., i = i + 1)
+    - body: BlockStatement with the loop body
+
+    We evaluate the loop bounds at lowering time and emit an unrolled block.
+    If bounds are not constant or the loop is unbounded, emit a diagnostic.
+    """
+    # Extract loop variable and bounds
+    if not statement.initializers or not statement.steps:
+        diagnostics.append(
+            _diagnostic(
+                module_name,
+                "unsupported_for_loop_structure",
+                "for loop must have exactly one initializer and one step",
+                "ForLoop",
+            )
+        )
+        return {"type": "unsupported", "node": "ForLoop"}
+
+    init_expr = statement.initializers[0]
+    step_expr = statement.steps[0]
+    stop_expr = statement.stopExpr
+
+    # Try to extract constant bounds
+    # init: i = <start>
+    # stop: i < <end> or i <= <end>
+    # step: i = i + <stride> or i = i - <stride>
+    try:
+        # Get loop variable name
+        loop_var = _render_expression(init_expr.left)
+
+        # Get start value
+        start_val = _try_eval_const_expr(init_expr.right)
+        if start_val is None:
+            raise ValueError("non-constant start")
+
+        # Get stop condition
+        stop_kind = str(stop_expr.kind).rsplit(".", 1)[-1]
+        if stop_kind not in {"BinaryOp"}:
+            raise ValueError("non-constant stop")
+
+        stop_op_text = str(stop_expr.op).rsplit(".", 1)[-1]
+        stop_left = _render_expression(stop_expr.left)
+        stop_right = _render_expression(stop_expr.right)
+
+        # Determine which side is the loop variable
+        if stop_left == loop_var:
+            end_val = _try_eval_const_expr(stop_expr.right)
+            if end_val is None:
+                raise ValueError("non-constant end")
+            # i < end or i <= end
+            if stop_op_text == "LessThan":
+                end_val = end_val  # exclusive
+            elif stop_op_text == "LessThanEqual":
+                end_val = end_val + 1  # inclusive -> exclusive
+            else:
+                raise ValueError(f"unsupported stop operator {stop_op_text}")
+        elif stop_right == loop_var:
+            end_val = _try_eval_const_expr(stop_expr.left)
+            if end_val is None:
+                raise ValueError("non-constant end")
+            # end > i or end >= i
+            if stop_op_text == "GreaterThan":
+                end_val = end_val  # exclusive
+            elif stop_op_text == "GreaterThanEqual":
+                end_val = end_val + 1  # inclusive -> exclusive
+            else:
+                raise ValueError(f"unsupported stop operator {stop_op_text}")
+        else:
+            raise ValueError("loop variable not in stop condition")
+
+        # Get stride (assume i = i + 1 or i = i - 1 for now)
+        step_right_kind = str(step_expr.right.kind).rsplit(".", 1)[-1]
+        if step_right_kind == "BinaryOp":
+            step_op = str(step_expr.right.op).rsplit(".", 1)[-1]
+            if step_op == "Add":
+                stride_val = _try_eval_const_expr(step_expr.right.right)
+                if stride_val is None:
+                    raise ValueError("non-constant stride")
+            elif step_op == "Subtract":
+                stride_val = -_try_eval_const_expr(step_expr.right.right)
+                if stride_val is None:
+                    raise ValueError("non-constant stride")
+            else:
+                raise ValueError(f"unsupported step operator {step_op}")
+        else:
+            raise ValueError("unsupported step expression")
+
+        # Unroll the loop
+        unrolled_stmts: list[dict[str, Any]] = []
+        iteration_count = 0
+        max_iterations = 10000  # safety limit
+
+        # Create a genvar substitution for this loop variable
+        current_val = start_val
+        while (stride_val > 0 and current_val < end_val) or (stride_val < 0 and current_val > end_val):
+            if iteration_count >= max_iterations:
+                raise ValueError(f"loop exceeds {max_iterations} iterations")
+
+            # Push loop variable substitution
+            _genvar_subst_stack.append({loop_var: str(current_val)})
+            try:
+                # Lower the body with the substituted loop variable
+                body_stmts = [_lower_statement(s, module_name, diagnostics) for s in _flatten_statements(statement.body)]
+                unrolled_stmts.extend(body_stmts)
+            finally:
+                _genvar_subst_stack.pop()
+
+            current_val += stride_val
+            iteration_count += 1
+
+        if len(unrolled_stmts) == 1:
+            return unrolled_stmts[0]
+        return {"type": "block", "statements": unrolled_stmts}
+
+    except (ValueError, AttributeError, TypeError) as e:
+        diagnostics.append(
+            _diagnostic(
+                module_name,
+                "unsupported_for_loop_bounds",
+                f"for loop bounds must be constant at elaboration time: {e}",
+                "ForLoop",
+            )
+        )
+        return {"type": "unsupported", "node": "ForLoop"}
+
+
+def _try_eval_const_expr(expr: Any) -> int | None:
+    """Try to evaluate a slang expression to a constant integer.
+
+    Returns None if the expression is not a compile-time constant.
+    """
+    # First check if the expression itself has a constant attribute
+    if hasattr(expr, "constant"):
+        const_val = expr.constant
+        if const_val is not None:
+            # pyslang ConstantValue: convertToInt().value gives SVInt, then int() gives Python int
+            if hasattr(const_val, "convertToInt"):
+                try:
+                    converted = const_val.convertToInt()
+                    if hasattr(converted, "value"):
+                        return int(converted.value)
+                except:
+                    pass
+            # Older pyslang versions might have .integer attribute
+            if hasattr(const_val, "integer"):
+                return const_val.integer.as_int()
+            # Plain int (shouldn't happen with pyslang but keep for safety)
+            if isinstance(const_val, int):
+                return const_val
+
+    kind = str(expr.kind).rsplit(".", 1)[-1]
+    if kind == "NamedValue":
+        # Could be a parameter; check the symbol's value
+        symbol = getattr(expr, "symbol", None)
+        if symbol:
+            sym_val = getattr(symbol, "value", None)
+            if sym_val is not None:
+                if hasattr(sym_val, "convertToInt"):
+                    try:
+                        converted = sym_val.convertToInt()
+                        if hasattr(converted, "value"):
+                            return int(converted.value)
+                    except:
+                        pass
+                if hasattr(sym_val, "integer"):
+                    return sym_val.integer.as_int()
+                if isinstance(sym_val, int):
+                    return sym_val
+    elif kind == "Conversion":
+        # Type conversion wrapping a constant
+        operand = getattr(expr, "operand", None)
+        if operand:
+            return _try_eval_const_expr(operand)
+    return None
 
 
 def _statement_summary(statement: Any) -> str:

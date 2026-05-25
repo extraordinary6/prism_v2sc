@@ -145,20 +145,25 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
     )
 
 
-def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
-    """Render a structured RHS expression as a C++ rvalue."""
+def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
+    """Render a structured RHS expression as a C++ rvalue.
+
+    If ``staged_names`` is provided and an identifier is in that set,
+    the rvalue reads from ``__next_<name>`` instead of ``<name>.read()``.
+    This is used in FF/comb processes where signals are staged.
+    """
     if not isinstance(expr, dict):
         return "0"
 
     kind = expr.get("kind")
     if kind == "identifier":
-        return _render_identifier_rvalue(str(expr.get("name", "")), ctx)
+        return _render_identifier_rvalue(str(expr.get("name", "")), ctx, staged_names=staged_names)
     if kind == "intconst":
         return _format_intconst(expr)
     if kind == "binop":
         op = str(expr.get("op", ""))
-        left = render_rvalue(expr.get("left"), ctx)
-        right = render_rvalue(expr.get("right"), ctx)
+        left = render_rvalue(expr.get("left"), ctx, staged_names=staged_names)
+        right = render_rvalue(expr.get("right"), ctx, staged_names=staged_names)
         cpp_op = _CPP_BINARY_OP_MAP.get(op, op)
         result = f"({left} {cpp_op} {right})"
         if op == "^~":
@@ -167,16 +172,16 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
     if kind == "unop":
         op = str(expr.get("op", ""))
         operand = expr.get("operand")
-        return _render_unop(op, operand, ctx)
+        return _render_unop(op, operand, ctx, staged_names=staged_names)
     if kind == "cond":
-        cond = render_rvalue(expr.get("cond"), ctx)
-        true_branch = render_rvalue(expr.get("true"), ctx)
-        false_branch = render_rvalue(expr.get("false"), ctx)
+        cond = render_rvalue(expr.get("cond"), ctx, staged_names=staged_names)
+        true_branch = render_rvalue(expr.get("true"), ctx, staged_names=staged_names)
+        false_branch = render_rvalue(expr.get("false"), ctx, staged_names=staged_names)
         return f"({cond} ? {true_branch} : {false_branch})"
     if kind == "concat":
-        return _render_concat(expr.get("parts", []), ctx)
+        return _render_concat(expr.get("parts", []), ctx, staged_names=staged_names)
     if kind == "repeat":
-        return _render_repeat(expr.get("count"), expr.get("value"), ctx)
+        return _render_repeat(expr.get("count"), expr.get("value"), ctx, staged_names=staged_names)
     if kind == "bitselect":
         target = expr.get("target")
         if isinstance(target, dict) and target.get("kind") == "identifier":
@@ -184,21 +189,21 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext) -> str:
             if target_name in ctx.array_signal_names:
                 # Array cell read: ``mem[i].read()`` rather than the
                 # vector bit-select ``mem.read()[i]``.
-                index_str = render_rvalue(expr.get("index"), ctx)
+                index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
                 return f"{sanitize_identifier(target_name)}[{index_str}].read()"
-        target_str = _render_aggregate_rvalue(expr.get("target"), ctx)
-        index_str = render_rvalue(expr.get("index"), ctx)
+        target_str = _render_aggregate_rvalue(expr.get("target"), ctx, staged_names=staged_names)
+        index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
         return f"{target_str}[{index_str}]"
     if kind == "partselect":
-        target_str = _render_aggregate_rvalue(expr.get("target"), ctx)
-        msb = render_rvalue(expr.get("msb"), ctx)
-        lsb = render_rvalue(expr.get("lsb"), ctx)
+        target_str = _render_aggregate_rvalue(expr.get("target"), ctx, staged_names=staged_names)
+        msb = render_rvalue(expr.get("msb"), ctx, staged_names=staged_names)
+        lsb = render_rvalue(expr.get("lsb"), ctx, staged_names=staged_names)
         return f"{target_str}.range({msb}, {lsb})"
     if kind == "syscall":
-        return _render_syscall(expr, ctx)
+        return _render_syscall(expr, ctx, staged_names=staged_names)
     if kind == "funcall":
         name = sanitize_identifier(str(expr.get("name", "")))
-        args = [render_rvalue(arg, ctx) for arg in expr.get("args", []) if isinstance(arg, dict)]
+        args = [render_rvalue(arg, ctx, staged_names=staged_names) for arg in expr.get("args", []) if isinstance(arg, dict)]
         return f"{name}({', '.join(args)})"
     if kind == "raw":
         text = str(expr.get("text", ""))
@@ -418,7 +423,7 @@ def sanitize_identifier(name: str) -> str:
     return cleaned
 
 
-def _render_identifier_rvalue(name: str, ctx: ModuleContext) -> str:
+def _render_identifier_rvalue(name: str, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     sanitized = sanitize_identifier(name)
     if name in ctx.local_names:
         return sanitized
@@ -427,19 +432,22 @@ def _render_identifier_rvalue(name: str, ctx: ModuleContext) -> str:
     if name in ctx.parameter_names:
         return sanitized
     if name in ctx.signal_names:
+        # If this signal is staged, read from __next_ instead of .read()
+        if staged_names is not None and name in staged_names:
+            return f"__next_{sanitized}"
         return f"{sanitized}.read()"
     return sanitized
 
 
-def _render_aggregate_rvalue(node: dict[str, Any] | None, ctx: ModuleContext) -> str:
+def _render_aggregate_rvalue(node: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     """Render an aggregate target (used as the base of bit/part-select).
 
     For a top-level identifier we use ``name.read()``; for nested aggregates
     we render through the regular rvalue path.
     """
     if isinstance(node, dict) and node.get("kind") == "identifier":
-        return _render_identifier_rvalue(str(node.get("name", "")), ctx)
-    return render_rvalue(node, ctx)
+        return _render_identifier_rvalue(str(node.get("name", "")), ctx, staged_names=staged_names)
+    return render_rvalue(node, ctx, staged_names=staged_names)
 
 
 def _is_definitely_one_bit(expr: dict[str, Any] | None, ctx: ModuleContext) -> bool:
@@ -489,8 +497,8 @@ def _is_definitely_one_bit(expr: dict[str, Any] | None, ctx: ModuleContext) -> b
     return False
 
 
-def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContext) -> str:
-    operand_text = render_rvalue(operand_node, ctx)
+def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
+    operand_text = render_rvalue(operand_node, ctx, staged_names=staged_names)
     if op == "!":
         return f"(!{operand_text})"
     if op == "~":
@@ -523,11 +531,11 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
     return f"({op}{operand_text})"
 
 
-def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext) -> str:
+def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     if not parts:
         return "0"
     if len(parts) == 1:
-        return render_rvalue(parts[0], ctx)
+        return render_rvalue(parts[0], ctx, staged_names=staged_names)
     widths = [max(1, infer_width(part, ctx)) for part in parts]
     total = sum(widths)
     if total <= 0:
@@ -536,7 +544,7 @@ def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext) -> str:
     bits_remaining = total
     for part, width in zip(parts, widths):
         bits_remaining -= width
-        operand = render_rvalue(part, ctx)
+        operand = render_rvalue(part, ctx, staged_names=staged_names)
         if bits_remaining > 0:
             pieces.append(f"(sc_uint<{total}>({operand}) << {bits_remaining})")
         else:
@@ -544,7 +552,7 @@ def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext) -> str:
     return "(" + " | ".join(pieces) + ")"
 
 
-def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any] | None, ctx: ModuleContext) -> str:
+def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     count = const_eval(count_node, ctx) or 0
     if count <= 0:
         count = 1
@@ -552,7 +560,7 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     total = count * width
     if total <= 0:
         total = 1
-    operand = render_rvalue(value_node, ctx)
+    operand = render_rvalue(value_node, ctx, staged_names=staged_names)
     pieces: list[str] = []
     for i in range(count):
         shift = (count - 1 - i) * width
@@ -563,10 +571,10 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     return "(" + " | ".join(pieces) + ")"
 
 
-def _render_syscall(expr: dict[str, Any], ctx: ModuleContext) -> str:
+def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     name = str(expr.get("name", ""))
     args_nodes = expr.get("args", []) or []
-    args = [render_rvalue(arg, ctx) for arg in args_nodes]
+    args = [render_rvalue(arg, ctx, staged_names=staged_names) for arg in args_nodes]
     if name in {"signed", "unsigned"} and args:
         # ``$signed`` and ``$unsigned`` change the type of an expression for
         # operations that care about sign — most importantly ``>>>``, which

@@ -18,7 +18,7 @@ Nineteen fixtures under `tests/equivalence/fixtures/*.v` plus `multi_file/`. Any
 | **Memories** | unpacked arrays (`reg [W-1:0] mem [0:D-1]`) lowered to a per-cell `sc_signal<sc_uint<W>>` array; per-cell `.write()` / `.read()` gives Verilog nonblocking semantics via SystemC delta cycles |
 | **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
 | **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
-| **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `casez` / `casex` lowered to mask/match if-else chain, `default` |
+| **Control flow** | `if`/`else`, ordinary `case` (no wildcard), `casez` / `casex` lowered to mask/match if-else chain, `default`, procedural `for` with constant bounds (unrolled at elaboration time) |
 | **Operators** | full binary `+ - * / % == != < > <= >= && \|\| & \| ^ << >>`, ternary `?:`, unary `! ~ - +`, reduction `& \| ^ ~& ~\| ^~ ~^`; arithmetic `>>>` via `$signed` cast |
 | **Selects** | bit-select `sig[i]` (read + write), part-select `sig[msb:lsb]` (read + write); LHS uses staged `__next_*` |
 | **Aggregates** | `{a, b}` concat, `{N{x}}` replication |
@@ -66,7 +66,7 @@ These are the dangerous ones: most either silently miscompile or take the `unsup
 
 | Gap | Why it matters | Current behavior |
 | --- | --- | --- |
-| Procedural `for` / `while` / `repeat` | bus encoders/decoders, parity trees, parametric reduce | `unsupported_<kind>` diagnostic |
+| Procedural `while` / `repeat` | loop constructs in synthesizable RTL | `unsupported_<kind>` diagnostic |
 | `inout` ports | bidirectional bus interfaces | no specific handling; needs an audit |
 | `defparam` | legacy code | slang resolves it at elaboration; **no fixture pins behavior** |
 | `signed`-declared ports in the equivalence harness | true signed-port designs (not just `$signed` casts) | the `Port` dataclass in `run_equivalence.py` doesn't carry a `signed` flag yet, so trace fixtures can't drive `sc_int` ports |
@@ -103,7 +103,7 @@ The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR
 2. ~~**Pin the keyword variants** — `always_comb` / `always_ff` / `always_latch`.~~ Done: trace fixtures land them in A.
 3. ~~**`$signed` / `$unsigned` casts** previously discarded the sign change.~~ Done: codegen now emits real `sc_int<W>` / `sc_uint<W>` casts, verified by `signed_shift_cast`.
 4. ~~**Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`).~~ Done: per-cell `sc_signal` array codegen, verified by `regfile_mem`.
-5. **Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical — slang gives constant-bounds-resolved loops.
+5. ~~**Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical — slang gives constant-bounds-resolved loops.~~ Done: unrolls at elaboration time with genvar substitution, verified by `procedural_for` fixture. Also fixed staged-context bug where RHS reads of staged signals incorrectly used `.read()` instead of `__next_` temporaries.
 6. **`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.
 7. **Packed `struct`.** Builds on the typedef work.
 8. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.

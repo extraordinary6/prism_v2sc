@@ -1158,7 +1158,7 @@ def _emit_structured_statement(
         return [prefix + _emit_tree_assignment(statement, ctx, staged_names)]
 
     if kind == "if":
-        cond_text = _render_cond(statement, ctx)
+        cond_text = _render_cond(statement, ctx, staged_names=staged_names)
         lines = [f"{prefix}if ({cond_text}) {{"]
         for child in _as_statement_list(statement.get("true")):
             lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
@@ -1172,6 +1172,17 @@ def _emit_structured_statement(
 
     if kind == "case":
         return _emit_case_statement(statement, indent_level, ctx=ctx, staged_names=staged_names)
+
+    if kind == "block":
+        # Unrolled for loops and other compound statements produce blocks
+        lines = []
+        for child in _as_statement_list(statement.get("statements")):
+            lines.extend(_emit_structured_statement(child, indent_level, ctx=ctx, staged_names=staged_names))
+        return lines
+
+    if kind == "noop":
+        # Empty statements and variable declarations (already handled by slang)
+        return []
 
     node = statement.get("node", kind)
     return [f"{prefix}// Unsupported statement: {node}"]
@@ -1192,7 +1203,7 @@ def _emit_case_statement(
     prefix = "  " * indent_level
     expr_tree = statement.get("expr_tree")
     if isinstance(expr_tree, dict):
-        expr = render_rvalue(expr_tree, ctx)
+        expr = render_rvalue(expr_tree, ctx, staged_names=staged_names)
     else:
         expr = _cpp_rvalue(str(statement.get("expr", "")))
     lines = [f"{prefix}switch ({expr}) {{"]
@@ -1201,7 +1212,7 @@ def _emit_case_statement(
         if isinstance(cond_exprs, list) and cond_exprs:
             for cond_expr in cond_exprs:
                 if isinstance(cond_expr, dict):
-                    lines.append(f"{prefix}case {render_rvalue(cond_expr, ctx)}:")
+                    lines.append(f"{prefix}case {render_rvalue(cond_expr, ctx, staged_names=staged_names)}:")
                 else:
                     lines.append(f"{prefix}case {cond_expr}:")
         else:
@@ -1279,7 +1290,7 @@ def _emit_wildcard_case_statement(
     prefix = "  " * indent_level
     expr_tree = statement.get("expr_tree")
     if isinstance(expr_tree, dict):
-        sel_text = render_rvalue(expr_tree, ctx)
+        sel_text = render_rvalue(expr_tree, ctx, staged_names=staged_names)
         sel_width = infer_width(expr_tree, ctx)
     else:
         sel_text = _cpp_rvalue(str(statement.get("expr", "")))
@@ -1307,7 +1318,7 @@ def _emit_wildcard_case_statement(
                 # an equality test (loses wildcard semantics, but only if
                 # the user wrote a non-literal in the case label, which is
                 # already unusual).
-                terms.append(f"(__sel == {render_rvalue(cond_expr, ctx)})")
+                terms.append(f"(__sel == {render_rvalue(cond_expr, ctx, staged_names=staged_names)})")
                 continue
             mask, match, _width = spec
             terms.append(f"((__sel & {hex(mask)}) == {hex(match)})")
@@ -1333,10 +1344,10 @@ def _emit_wildcard_case_statement(
     return lines
 
 
-def _render_cond(statement: dict[str, object], ctx: ModuleContext) -> str:
+def _render_cond(statement: dict[str, object], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     cond_expr = statement.get("cond_expr")
     if isinstance(cond_expr, dict):
-        return render_rvalue(cond_expr, ctx)
+        return render_rvalue(cond_expr, ctx, staged_names=staged_names or frozenset())
     return _cpp_rvalue(str(statement.get("cond", "")))
 
 
@@ -1348,7 +1359,7 @@ def _emit_tree_assignment(
     left_expr = statement.get("left_expr")
     right_expr = statement.get("right_expr")
     if isinstance(right_expr, dict):
-        rhs = render_rvalue(right_expr, ctx)
+        rhs = render_rvalue(right_expr, ctx, staged_names=staged_names)
     else:
         rhs = _cpp_rvalue(str(statement.get("right", "")))
 
@@ -1365,7 +1376,7 @@ def _emit_tree_assignment(
                 and str(target.get("name", "")) in ctx.array_signal_names
             ):
                 target_name = sanitize_identifier(str(target["name"]))
-                idx = render_rvalue(left_expr.get("index"), ctx)
+                idx = render_rvalue(left_expr.get("index"), ctx, staged_names=staged_names)
                 return f"{target_name}[{idx}].write({rhs});"
         base = lvalue_base_name(left_expr)
         if base in staged_names:

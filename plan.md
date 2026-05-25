@@ -77,9 +77,11 @@ have already landed are struck through here for history.
    correctly. Trace fixture `signed_shift_cast` pins behavior.
 4. ~~**Unpacked-array memory** (`reg [W-1:0] mem [0:D-1]`).~~ Done:
    per-cell `sc_signal` array codegen, verified by `regfile_mem`.
-5. **Procedural `for` loops** inside `always` blocks (bit-reverse,
-   parity, parametric reduce). Lowering is mechanical; mainly needs
-   loop unrolling against constant bounds.
+5. ~~**Procedural `for` loops** inside `always` blocks (bit-reverse,
+   parity, parametric reduce).~~ Done: unrolls at elaboration time with
+   genvar substitution, verified by `procedural_for` fixture. Also fixed
+   staged-context bug where RHS reads of staged signals incorrectly used
+   `.read()` instead of `__next_` temporaries.
 6. **`typedef` + `enum`** flattened to bit-widths in `ModuleIR`. Small
    IR change with broad payoff.
 7. **Packed `struct`** (and `union`) flattened to a single
