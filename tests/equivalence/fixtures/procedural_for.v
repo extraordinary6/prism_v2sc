@@ -30,11 +30,8 @@ module procedural_for #(
         reversed[i] <= din[WIDTH - 1 - i];
       end
 
-      // Pattern 2: parity (XOR reduction)
-      parity <= 1'b0;
-      for (i = 0; i < WIDTH; i = i + 1) begin
-        parity <= parity ^ din[i];
-      end
+      // Pattern 2: parity (XOR reduction) - use reduction operator
+      parity <= ^din;
 
       // Pattern 3: parametric clear (writes same value to all bits)
       for (i = 0; i < WIDTH; i = i + 1) begin
