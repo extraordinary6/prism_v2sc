@@ -280,6 +280,27 @@ FIXTURES: tuple[Fixture, ...] = (
         reset_active_low=True,
         cycles=128,
     ),
+    Fixture(
+        name="typedef_enum_fsm",
+        sources=("typedef_enum_fsm.sv",),
+        top="typedef_enum_fsm",
+        inputs=(Port("start", 1), Port("ack", 1)),
+        outputs=(Port("busy", 1), Port("done", 1), Port("state_bits", 2)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
+        name="packed_aggregate_demo",
+        sources=("packed_aggregate_demo.sv",),
+        top="packed_aggregate_demo",
+        inputs=(Port("a", 4), Port("b", 4), Port("flag", 1)),
+        outputs=(Port("hi", 4), Port("lo", 4), Port("mirror", 8)),
+        sequential=False,
+        cycles=64,
+    ),
 )
 
 

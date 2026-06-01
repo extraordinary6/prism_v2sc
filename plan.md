@@ -40,8 +40,8 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 69 unit/integration tests under `tests/` (`python -m pytest -q`).
-- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **19 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
+- 76 unit/integration tests under `tests/` (`python -m pytest -q`).
+- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **21 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
 ## Phases Completed
@@ -82,11 +82,14 @@ have already landed are struck through here for history.
    genvar substitution, verified by `procedural_for` fixture. Also fixed
    staged-context bug where RHS reads of staged signals incorrectly used
    `.read()` instead of `__next_` temporaries.
-6. **`typedef` + `enum`** flattened to bit-widths in `ModuleIR`. Small
-   IR change with broad payoff.
-7. **Packed `struct`** (and `union`) flattened to a single
+6. ~~**`typedef` + `enum`** flattened to bit-widths in `ModuleIR`.~~ Done:
+   enum members are lowered to integer constants, and the alias metadata
+   is recorded in `ModuleIR.type_aliases`.
+7. ~~**Packed `struct`** (and `union`) flattened to a single
    `sc_uint<sum>` with field bit-offsets threaded through bit/part
-   selects. Builds directly on the typedef work.
+   selects.~~ Done: alias metadata records packed fields, member access
+   lowers to bit/part selects, and `packed_aggregate_demo` verifies struct
+   and union overlays.
 8. **`package` + `import`.** slang already resolves the names; mostly
    a "release the brake" change in the lowerer.
 9. **`inout` ports.** Single-feature audit + fixture; needs to decide

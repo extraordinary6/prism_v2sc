@@ -310,8 +310,9 @@ def _aggregate_multi_writer_processes(
 
     new_module = ModuleIR(
         name=module.name,
-        ports=module.ports,
         parameters=module.parameters,
+        ports=module.ports,
+        type_aliases=module.type_aliases,
         signals=tuple(extra_signals) + module.signals,
         continuous_assigns=module.continuous_assigns,
         processes=module.processes,

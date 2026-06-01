@@ -18,6 +18,7 @@ JSON dump:
     {"kind": "repeat", "count": {...}, "value": {...}}
     {"kind": "bitselect", "target": {...}, "index": {...}}
     {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
+    # Packed struct/union member access lowers to bitselect / partselect.
     {"kind": "syscall", "name": "signed", "args": [{...}]}
     {"kind": "funcall", "name": "add_one", "args": [{...}]}
     {"kind": "raw", "text": "..."}     # safety fallback
@@ -33,7 +34,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from prism_v2sc.ir.model import ModuleIR, ParameterIR, PortIR, SignalIR
+from prism_v2sc.ir.model import ModuleIR, ParameterIR, PortIR, SignalIR, TypeAliasIR
 
 
 _BINARY_REDUCTION_OPS = {"&", "|", "^", "~&", "~|", "^~", "~^"}
@@ -74,6 +75,8 @@ class ModuleContext:
     parameter_names: frozenset[str]
     signal_widths: dict[str, int]
     parameter_values: dict[str, int]
+    enum_values: dict[str, int] = field(default_factory=dict)
+    enum_widths: dict[str, int] = field(default_factory=dict)
     loop_vars: frozenset[str] = field(default_factory=frozenset)
     local_names: frozenset[str] = field(default_factory=frozenset)
     # Signals declared with one or more unpacked dimensions (e.g. memories
@@ -89,6 +92,8 @@ class ModuleContext:
             parameter_names=self.parameter_names,
             signal_widths=self.signal_widths,
             parameter_values=self.parameter_values,
+            enum_values=self.enum_values,
+            enum_widths=self.enum_widths,
             loop_vars=frozenset(self.loop_vars | {name}),
             local_names=self.local_names,
             array_signal_names=self.array_signal_names,
@@ -107,6 +112,8 @@ class ModuleContext:
             parameter_names=self.parameter_names,
             signal_widths=self.signal_widths,
             parameter_values=self.parameter_values,
+            enum_values=self.enum_values,
+            enum_widths=self.enum_widths,
             loop_vars=self.loop_vars,
             local_names=frozenset(self.local_names | names),
             array_signal_names=self.array_signal_names,
@@ -126,6 +133,8 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
         if const is not None:
             parameter_values[parameter.name] = const
 
+    enum_values, enum_widths = _flatten_enum_values(module.type_aliases)
+
     for port in module.ports:
         signal_names.add(port.name)
         signal_widths[port.name] = _port_width(port, parameter_values)
@@ -141,8 +150,32 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
         parameter_names=frozenset(parameter_names),
         signal_widths=signal_widths,
         parameter_values=parameter_values,
+        enum_values=enum_values,
+        enum_widths=enum_widths,
         array_signal_names=frozenset(array_signal_names),
     )
+
+
+def _flatten_enum_values(type_aliases: tuple[TypeAliasIR, ...]) -> tuple[dict[str, int], dict[str, int]]:
+    values: dict[str, int] = {}
+    widths: dict[str, int] = {}
+    for alias in type_aliases:
+        width = _type_alias_width(alias)
+        for enum_value in alias.enum_values:
+            values[enum_value.name] = enum_value.value
+            if width is not None:
+                widths[enum_value.name] = width
+    return values, widths
+
+
+def _type_alias_width(alias: TypeAliasIR) -> int | None:
+    if alias.width is None:
+        return None
+    msb = _parse_bound(alias.width.msb)
+    lsb = _parse_bound(alias.width.lsb)
+    if msb is None or lsb is None:
+        return None
+    return abs(msb - lsb) + 1
 
 
 def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
@@ -269,6 +302,8 @@ def collect_sensitivity(expr: dict[str, Any] | None, ctx: ModuleContext) -> list
             name = str(node.get("name", ""))
             if not name:
                 return
+            if name in ctx.enum_values:
+                return
             if name in ctx.parameter_names or name in ctx.loop_vars:
                 return
             if name not in ctx.signal_names:
@@ -305,6 +340,10 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
         return 1
     if kind == "identifier":
         name = str(expr.get("name", ""))
+        if name in ctx.enum_widths:
+            return max(1, ctx.enum_widths[name])
+        if name in ctx.enum_values:
+            return max(1, ctx.enum_widths.get(name, 1))
         return max(1, ctx.signal_widths.get(name, 1))
     if kind == "bitselect":
         return 1
@@ -345,6 +384,8 @@ def const_eval(expr: dict[str, Any] | None, ctx: ModuleContext) -> int | None:
         return int(value) if isinstance(value, int) else None
     if kind == "identifier":
         name = str(expr.get("name", ""))
+        if name in ctx.enum_values:
+            return ctx.enum_values[name]
         return ctx.parameter_values.get(name)
     if kind == "binop":
         left = const_eval(expr.get("left"), ctx)
@@ -429,6 +470,8 @@ def _render_identifier_rvalue(name: str, ctx: ModuleContext, *, staged_names: fr
         return sanitized
     if name in ctx.loop_vars:
         return sanitized
+    if name in ctx.enum_values:
+        return str(ctx.enum_values[name])
     if name in ctx.parameter_names:
         return sanitized
     if name in ctx.signal_names:
@@ -631,6 +674,16 @@ def _parse_const_literal(text: str) -> int | None:
             return None
     try:
         return int(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_bound(text: str) -> int | None:
+    value = _parse_const_literal(text)
+    if value is not None:
+        return value
+    try:
+        return int((text or "").strip())
     except ValueError:
         return None
 

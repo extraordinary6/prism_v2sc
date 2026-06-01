@@ -27,16 +27,19 @@ from prism_v2sc.ir.model import (
     ContinuousAssignIR,
     DesignIR,
     DiagnosticIR,
+    EnumValueIR,
     InstanceIR,
     ModuleIR,
     ModuleSignature,
     ParameterIR,
+    PackedFieldIR,
     PortIR,
     ProcessIR,
     SensitivityIR,
     SignalIR,
     SubroutineIR,
     SubroutineParamIR,
+    TypeAliasIR,
     WidthIR,
 )
 
@@ -142,6 +145,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
 
     parameters: list[ParameterIR] = []
     ports: list[PortIR] = []
+    type_aliases: list[TypeAliasIR] = []
     signals: list[SignalIR] = []
     continuous_assigns: list[ContinuousAssignIR] = []
     processes: list[ProcessIR] = []
@@ -210,8 +214,11 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             if subroutine is not None:
                 subroutines.append(subroutine)
             diagnostics.extend(body_diagnostics)
-        elif kind in {"TypeAliasType", "TransparentMemberSymbol", "ForwardingTypedefSymbol",
-                       "TypeParameterSymbol", "GenericClassDefSymbol", "ClassType",
+        elif kind == "TypeAliasType":
+            alias = _lower_type_alias(member)
+            if alias is not None:
+                type_aliases.append(alias)
+        elif kind in {"ForwardingTypedefSymbol", "TypeParameterSymbol", "GenericClassDefSymbol", "ClassType",
                        "PropertySymbol", "SequenceSymbol", "AssertionPortSymbol",
                        "ClockingBlockSymbol", "ModportSymbol", "SpecifyBlockSymbol",
                        "EmptyMemberSymbol", "AttributeSymbol", "DefParamSymbol",
@@ -243,6 +250,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
         name=name,
         parameters=tuple(parameters),
         ports=tuple(ports),
+        type_aliases=tuple(type_aliases),
         signals=tuple(signals),
         continuous_assigns=tuple(continuous_assigns),
         processes=tuple(processes),
@@ -288,6 +296,277 @@ def _lower_parameter(parameter: Any) -> ParameterIR:
         value=_parameter_initializer_text(parameter),
         kind=kind,
     )
+
+
+def _lower_type_alias(symbol: Any) -> TypeAliasIR | None:
+    """Lower a slang typedef / enum type into a compact IR record."""
+    if type(symbol).__name__ != "TypeAliasType":
+        return None
+
+    target_type = getattr(symbol, "canonicalType", None) or getattr(symbol, "targetType", None) or getattr(symbol, "type", None)
+    target_kind = type(target_type).__name__
+    if bool(getattr(symbol, "isEnum", False)):
+        alias_kind = "enum"
+    elif target_kind == "PackedStructType":
+        alias_kind = "packed_struct"
+    elif target_kind == "PackedUnionType":
+        alias_kind = "packed_union"
+    else:
+        alias_kind = "typedef"
+    width = _width_from_type(target_type)
+    signed = bool(getattr(target_type, "isSigned", False))
+    enum_values: tuple[EnumValueIR, ...] = ()
+    packed_fields: tuple[PackedFieldIR, ...] = ()
+    if alias_kind == "enum":
+        enum_values = _enum_values_from_type(symbol)
+    elif alias_kind in {"packed_struct", "packed_union"}:
+        packed_fields = _packed_fields_from_type(target_type)
+    return TypeAliasIR(
+        name=str(getattr(symbol, "name", "")),
+        width=width,
+        signed=signed,
+        kind=alias_kind,
+        enum_values=enum_values,
+        packed_fields=packed_fields,
+    )
+
+
+def _packed_fields_from_type(slang_type: Any) -> tuple[PackedFieldIR, ...]:
+    """Extract packed struct / union field layout from slang's symbols."""
+    if slang_type is None:
+        return ()
+    syntax = getattr(slang_type, "syntax", None)
+    fields: list[PackedFieldIR] = []
+    seen: set[str] = set()
+    for member_syntax in getattr(syntax, "members", ()) or ():
+        for declarator in getattr(member_syntax, "declarators", ()) or ():
+            name = _token_text(getattr(declarator, "name", ""))
+            if not name or name in seen:
+                continue
+            field_symbol = _lookup_packed_field(slang_type, name)
+            field_ir = _packed_field_ir(field_symbol)
+            if field_ir is not None:
+                fields.append(field_ir)
+                seen.add(name)
+    if fields:
+        return tuple(fields)
+
+    # Fallback for synthesized or syntax-less types: try the flattened member
+    # iterator if the binding exposes one.
+    for attr in ("members", "fields", "fieldSymbols"):
+        for field_symbol in getattr(slang_type, attr, ()) or ():
+            field_ir = _packed_field_ir(field_symbol)
+            if field_ir is not None and field_ir.name not in seen:
+                fields.append(field_ir)
+                seen.add(field_ir.name)
+    return tuple(fields)
+
+
+def _lookup_packed_field(slang_type: Any, name: str) -> Any:
+    for attr in ("lookupName", "find"):
+        lookup = getattr(slang_type, attr, None)
+        if not callable(lookup):
+            continue
+        try:
+            return lookup(name)
+        except Exception:
+            continue
+    return None
+
+
+def _packed_field_ir(field_symbol: Any) -> PackedFieldIR | None:
+    if field_symbol is None or type(field_symbol).__name__ != "FieldSymbol":
+        return None
+    field_type = getattr(field_symbol, "type", None)
+    offset = _packed_field_offset(field_symbol)
+    if offset is None:
+        return None
+    return PackedFieldIR(
+        name=str(getattr(field_symbol, "name", "")),
+        offset=offset,
+        width=_width_from_type(field_type),
+        signed=bool(getattr(field_type, "isSigned", False)),
+    )
+
+
+def _packed_field_offset(field_symbol: Any) -> int | None:
+    offset = getattr(field_symbol, "bitOffset", None)
+    if offset is None:
+        return None
+    try:
+        return int(offset)
+    except Exception:
+        return None
+
+
+def _bit_width_from_type(slang_type: Any) -> int:
+    width = getattr(slang_type, "bitWidth", None)
+    try:
+        if width is not None:
+            value = int(width)
+            if value > 0:
+                return value
+    except Exception:
+        pass
+    width_ir = _width_from_type(slang_type)
+    if width_ir is None:
+        return 1
+    msb = _parse_width_bound(width_ir.msb)
+    lsb = _parse_width_bound(width_ir.lsb)
+    if msb is None or lsb is None:
+        return 1
+    return abs(msb - lsb) + 1
+
+
+def _parse_width_bound(text: str) -> int | None:
+    try:
+        return int(text)
+    except Exception:
+        return None
+
+
+def _enum_values_from_type(symbol: Any) -> tuple[EnumValueIR, ...]:
+    values: list[EnumValueIR] = []
+    enum_type = getattr(symbol, "canonicalType", None) or symbol
+    syntax = getattr(enum_type, "syntax", None)
+    if syntax is not None:
+        for enum_item in getattr(syntax, "members", ()) or ():
+            if type(enum_item).__name__ != "DeclaratorSyntax":
+                continue
+            name = _token_text(getattr(enum_item, "name", ""))
+            if not name:
+                continue
+            enum_symbol = _lookup_enum_value(enum_type, name)
+            value = _enum_member_value(enum_symbol)
+            if value is None:
+                continue
+            values.append(EnumValueIR(name=name, value=value))
+    if values:
+        return tuple(values)
+    # Fallback to walking the flattened members in symbol order.
+    parent = getattr(symbol, "parentScope", None)
+    if parent is not None:
+        current = getattr(parent, "firstMember", None)
+        while current is not None:
+            if type(current).__name__ == "EnumValueSymbol":
+                value = _enum_member_value(current)
+                if value is not None:
+                    values.append(EnumValueIR(name=str(getattr(current, "name", "")), value=value))
+            current = getattr(current, "nextSibling", None)
+    return tuple(values)
+
+
+def _token_text(token: Any) -> str:
+    for attr in ("valueText", "value", "rawText"):
+        value = getattr(token, attr, None)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:
+                value = None
+        if value is not None:
+            text = str(value).strip()
+            if text:
+                return text
+    return str(token).strip()
+
+
+def _lookup_enum_value(enum_type: Any, name: str) -> Any:
+    if enum_type is None or not name:
+        return None
+    lookup = getattr(enum_type, "lookupName", None)
+    if callable(lookup):
+        try:
+            return lookup(name)
+        except Exception:
+            return None
+    return None
+
+
+def _enum_member_value(symbol: Any) -> int | None:
+    if symbol is None:
+        return None
+    value = getattr(symbol, "value", None)
+    if value is None:
+        return None
+    int_value = getattr(value, "integer", None)
+    if int_value is not None:
+        try:
+            return int(int_value.as_int())
+        except Exception:
+            pass
+    if hasattr(value, "convertToInt"):
+        try:
+            converted = value.convertToInt()
+            if hasattr(converted, "value"):
+                return int(converted.value)
+        except Exception:
+            pass
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _enum_value_from_expr(expr: Any) -> int | None:
+    if expr is None:
+        return None
+    if str(getattr(expr, "kind", "")).rsplit(".", 1)[-1] == "Conversion":
+        expr = getattr(expr, "operand", None)
+    value = getattr(expr, "constant", None)
+    if value is not None:
+        int_value = getattr(value, "integer", None)
+        if int_value is not None:
+            try:
+                return int(int_value.as_int())
+            except Exception:
+                pass
+        if hasattr(value, "convertToInt"):
+            try:
+                converted = value.convertToInt()
+                if hasattr(converted, "value"):
+                    return int(converted.value)
+            except Exception:
+                pass
+    symbol = getattr(expr, "symbol", None)
+    if symbol is not None:
+        return _enum_member_value(symbol)
+    try:
+        return int(_constant_value_text(value))
+    except Exception:
+        return None
+
+
+def _enum_intconst(symbol: Any, expr_type: Any = None) -> dict[str, Any] | None:
+    if type(symbol).__name__ != "EnumValueSymbol":
+        return None
+    value = _enum_member_value(symbol)
+    if value is None:
+        return None
+    enum_type = expr_type or getattr(symbol, "type", None)
+    width = getattr(enum_type, "bitWidth", None)
+    width_int = int(width) if isinstance(width, int) and width > 0 else None
+    return {
+        "kind": "intconst",
+        "raw": f"{width_int}'d{value}" if width_int is not None else str(value),
+        "value": value,
+        "width": width_int,
+        "base": 10,
+        "has_xz": False,
+        "digits": str(value),
+    }
+
+
+def _intconst_ir(value: int) -> dict[str, Any]:
+    return {
+        "kind": "intconst",
+        "raw": str(value),
+        "value": int(value),
+        "width": None,
+        "base": 10,
+        "has_xz": False,
+        "digits": str(value),
+    }
 
 
 def _parameter_initializer_text(parameter: Any) -> str:
@@ -1011,6 +1290,9 @@ def _render_expression(expr: Any) -> str:
         subst = _lookup_genvar_subst(symbol)
         if subst is not None:
             return subst
+        enum_const = _enum_intconst(symbol, getattr(expr, "type", None))
+        if enum_const is not None:
+            return str(enum_const["raw"])
         return getattr(symbol, "name", "")
     if kind_name == "IntegerLiteral":
         return _format_integer_literal(expr)
@@ -1032,6 +1314,9 @@ def _render_expression(expr: Any) -> str:
         return f"{_render_expression(expr.value)}[{_render_expression(expr.selector)}]"
     if kind_name == "RangeSelect":
         return f"{_render_expression(expr.value)}[{_render_expression(expr.left)}:{_render_expression(expr.right)}]"
+    if kind_name == "MemberAccess":
+        member = getattr(expr, "member", None)
+        return f"{_render_expression(getattr(expr, 'value', None))}.{getattr(member, 'name', '')}"
     if kind_name == "Assignment":
         op = "<=" if getattr(expr, "isNonBlocking", False) else "="
         return f"{_render_expression(expr.left)} {op} {_render_expression(expr.right)}"
@@ -1071,6 +1356,9 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
                 "has_xz": False,
                 "digits": subst,
             }
+        enum_const = _enum_intconst(symbol, getattr(expr, "type", None))
+        if enum_const is not None:
+            return enum_const
         return {"kind": "identifier", "name": getattr(symbol, "name", "")}
     if kind_name == "IntegerLiteral":
         return _lower_integer_literal(expr)
@@ -1114,6 +1402,10 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
             "msb": _lower_expression(expr.left),
             "lsb": _lower_expression(expr.right),
         }
+    if kind_name == "MemberAccess":
+        lowered = _lower_packed_member_access(expr)
+        if lowered is not None:
+            return lowered
     if kind_name == "Conversion":
         return _lower_expression(expr.operand)
     if kind_name == "Assignment":
@@ -1126,6 +1418,53 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         return {"kind": "funcall", "name": callee, "args": args}
     syntax = getattr(expr, "syntax", None)
     return {"kind": "raw", "text": str(syntax).strip() if syntax is not None else ""}
+
+
+def _lower_packed_member_access(expr: Any) -> dict[str, Any] | None:
+    member = getattr(expr, "member", None)
+    if type(member).__name__ != "FieldSymbol":
+        return None
+    base_expr, offset = _packed_access_base_and_offset(getattr(expr, "value", None))
+    if offset is None:
+        return None
+    field_width = _bit_width_from_type(getattr(member, "type", None))
+    member_offset = _packed_field_offset(member)
+    if member_offset is None:
+        return None
+    offset += member_offset
+    if field_width <= 1:
+        return {
+            "kind": "bitselect",
+            "target": base_expr,
+            "index": _intconst_ir(offset),
+        }
+    return {
+        "kind": "partselect",
+        "target": base_expr,
+        "msb": _intconst_ir(offset + field_width - 1),
+        "lsb": _intconst_ir(offset),
+    }
+
+
+def _packed_access_base_and_offset(expr: Any) -> tuple[dict[str, Any], int] | tuple[None, None]:
+    node = expr
+    offset = 0
+    while node is not None and str(getattr(node, "kind", "")).rsplit(".", 1)[-1] == "Conversion":
+        node = getattr(node, "operand", None)
+    while node is not None and str(getattr(node, "kind", "")).rsplit(".", 1)[-1] == "MemberAccess":
+        member = getattr(node, "member", None)
+        if type(member).__name__ != "FieldSymbol":
+            return None, None
+        member_offset = _packed_field_offset(member)
+        if member_offset is None:
+            return None, None
+        offset += member_offset
+        node = getattr(node, "value", None)
+        while node is not None and str(getattr(node, "kind", "")).rsplit(".", 1)[-1] == "Conversion":
+            node = getattr(node, "operand", None)
+    if node is None:
+        return None, None
+    return _lower_expression(node), offset
 
 
 def _binary_operator_name(expr: Any) -> str:
@@ -1252,7 +1591,10 @@ def _width_from_type(slang_type: Any) -> WidthIR | None:
             return None
     fixed_range = None
     if getattr(slang_type, "hasFixedRange", False):
-        fixed_range = slang_type.getBitVectorRange()
+        fixed_range = getattr(slang_type, "fixedRange", None)
+        get_range = getattr(slang_type, "getBitVectorRange", None)
+        if fixed_range is None and callable(get_range):
+            fixed_range = get_range()
     elif hasattr(slang_type, "range"):
         try:
             fixed_range = slang_type.range

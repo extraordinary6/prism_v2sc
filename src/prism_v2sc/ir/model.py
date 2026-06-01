@@ -51,6 +51,36 @@ class SignalIR:
 
 
 @dataclass(frozen=True)
+class EnumValueIR:
+    """One flattened SystemVerilog enum member."""
+
+    name: str
+    value: int
+
+
+@dataclass(frozen=True)
+class PackedFieldIR:
+    """One field inside a flattened packed struct / union alias."""
+
+    name: str
+    offset: int
+    width: WidthIR | None = None
+    signed: bool = False
+
+
+@dataclass(frozen=True)
+class TypeAliasIR:
+    """SystemVerilog typedef metadata after elaborated type flattening."""
+
+    name: str
+    width: WidthIR | None = None
+    signed: bool = False
+    kind: str = "typedef"
+    enum_values: tuple[EnumValueIR, ...] = field(default_factory=tuple)
+    packed_fields: tuple[PackedFieldIR, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class ContinuousAssignIR:
     """Continuous assignment."""
 
@@ -162,6 +192,7 @@ class ModuleIR:
     name: str
     parameters: tuple[ParameterIR, ...] = field(default_factory=tuple)
     ports: tuple[PortIR, ...] = field(default_factory=tuple)
+    type_aliases: tuple[TypeAliasIR, ...] = field(default_factory=tuple)
     signals: tuple[SignalIR, ...] = field(default_factory=tuple)
     continuous_assigns: tuple[ContinuousAssignIR, ...] = field(default_factory=tuple)
     processes: tuple[ProcessIR, ...] = field(default_factory=tuple)

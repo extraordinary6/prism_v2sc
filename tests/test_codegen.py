@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from prism_v2sc.codegen.systemc import generate_systemc_header
+from prism_v2sc.ir.model import WidthIR
 
 from _pyslang_helper import lower_via_pyslang
 
@@ -155,3 +156,87 @@ endmodule
     assert "q.write(__next_q);" in header
     assert "SC_METHOD(always_ff_0);" in header
     assert "sensitive << clk.pos() << rst_n.neg();" in header
+
+
+def test_generate_systemc_header_for_typedef_enum(tmp_path: Path) -> None:
+    rtl = tmp_path / "enum_demo.sv"
+    rtl.write_text(
+        """
+module enum_demo(input logic clk, input logic rst_n, input logic go, output logic done, output logic [1:0] state_bits);
+  typedef enum logic [1:0] { IDLE = 2'b00, BUSY = 2'b01, DONE = 2'b10 } state_t;
+  state_t state;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) state <= IDLE;
+    else if (go) state <= BUSY;
+    else state <= DONE;
+  end
+  assign done = (state == DONE);
+  assign state_bits = state;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "enum_demo")
+    module = next(module for module in design.modules if module.name == "enum_demo")
+    assert module.type_aliases[0].width == WidthIR(msb="1", lsb="0")
+
+    header = generate_systemc_header(design)
+    assert "state_t" not in header
+    assert "IDLE" not in header
+    assert "BUSY" not in header
+    assert "DONE" not in header
+    assert "state.write(__next_state);" in header
+    assert "done.write((state.read() == 0b10));" in header or "done.write((state.read() == 2));" in header
+
+
+def test_generate_systemc_header_for_packed_struct_and_union(tmp_path: Path) -> None:
+    rtl = tmp_path / "packed_aggregate_demo.sv"
+    rtl.write_text(
+        """
+module packed_aggregate_demo(
+  input  logic [3:0] a,
+  input  logic [3:0] b,
+  input  logic       flag,
+  output logic [3:0] hi,
+  output logic [3:0] lo,
+    output logic [7:0] mirror
+);
+  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;
+  typedef union packed { logic [7:0] wide; pair_t pair; } overlay_t;
+  pair_t state;
+  overlay_t overlay;
+  always @(*) begin
+    state.hi = a;
+    state.lo = b;
+    overlay.wide = flag ? {a, b} : {b, a};
+  end
+  assign hi = state.hi;
+  assign lo = overlay.pair.lo;
+  assign mirror = overlay.wide;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "packed_aggregate_demo")
+    module = next(module for module in design.modules if module.name == "packed_aggregate_demo")
+    aliases = {alias.name: alias for alias in module.type_aliases}
+
+    assert aliases["pair_t"].kind == "packed_struct"
+    assert [(field.name, field.offset) for field in aliases["pair_t"].packed_fields] == [("hi", 4), ("lo", 0)]
+    assert aliases["overlay_t"].kind == "packed_union"
+    assert [(field.name, field.offset) for field in aliases["overlay_t"].packed_fields] == [
+        ("wide", 0),
+        ("pair", 0),
+    ]
+    assert module.signals[0].width == WidthIR(msb="7", lsb="0")
+
+    header = generate_systemc_header(design)
+    assert "pair_t" not in header
+    assert "overlay_t" not in header
+    assert "sc_signal<sc_uint<8>> state;" in header
+    assert "sc_signal<sc_uint<8>> overlay;" in header
+    assert "__next_state.range(7, 4) = a.read();" in header
+    assert "__next_state.range(3, 0) = b.read();" in header
+    assert "hi.write(state.read().range(7, 4));" in header
+    assert "lo.write(overlay.read().range(3, 0));" in header
+    assert "mirror.write(overlay.read().range(7, 0));" in header
