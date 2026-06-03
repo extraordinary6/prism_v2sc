@@ -1,7 +1,6 @@
 // Package definition with constants, typedef, and function
 package math_pkg;
   parameter int DATA_WIDTH = 8;
-  parameter int MAX_VAL = 255;
 
   typedef enum logic [1:0] {
     OP_ADD = 2'b00,
@@ -14,7 +13,7 @@ package math_pkg;
     input logic [DATA_WIDTH:0] val
   );
     if (val[DATA_WIDTH])  // overflow
-      return MAX_VAL;
+      return 8'd255;
     else
       return val[DATA_WIDTH-1:0];
   endfunction
