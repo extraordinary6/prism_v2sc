@@ -1,20 +1,13 @@
-// Package definition with constants, typedef, and function
+// Package definition with constants and parameters
 package math_pkg;
-  typedef enum logic [1:0] {
-    OP_ADD = 2'b00,
-    OP_SUB = 2'b01,
-    OP_AND = 2'b10,
-    OP_OR  = 2'b11
-  } op_t;
+  // Operation codes as parameters (iverilog compatible)
+  parameter logic [1:0] OP_ADD = 2'b00;
+  parameter logic [1:0] OP_SUB = 2'b01;
+  parameter logic [1:0] OP_AND = 2'b10;
+  parameter logic [1:0] OP_OR  = 2'b11;
 
-  function automatic logic [7:0] saturate(
-    input logic [8:0] val
-  );
-    if (val[8])  // overflow
-      return 8'd255;
-    else
-      return val[7:0];
-  endfunction
+  // Saturation threshold
+  parameter logic [7:0] SAT_MAX = 8'd255;
 endpackage
 
 // Import at file scope for better iverilog compatibility
@@ -29,19 +22,20 @@ module package_import (
   input  logic [1:0] op_sel,
   output logic [7:0] result
 );
-  logic [8:0] sum;
-  op_t operation;
+  // Import inside module for iverilog function resolution
+  import math_pkg::*;
 
-  assign operation = op_t'(op_sel);
+  logic [8:0] sum;
+  logic [1:0] operation;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       result <= '0;
     end else begin
-      case (operation)
+      case (op_sel)
         OP_ADD: begin
           sum = {1'b0, a} + {1'b0, b};
-          result <= saturate(sum);
+          result <= sum[8] ? SAT_MAX : sum[7:0];
         end
         OP_SUB: begin
           result <= (a > b) ? (a - b) : 8'b0;
