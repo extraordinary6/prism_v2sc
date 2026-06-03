@@ -9,7 +9,7 @@ The classification is by **evidence strength**, not by syntactic category — th
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Twenty-one fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Twenty-two fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
@@ -25,8 +25,9 @@ Twenty-one fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file
 | **Literals** | sized (`8'hFF`, `3'b010`, `4'd5`), unsized decimal; integer `value` field reflects the actual bit pattern |
 | **Type aliases** | `typedef` / `enum` flattened to bit-width metadata in `ModuleIR.type_aliases`; enum members lower to integer constants |
 | **Packed aggregates** | packed `struct` / `union` flattened to one vector; field reads and writes lower through bit/part-selects (`packed_aggregate_demo`) |
+| **Packages** | `package` + `import pkg::*` / `import pkg::item` extract functions, typedefs, and parameters from packages; package parameters emit as template arguments (`package_import`) |
 | **Generate** | `generate for` (slang unrolls), `generate if` (slang folds), bit-select bindings on the unrolled instances aggregate into a single writer per parent signal |
-| **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)` |
+| **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)`, `return` statement supported |
 | **Multi-writer aggregation** | multiple procedural blocks writing different bit/part-select slices of the same parent signal land in one shadow-driven assembler — verified by the `slice_writers` fixture |
 | **System calls** | `$signed(x)` / `$unsigned(x)` emit real `sc_int<W>` / `sc_uint<W>` casts (was a no-op before — silently dropped sign information) |
 
@@ -81,7 +82,7 @@ slang already parses every entry here; the gap is `ModuleIR` doesn't carry the s
 | --- | --- | --- |
 | ~~`typedef` + `enum` flattened to bit-width~~ | Done: `frontend/lower._lower_module` records the width mapping and enum member values | small |
 | ~~Packed `struct` / `union` (flatten to one `sc_uint<sum>` with field bit-offsets)~~ | Done: alias metadata records fields and member access lowers to bit/part-selects | medium |
-| `package` + `import` | slang already resolves names; lowerer just consumes the resulting symbols | small (mostly free) |
+| ~~`package` + `import`~~ | Done: wildcard and explicit imports extract functions, typedefs, and parameters from packages | small (mostly free) |
 | `interface` + `modport` | a new `InterfaceIR` concept end-to-end; currently rejected outright | large — needs its own design doc |
 
 ## F. Priority 3 — intentionally out of scope
@@ -108,7 +109,7 @@ The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR
 5. ~~**Procedural `for`.** Common in synthesizable RTL (bit reverse, parity, parametric reduce); lowering is mechanical — slang gives constant-bounds-resolved loops.~~ Done: unrolls at elaboration time with genvar substitution, verified by `procedural_for` fixture. Also fixed staged-context bug where RHS reads of staged signals incorrectly used `.read()` instead of `__next_` temporaries.
 6. ~~**`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.~~ Done: `typedef_enum_fsm` verifies enum members and aliased state storage.
 7. ~~**Packed `struct`.** Builds on the typedef work.~~ Done: `packed_aggregate_demo` verifies packed struct fields and packed union overlays.
-8. **`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.
+8. ~~**`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.~~ Done: `package_import` verifies wildcard imports extract functions, typedefs, enum members, and parameters. Also added `return` statement support for function bodies.
 9. **`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.
 10. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
 

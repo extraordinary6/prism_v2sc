@@ -301,6 +301,18 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=64,
     ),
+    Fixture(
+        name="package_import",
+        sources=("package_import.sv",),
+        top="package_import",
+        inputs=(Port("a", 8), Port("b", 8), Port("op_sel", 2)),
+        outputs=(Port("result", 8),),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
 )
 
 

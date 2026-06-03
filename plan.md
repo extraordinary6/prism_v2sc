@@ -90,8 +90,11 @@ have already landed are struck through here for history.
    selects.~~ Done: alias metadata records packed fields, member access
    lowers to bit/part selects, and `packed_aggregate_demo` verifies struct
    and union overlays.
-8. **`package` + `import`.** slang already resolves the names; mostly
-   a "release the brake" change in the lowerer.
+8. ~~**`package` + `import`.** slang already resolves the names; mostly
+   a "release the brake" change in the lowerer.~~ Done: wildcard and
+   explicit imports extract functions, typedefs, and parameters from
+   packages. `package_import` fixture verifies enum, function, and parameter
+   usage across package boundaries.
 9. **`inout` ports.** Single-feature audit + fixture; needs to decide
    how to model bidirectional bus semantics under `SC_METHOD`.
 10. **`interface` + `modport`.** Large enough to warrant its own design

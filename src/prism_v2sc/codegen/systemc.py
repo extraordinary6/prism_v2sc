@@ -1158,6 +1158,13 @@ def _emit_structured_statement(
     if kind in {"blocking_assign", "nonblocking_assign"}:
         return [prefix + _emit_tree_assignment(statement, ctx, staged_names)]
 
+    if kind == "return":
+        value_expr = statement.get("value_expr")
+        if value_expr is None:
+            return [f"{prefix}return;"]
+        value_cpp = render_rvalue(value_expr, ctx, staged_names=staged_names)
+        return [f"{prefix}return {value_cpp};"]
+
     if kind == "if":
         cond_text = _render_cond(statement, ctx, staged_names=staged_names)
         lines = [f"{prefix}if ({cond_text}) {{"]

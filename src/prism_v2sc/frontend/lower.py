@@ -214,6 +214,18 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             if subroutine is not None:
                 subroutines.append(subroutine)
             diagnostics.extend(body_diagnostics)
+        elif kind == "WildcardImportSymbol":
+            # Wildcard import (import pkg::*) - extract subroutines, typedefs, and parameters from package
+            package_subroutines, package_aliases, package_params = _extract_from_package_import(member, name)
+            subroutines.extend(package_subroutines)
+            type_aliases.extend(package_aliases)
+            parameters.extend(package_params)
+        elif kind == "ExplicitImportSymbol":
+            # Explicit import (import pkg::item) - extract specific items from package
+            package_subroutines, package_aliases, package_params = _extract_from_explicit_import(member, name)
+            subroutines.extend(package_subroutines)
+            type_aliases.extend(package_aliases)
+            parameters.extend(package_params)
         elif kind == "TypeAliasType":
             alias = _lower_type_alias(member)
             if alias is not None:
@@ -745,6 +757,8 @@ def _lower_statement(statement: Any, module_name: str, diagnostics: list[Diagnos
         return _lower_case_statement(statement, module_name, diagnostics)
     if kind_name == "ForLoop":
         return _lower_for_loop_statement(statement, module_name, diagnostics)
+    if kind_name == "Return":
+        return _lower_return_statement(statement)
     if kind_name == "Block":
         children = [_lower_statement(child, module_name, diagnostics) for child in _flatten_statements(statement)]
         if len(children) == 1:
@@ -775,6 +789,19 @@ def _lower_expression_statement(expr: Any) -> dict[str, Any]:
             "right_expr": _lower_expression(expr.right),
         }
     return {"type": "unsupported", "node": kind_name}
+
+
+def _lower_return_statement(statement: Any) -> dict[str, Any]:
+    """Lower a return statement from a function body."""
+    expr = getattr(statement, "expr", None)
+    if expr is None:
+        # return with no value (void function)
+        return {"type": "return", "value": None, "value_expr": None}
+    return {
+        "type": "return",
+        "value": _render_expression(expr),
+        "value_expr": _lower_expression(expr),
+    }
 
 
 def _lower_conditional_statement(statement: Any, module_name: str, diagnostics: list[DiagnosticIR]) -> dict[str, Any]:
@@ -1024,6 +1051,72 @@ def _statement_summary(statement: Any) -> str:
         if conds:
             return f"if {_render_expression(conds[0].expr)}"
     return kind_name
+
+
+def _extract_from_package_import(
+    import_symbol: Any, module_name: str
+) -> tuple[list[SubroutineIR], list[TypeAliasIR], list[ParameterIR]]:
+    """Extract subroutines, type aliases, and parameters from a wildcard package import.
+
+    slang resolves `import pkg::*` by linking to the package symbol, and we
+    extract all synthesizable functions, typedefs, and parameters from that package.
+    """
+    subroutines: list[SubroutineIR] = []
+    type_aliases: list[TypeAliasIR] = []
+    pkg_parameters: list[ParameterIR] = []
+
+    # Get the package symbol via the import
+    package = getattr(import_symbol, "package", None)
+    if package is None:
+        return subroutines, type_aliases, pkg_parameters
+
+    # Walk the package members and extract subroutines, type aliases, and parameters
+    for pkg_member in package:
+        kind = type(pkg_member).__name__
+        if kind == "SubroutineSymbol":
+            subroutine, _ = _lower_subroutine(pkg_member, module_name)
+            if subroutine is not None:
+                subroutines.append(subroutine)
+        elif kind == "TypeAliasType":
+            alias = _lower_type_alias(pkg_member)
+            if alias is not None:
+                type_aliases.append(alias)
+        elif kind == "ParameterSymbol":
+            pkg_parameters.append(_lower_parameter(pkg_member))
+
+    return subroutines, type_aliases, pkg_parameters
+
+
+def _extract_from_explicit_import(
+    import_symbol: Any, module_name: str
+) -> tuple[list[SubroutineIR], list[TypeAliasIR], list[ParameterIR]]:
+    """Extract a specific item from an explicit package import.
+
+    slang resolves `import pkg::item` by directly linking to the imported
+    symbol. We check if it's a function, typedef, or parameter and lower it accordingly.
+    """
+    subroutines: list[SubroutineIR] = []
+    type_aliases: list[TypeAliasIR] = []
+    pkg_parameters: list[ParameterIR] = []
+
+    # Get the imported symbol
+    imported = getattr(import_symbol, "importedSymbol", None)
+    if imported is None:
+        return subroutines, type_aliases, pkg_parameters
+
+    kind = type(imported).__name__
+    if kind == "SubroutineSymbol":
+        subroutine, _ = _lower_subroutine(imported, module_name)
+        if subroutine is not None:
+            subroutines.append(subroutine)
+    elif kind == "TypeAliasType":
+        alias = _lower_type_alias(imported)
+        if alias is not None:
+            type_aliases.append(alias)
+    elif kind == "ParameterSymbol":
+        pkg_parameters.append(_lower_parameter(imported))
+
+    return subroutines, type_aliases, pkg_parameters
 
 
 def _lower_subroutine(symbol: Any, module_name: str) -> tuple[SubroutineIR | None, list[DiagnosticIR]]:
