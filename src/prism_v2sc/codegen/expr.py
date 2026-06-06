@@ -19,6 +19,7 @@ JSON dump:
     {"kind": "bitselect", "target": {...}, "index": {...}}
     {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
     # Packed struct/union member access lowers to bitselect / partselect.
+    {"kind": "cast", "signed": True, "width": 8, "operand": {...}}
     {"kind": "syscall", "name": "signed", "args": [{...}]}
     {"kind": "funcall", "name": "add_one", "args": [{...}]}
     {"kind": "raw", "text": "..."}     # safety fallback
@@ -244,6 +245,8 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         msb = render_rvalue(expr.get("msb"), ctx, staged_names=staged_names)
         lsb = render_rvalue(expr.get("lsb"), ctx, staged_names=staged_names)
         return f"{target_str}.range({msb}, {lsb})"
+    if kind == "cast":
+        return _render_cast(expr, ctx, staged_names=staged_names)
     if kind == "syscall":
         return _render_syscall(expr, ctx, staged_names=staged_names)
     if kind == "funcall":
@@ -370,6 +373,11 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
     if kind == "repeat":
         count = const_eval(expr.get("count"), ctx) or 1
         return max(1, count * infer_width(expr.get("value"), ctx))
+    if kind == "cast":
+        width = expr.get("width")
+        if isinstance(width, int) and width > 0:
+            return width
+        return infer_width(expr.get("operand"), ctx)
     if kind == "binop":
         op = str(expr.get("op", ""))
         if op in {"==", "!=", "===", "!==", "<", ">", "<=", ">=", "&&", "||"}:
@@ -464,6 +472,8 @@ def const_eval(expr: dict[str, Any] | None, ctx: ModuleContext) -> int | None:
         if cond is None:
             return None
         return const_eval(expr.get("true" if cond else "false"), ctx)
+    if kind == "cast":
+        return const_eval(expr.get("operand"), ctx)
     return None
 
 
@@ -631,6 +641,15 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     return "(" + " | ".join(pieces) + ")"
 
 
+def _render_cast(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
+    width = expr.get("width")
+    if not isinstance(width, int) or width <= 0:
+        width = infer_width(expr.get("operand"), ctx)
+    target_type = "sc_int" if bool(expr.get("signed")) else "sc_uint"
+    operand = render_rvalue(expr.get("operand"), ctx, staged_names=staged_names)
+    return f"{target_type}<{max(1, width)}>({operand})"
+
+
 def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     name = str(expr.get("name", ""))
     args_nodes = expr.get("args", []) or []
@@ -650,6 +669,10 @@ def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: f
 def _format_intconst(expr: dict[str, Any]) -> str:
     if expr.get("has_xz"):
         return "0"
+    if expr.get("signed"):
+        signed_value = expr.get("signed_value")
+        if isinstance(signed_value, int):
+            return str(signed_value)
     digits = expr.get("digits")
     base = expr.get("base", 10)
     if isinstance(digits, str) and digits:

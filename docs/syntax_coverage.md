@@ -10,12 +10,12 @@ The classification is by **evidence strength**, not by syntactic category — th
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Twenty-four fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Twenty-five fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
 | **Structure** | module def / inst, named + positional port binding, parameter override (slang elaborates), nested hierarchy, multi-file build with `+incdir+` / `-D` / nested `-f` filelists |
-| **Ports & signals** | `input` / `output`, whole-vector `inout`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]`; `inout` lowers to SystemC resolved vectors and is verified for mutually exclusive external/DUT drivers across a whole-bus hierarchical binding |
+| **Ports & signals** | `input` / `output`, whole-vector `inout`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]`, signed declarations lowered to `sc_int<W>` (`bool` is used only for unsigned 1-bit); `inout` lowers to SystemC resolved vectors and is verified for mutually exclusive external/DUT drivers across a whole-bus hierarchical binding |
 | **Memories** | unpacked arrays (`reg [W-1:0] mem [0:D-1]`) lowered to a per-cell `sc_signal<sc_uint<W>>` array; per-cell `.write()` / `.read()` gives Verilog nonblocking semantics via SystemC delta cycles |
 | **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
 | **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
@@ -23,7 +23,7 @@ Twenty-four fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_fil
 | **Operators** | full binary `+ - * / % == != < > <= >= && \|\| & \| ^ << >>`, ternary `?:`, unary `! ~ - +`, reduction `& \| ^ ~& ~\| ^~ ~^`; arithmetic `>>>` via `$signed` cast |
 | **Selects** | bit-select `sig[i]` (read + write), part-select `sig[msb:lsb]` (read + write); LHS uses staged `__next_*` |
 | **Aggregates** | `{a, b}` concat, `{N{x}}` replication |
-| **Literals** | sized (`8'hFF`, `3'b010`, `4'd5`), unsized decimal; integer `value` field reflects the actual bit pattern |
+| **Literals** | sized (`8'hFF`, `3'b010`, `4'd5`), signed based (`8'shFF`), unsized decimal; integer `value` field reflects the actual bit pattern and signed based literals also carry `signed_value` |
 | **Type aliases** | `typedef` / `enum` flattened to bit-width metadata in `ModuleIR.type_aliases`; enum members lower to integer constants |
 | **Packed aggregates** | packed `struct` / `union` flattened to one vector; field reads and writes lower through bit/part-selects (`packed_aggregate_demo`) |
 | **Packages** | `package` + `import pkg::*` / `import pkg::item` extract functions, typedefs, and parameters from packages; package parameters emit as template arguments (`package_import`) |
@@ -31,7 +31,7 @@ Twenty-four fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_fil
 | **Generate** | `generate for` (slang unrolls), `generate if` (slang folds), bit-select bindings on the unrolled instances aggregate into a single writer per parent signal |
 | **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)`, `return` statement supported |
 | **Multi-writer aggregation** | multiple procedural blocks writing different bit/part-select slices of the same parent signal land in one shadow-driven assembler — verified by the `slice_writers` fixture |
-| **System calls** | `$signed(x)` / `$unsigned(x)` emit real `sc_int<W>` / `sc_uint<W>` casts (was a no-op before — silently dropped sign information) |
+| **Casts** | `$signed(x)` / `$unsigned(x)` and explicit SV casts such as `signed'(x)` / `unsigned'(x)` emit real `sc_int<W>` / `sc_uint<W>` casts |
 
 ## B. Conversion-CI-verified (lowering / header contract)
 
@@ -83,7 +83,7 @@ These are the dangerous ones: most either silently miscompile or take the `unsup
 | bit-select hierarchical `inout` bindings | child `inout` ports connected to `bus[i]` need a carefully audited proxy model | not trace-equivalence-verified; use whole-vector `inout` bindings for the supported path |
 | complex interfaces | clocking blocks, interface tasks/functions, nested interfaces, interface arrays, modport expressions/exports | not trace-equivalence-verified; current support is packed-signal/simple-modport flattening |
 | `defparam` | legacy code | slang resolves it at elaboration; **no fixture pins behavior** |
-| `signed`-declared ports in the equivalence harness | true signed-port designs (not just `$signed` casts) | the `Port` dataclass in `run_equivalence.py` doesn't carry a `signed` flag yet, so trace fixtures can't drive `sc_int` ports |
+| complex mixed signed/unsigned context sizing | SV expression signedness and width can be context-determined across nested mixed operands | partially covered by declared signed ports/signals and explicit casts; full expression-level signedness propagation is not modeled exhaustively. See `docs/signed_mixed_semantics.md` |
 
 ## F. Priority 2 — SystemVerilog feature rollout
 

@@ -45,10 +45,10 @@ from prism_v2sc.ir.model import (
 
 
 _SIZED_LITERAL = re.compile(
-    r"^(?P<size>\d+)?\s*'\s*(?P<base>[bodhBODH])(?P<digits>[0-9a-fA-F_xXzZ?]+)$"
+    r"^(?P<size>\d+)?\s*'\s*(?P<signed>[sS])?\s*(?P<base>[bodhBODH])(?P<digits>[0-9a-fA-F_xXzZ?]+)$"
 )
 _UNSIZED_LITERAL = re.compile(
-    r"^'\s*(?P<base>[bodhBODH])(?P<digits>[0-9a-fA-F_xXzZ?]+)$"
+    r"^'\s*(?P<signed>[sS])?\s*(?P<base>[bodhBODH])(?P<digits>[0-9a-fA-F_xXzZ?]+)$"
 )
 _BASE_MAP = {"b": 2, "o": 8, "d": 10, "h": 16}
 
@@ -1656,6 +1656,18 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         if lowered is not None:
             return lowered
     if kind_name == "Conversion":
+        syntax = getattr(expr, "syntax", None)
+        # Preserve explicit SV casts such as ``signed'(x)`` / ``unsigned'(x)``.
+        # Implicit conversions inserted by slang for assignment sizing have no
+        # syntax and are left transparent so they don't pollute every RHS.
+        if syntax is not None:
+            target_type = getattr(expr, "type", None)
+            return {
+                "kind": "cast",
+                "signed": bool(getattr(target_type, "isSigned", False)),
+                "width": _bit_width_from_type(target_type),
+                "operand": _lower_expression(expr.operand),
+            }
         return _lower_expression(expr.operand)
     if kind_name == "Assignment":
         return _lower_expression(expr.right)
@@ -1784,12 +1796,15 @@ def _lower_integer_literal(literal: Any) -> dict[str, Any]:
     base = 10
     digits = text
     has_xz = False
+    signed = False
     if sized:
         width = int(sized.group("size")) if sized.group("size") else None
+        signed = bool(sized.group("signed"))
         base = _BASE_MAP[sized.group("base").lower()]
         digits = sized.group("digits").replace("_", "")
         has_xz = bool(re.search(r"[xXzZ?]", digits))
     elif unsized:
+        signed = bool(unsized.group("signed"))
         base = _BASE_MAP[unsized.group("base").lower()]
         digits = unsized.group("digits").replace("_", "")
         has_xz = bool(re.search(r"[xXzZ?]", digits))
@@ -1801,15 +1816,31 @@ def _lower_integer_literal(literal: Any) -> dict[str, Any]:
         if bit_width is not None and width is None:
             width = int(bit_width)
     int_value = _digits_to_int(digits, base)
+    if width is not None and width > 0:
+        int_value &= (1 << width) - 1
+    signed_value = _to_signed_value(int_value, width) if signed and width is not None else int_value
     return {
         "kind": "intconst",
         "raw": text,
         "value": int_value,
+        "signed_value": signed_value,
         "width": width,
         "base": base,
+        "signed": signed,
         "has_xz": has_xz,
         "digits": digits,
     }
+
+
+def _to_signed_value(value: int, width: int | None) -> int:
+    if width is None or width <= 0:
+        return value
+    sign_bit = 1 << (width - 1)
+    mask = (1 << width) - 1
+    value &= mask
+    if value & sign_bit:
+        return value - (1 << width)
+    return value
 
 
 # ---------------------------------------------------------------------------

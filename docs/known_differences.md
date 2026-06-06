@@ -20,6 +20,7 @@
 - Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` operand casts. Widths are inferred from declared port/signal widths and from sized literals; if a width cannot be inferred it falls back to 1.
 - Reduction operators `&x`, `|x`, `^x` (and their inverted forms) lower to `sc_uint`'s `and_reduce()` / `or_reduce()` / `xor_reduce()` methods.
 - X/Z values inside literals are approximated as zero in generated C++ expressions. The IR records `has_xz=true` so downstream tooling can still see the original intent.
+- Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>`. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Full SystemVerilog mixed signed/unsigned context sizing is still not exhaustively modeled.
 
 ## Selects and Bindings
 
@@ -38,7 +39,7 @@
 ## Case Statements
 
 - Ordinary `case` lowers to a C++ `switch`. The case-item integer values are correctly resolved (`3'b001` → 1, `8'hFF` → 255, etc.) and the original literal text is preserved in the IR's `raw` field.
-- `casex` / `casez` wildcard semantics are **not** modeled as four-state matching; if a fixture relies on wildcard masking it will fail equivalence.
+- `casez` / `casex` with literal wildcard patterns lower to a mask/match `if` / `else-if` chain. This is verified by trace fixtures for two-state stimulus. It is still not a full four-state model: selector X/Z propagation is outside the converter's two-state expression domain, and non-literal wildcard labels fall back to strict equality.
 
 ## SystemVerilog Surface
 

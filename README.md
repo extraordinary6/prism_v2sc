@@ -63,17 +63,22 @@ Each module's header `#include`s the headers of every child it instantiates, so 
 python -m pytest -q
 ```
 
-Currently 59 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, and subroutines.
+Currently 85 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, and subroutines.
 
 ## Equivalence CI
 
 `.github/workflows/equivalence.yml` runs on Linux. For each fixture under `tests/equivalence/fixtures/` it co-simulates the original RTL (Icarus Verilog) and the generated SystemC (libsystemc-dev) against a shared deterministic stimulus and diffs the per-cycle output traces. See `tests/equivalence/README.md` for fixture list, local usage, and environment overrides.
+
+Local trace-equivalence runs require SystemC headers and libraries. On machines without `<systemc>` available, use the unit suite plus `tests/equivalence/run_equivalence.py --dry-run --keep-going` for conversion coverage, and rely on CI for the final RTL/SystemC trace diff.
 
 ## Further Reading
 
 - `docs/correctness_strategy.md` — how correctness is established and what the golden loop looks like.
 - `docs/syntax_coverage.md` — what RTL surface is verified by the equivalence CI, what is explicitly rejected, and what is queued for Phase 11.
 - `docs/known_differences.md` — explicit list of where generated SystemC diverges from full Verilog/SV semantics.
+- `docs/signed_mixed_semantics.md` — notes on signed / unsigned mixed-expression semantics and remaining context-sizing limits.
 - `docs/hardening_checks.md` — reproducible local checks (unit suite, metrics smoke, static checks).
+- `docs/power_diagnostics.md` — methodology for the planned RTL power hotspot diagnostics layer.
 - `docs/pyslang_migration.md` — historical record of the pyverilog → pyslang migration (Phases A/B/C, completed).
-- `plan.md` — current phase status and the upcoming SV feature rollout list.
+- `plan.md` — current converter phase status and completed SV feature rollout list.
+- `plan2.md` — phased implementation checklist for the planned power diagnostics feature.

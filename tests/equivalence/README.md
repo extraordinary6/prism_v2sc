@@ -37,6 +37,7 @@ Conversion-only fixtures use the same harness for SV constructs that `prism-v2sc
 | `casez_priority` | combinational | priority encoder using `casez` wildcards (mask/match lowering) |
 | `casex_priority` | combinational | priority encoder using `casex` wildcards |
 | `signed_shift_cast` | combinational | `$signed(x) >>> n` — verifies arithmetic right shift via the `sc_int` cast |
+| `signed_declared_arith` | combinational | signed-declared ports/signals, signed comparison, arithmetic right shift, and signed based literals |
 | `regfile_mem` | sequential | 8-entry register file backed by an unpacked array `reg [7:0] mem [0:7]`; verifies the per-cell `sc_signal` array lowering |
 | `procedural_for` | combinational | constant-bound procedural `for` loop unrolling |
 | `typedef_enum_fsm` | sequential | typedef aliases plus enum member values |
@@ -44,7 +45,7 @@ Conversion-only fixtures use the same harness for SV constructs that `prism-v2sc
 | `package_import` | sequential | package wildcard/explicit imports, package functions, typedefs, and parameters |
 | `inout_bus` | combinational | whole-vector `inout` lowering through resolved SystemC vectors |
 
-Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
+Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths/signedness, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
 
 ## Conversion Fixtures
 
@@ -75,7 +76,7 @@ Diagnostic fixtures don't need `iverilog` / SystemC — only `prism-v2sc`. They 
 
 ## Local Usage
 
-Trace fixtures expect `iverilog`, `vvp`, and `g++` on `PATH` together with a working SystemC installation (Ubuntu: `apt install iverilog libsystemc-dev`). On Windows the easiest path is to run inside WSL with the same packages.
+Trace fixtures expect `iverilog`, `vvp`, and `g++` on `PATH` together with a working SystemC installation (Ubuntu: `apt install iverilog libsystemc-dev`). On Windows the easiest path is to run inside WSL with the same packages. If `<systemc>` is not available locally, use `--dry-run --keep-going` to check conversion and generated testbench artifacts; CI remains the authority for full RTL/SystemC trace diffs.
 
 Run everything:
 

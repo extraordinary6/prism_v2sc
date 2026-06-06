@@ -1338,7 +1338,7 @@ def _emit_case_statement(
         if isinstance(cond_exprs, list) and cond_exprs:
             for cond_expr in cond_exprs:
                 if isinstance(cond_expr, dict):
-                    lines.append(f"{prefix}case {render_rvalue(cond_expr, ctx, staged_names=staged_names)}:")
+                    lines.append(f"{prefix}case {_render_case_label(cond_expr, ctx, staged_names=staged_names)}:")
                 else:
                     lines.append(f"{prefix}case {cond_expr}:")
         else:
@@ -1353,6 +1353,21 @@ def _emit_case_statement(
         lines.append(f"{prefix}  break;")
     lines.append(f"{prefix}}}")
     return lines
+
+
+def _render_case_label(
+    expr: dict[str, object],
+    ctx: ModuleContext,
+    *,
+    staged_names: frozenset[str],
+) -> str:
+    # Verilog case labels are matched by sized bit pattern. A signed literal
+    # like 4'shF should therefore emit 15 here, not the arithmetic value -1.
+    if expr.get("kind") == "intconst" and expr.get("signed"):
+        value = expr.get("value")
+        if isinstance(value, int):
+            return str(value)
+    return render_rvalue(expr, ctx, staged_names=staged_names)
 
 
 _WILDCARD_CHARS_CASEZ = "zZ?"
@@ -1721,7 +1736,7 @@ def _signal_type(signal: SignalIR, *, resolved: bool = False) -> str:
 
 def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
-    if width_expr == "1":
+    if width_expr == "1" and not signed:
         return "bool"
     return f"sc_{'int' if signed else 'uint'}<{width_expr}>"
 

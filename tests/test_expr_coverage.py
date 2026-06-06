@@ -385,3 +385,118 @@ endmodule
     )
     header = generate_systemc_header(design)
     assert "sc_uint<8>(x.read())" in header
+
+
+def test_signed_declared_ports_and_signals_emit_sc_int(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_decl(
+  input  wire signed [7:0] a,
+  output reg  signed [8:0] y
+);
+  reg signed [8:0] acc;
+  always @(*) begin
+    acc = a;
+    y = acc;
+  end
+endmodule
+""",
+        "signed_decl",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_in<sc_int<8>> a;" in header
+    assert "sc_out<sc_int<9>> y;" in header
+    assert "sc_signal<sc_int<9>> acc;" in header
+
+
+def test_one_bit_signed_decl_does_not_collapse_to_bool(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_one_bit(
+  input  wire signed a,
+  output wire signed y
+);
+  assign y = a;
+endmodule
+""",
+        "signed_one_bit",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_in<sc_int<1>> a;" in header
+    assert "sc_out<sc_int<1>> y;" in header
+    assert "sc_in<bool> a;" not in header
+    assert "sc_out<bool> y;" not in header
+
+
+def test_signed_based_literal_preserves_bit_pattern_and_signed_value(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_literal(output wire signed [7:0] y);
+  assign y = 8'shFF;
+endmodule
+""",
+        "signed_literal",
+    )
+    assign = design.modules[0].continuous_assigns[0]
+    expr = assign.right_expr
+    assert expr["kind"] == "intconst"
+    assert expr["raw"] == "8'shFF"
+    assert expr["value"] == 0xFF
+    assert expr["signed"] is True
+    assert expr["signed_value"] == -1
+
+    header = generate_systemc_header(design)
+    assert "y.write(-1);" in header
+    assert "y.write(0);" not in header
+
+
+def test_signed_based_literal_case_label_uses_bit_pattern(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_literal_case(input wire [3:0] op, output reg hit);
+  always @(*) begin
+    case (op)
+      4'shF: hit = 1'b1;
+      default: hit = 1'b0;
+    endcase
+  end
+endmodule
+""",
+        "signed_literal_case",
+    )
+    header = generate_systemc_header(design)
+    assert "case 15:" in header
+    assert "case -1:" not in header
+
+
+def test_explicit_sv_signed_cast_is_preserved(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module sv_signed_cast(input wire [7:0] x, input wire [2:0] n, output wire [7:0] y);
+  assign y = signed'(x) >>> n;
+endmodule
+""",
+        "sv_signed_cast",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_int<8>(x.read())" in header
+    assert "y.write((x.read() >> n.read())" not in header
+
+
+def test_explicit_sv_unsigned_cast_is_preserved(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module sv_unsigned_cast(input wire signed [7:0] x, input wire [2:0] n, output wire [7:0] y);
+  assign y = unsigned'(x) >>> n;
+endmodule
+""",
+        "sv_unsigned_cast",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_uint<8>(x.read())" in header

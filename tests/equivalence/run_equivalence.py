@@ -38,16 +38,19 @@ FIXTURE_DIR = THIS_FILE.parent / "fixtures"
 class Port:
     name: str
     width: int
+    signed: bool = False
     external_drive_control: str | None = None
     external_drive_active: bool = True
 
     @property
     def is_bool(self) -> bool:
-        return self.width == 1
+        return self.width == 1 and not self.signed
 
     @property
     def sc_type(self) -> str:
-        return "bool" if self.is_bool else f"sc_uint<{self.width}>"
+        if self.is_bool:
+            return "bool"
+        return f"sc_{'int' if self.signed else 'uint'}<{self.width}>"
 
     @property
     def sc_rv_type(self) -> str:
@@ -276,6 +279,20 @@ FIXTURES: tuple[Fixture, ...] = (
         top="signed_shift_cast",
         inputs=(Port("x", 8), Port("n", 3)),
         outputs=(Port("y", 8),),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="signed_declared_arith",
+        sources=("signed_declared_arith.sv",),
+        top="signed_declared_arith",
+        inputs=(Port("a", 8, signed=True), Port("b", 8, signed=True), Port("sh", 3)),
+        outputs=(
+            Port("sum", 9, signed=True),
+            Port("shifted", 8, signed=True),
+            Port("lt", 1),
+            Port("literal", 8, signed=True),
+        ),
         sequential=False,
         cycles=128,
     ),
@@ -850,22 +867,12 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         lines.append("  reg clk;")
         lines.append(f"  reg {fixture.reset};")
     for port in inputs:
-        if port.width == 1:
-            lines.append(f"  reg {port.name};")
-        else:
-            lines.append(f"  reg [{port.width - 1}:0] {port.name};")
+        lines.append(f"  {_verilog_decl('reg', port)}")
     for port in inouts:
-        if port.width == 1:
-            lines.append(f"  wire {port.name};")
-            lines.append(f"  reg _tb_drive_{port.name};")
-        else:
-            lines.append(f"  wire [{port.width - 1}:0] {port.name};")
-            lines.append(f"  reg [{port.width - 1}:0] _tb_drive_{port.name};")
+        lines.append(f"  {_verilog_decl('wire', port)}")
+        lines.append(f"  {_verilog_decl('reg', port, name=f'_tb_drive_{port.name}')}")
     for port in outputs:
-        if port.width == 1:
-            lines.append(f"  wire {port.name};")
-        else:
-            lines.append(f"  wire [{port.width - 1}:0] {port.name};")
+        lines.append(f"  {_verilog_decl('wire', port)}")
     for port in inouts:
         control_expr = _verilog_external_drive_expr(port)
         z_literal = "1'bz" if port.width == 1 else f"{port.width}'b{'z' * port.width}"
@@ -1086,10 +1093,14 @@ def render_systemc_tb(
         if port in inouts:
             if port.is_bool:
                 out_parts.append(f"(int)({port.name}.read()[0] == sc_dt::SC_LOGIC_1)")
+            elif port.signed:
+                out_parts.append(f"sc_int<{port.width}>({port.name}.read().to_uint64()).to_int64()")
             else:
                 out_parts.append(f"{port.name}.read().to_uint64()")
         elif port.is_bool:
             out_parts.append(f"(int){port.name}.read()")
+        elif port.signed:
+            out_parts.append(f"{port.name}.read().to_int64()")
         else:
             out_parts.append(f"{port.name}.read().to_uint64()")
     if len(out_parts) == 1:
@@ -1103,6 +1114,14 @@ def render_systemc_tb(
     lines.append("  return 0;")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+def _verilog_decl(kind: str, port: Port, *, name: str | None = None) -> str:
+    signed = " signed" if port.signed else ""
+    target = name or port.name
+    if port.width == 1:
+        return f"{kind}{signed} {target};"
+    return f"{kind}{signed} [{port.width - 1}:0] {target};"
 
 
 def _verilog_external_drive_expr(port: Port) -> str:
