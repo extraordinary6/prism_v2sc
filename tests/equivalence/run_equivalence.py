@@ -38,6 +38,8 @@ FIXTURE_DIR = THIS_FILE.parent / "fixtures"
 class Port:
     name: str
     width: int
+    external_drive_control: str | None = None
+    external_drive_active: bool = True
 
     @property
     def is_bool(self) -> bool:
@@ -46,6 +48,10 @@ class Port:
     @property
     def sc_type(self) -> str:
         return "bool" if self.is_bool else f"sc_uint<{self.width}>"
+
+    @property
+    def sc_rv_type(self) -> str:
+        return f"sc_signal_rv<{self.width}>"
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,7 @@ class Fixture:
     inputs: tuple[Port, ...]
     outputs: tuple[Port, ...]
     sequential: bool
+    inouts: tuple[Port, ...] = ()
     clock: str | None = None
     reset: str | None = None
     reset_active_low: bool = True
@@ -64,6 +71,22 @@ class Fixture:
     seed: int = 0xCAFEBABE
     sc_template_args: tuple[str, ...] = ()
     filelist: str | None = None
+
+
+@dataclass(frozen=True)
+class ConversionFixture:
+    """A fixture that must convert cleanly but cannot be trace-tested here.
+
+    Some SystemVerilog constructs are accepted by pyslang/prism but not by
+    Icarus Verilog. These still run in CI through the same harness: conversion
+    must succeed, ``ir.json`` must be valid, the top header must be emitted,
+    and no error-level diagnostics may appear.
+    """
+
+    name: str
+    sources: tuple[str, ...]
+    top: str
+    required_top_header_snippets: tuple[str, ...] = ()
 
 
 FIXTURES: tuple[Fixture, ...] = (
@@ -313,6 +336,32 @@ FIXTURES: tuple[Fixture, ...] = (
         reset_active_low=True,
         cycles=128,
     ),
+    Fixture(
+        name="inout_bus",
+        sources=("inout_bus.sv",),
+        top="inout_bus",
+        inputs=(Port("oe", 1), Port("din", 4)),
+        inouts=(Port("bus", 4, external_drive_control="oe", external_drive_active=False),),
+        outputs=(Port("seen", 4), Port("mixed", 4)),
+        sequential=False,
+        cycles=128,
+    ),
+)
+
+
+CONVERSION_FIXTURES: tuple[ConversionFixture, ...] = (
+    ConversionFixture(
+        name="interface_modport",
+        sources=("interface_modport.sv",),
+        top="interface_modport",
+        required_top_header_snippets=(
+            "sc_signal<sc_uint<8>> bus__req;",
+            "sc_signal<sc_uint<8>> bus__rsp;",
+            "sc_signal<bool> bus__valid;",
+            "u_src.bus__req(bus__req);",
+            "u_sink.bus__rsp(bus__rsp);",
+        ),
+    ),
 )
 
 
@@ -412,12 +461,17 @@ def main(argv: list[str] | None = None) -> int:
     selected: list[Fixture] = [
         fixture for fixture in FIXTURES if args.fixtures is None or fixture.name in args.fixtures
     ]
+    selected_conversion: list[ConversionFixture] = [
+        fixture
+        for fixture in CONVERSION_FIXTURES
+        if args.fixtures is None or fixture.name in args.fixtures
+    ]
     selected_diag: list[DiagnosticFixture] = [
         fixture
         for fixture in DIAGNOSTIC_FIXTURES
         if args.fixtures is None or fixture.name in args.fixtures
     ]
-    if not selected and not selected_diag:
+    if not selected and not selected_conversion and not selected_diag:
         print("error: no fixtures match the selection", file=sys.stderr)
         return 2
 
@@ -441,6 +495,16 @@ def main(argv: list[str] | None = None) -> int:
             overall = rc
             if not args.keep_going:
                 break
+
+    if overall == 0 or args.keep_going:
+        for fixture in selected_conversion:
+            print(f"\n=== conversion fixture: {fixture.name} ===")
+            rc = run_conversion_fixture(fixture, args.work / fixture.name)
+            summary.append((fixture.name, "PASS" if rc == 0 else "FAIL"))
+            if rc != 0:
+                overall = rc
+                if not args.keep_going:
+                    break
 
     if overall == 0 or args.keep_going:
         for fixture in selected_diag:
@@ -528,6 +592,81 @@ def run_diagnostic_fixture(fixture: DiagnosticFixture, work: Path) -> int:
         return 1
     print(f"  PASS: all {len(fixture.expected_codes)} expected diagnostic(s) present")
     return 0
+
+
+def run_conversion_fixture(fixture: ConversionFixture, work: Path) -> int:
+    """Run ``prism-v2sc`` and assert conversion succeeded without errors."""
+    work.mkdir(parents=True, exist_ok=True)
+    sources = [FIXTURE_DIR / source for source in fixture.sources]
+    for source in sources:
+        if not source.is_file():
+            print(f"  ERROR: missing fixture source {source}")
+            return 2
+
+    sc_out_dir = work / "systemc"
+    if not convert_with_prism(
+        sources,
+        fixture.top,
+        sc_out_dir,
+        log_path=work / "prism.log",
+    ):
+        return 1
+
+    top_header_path = _locate_top_header(sc_out_dir, fixture.top)
+    if top_header_path is None:
+        print(f"  ERROR: top hpp for '{fixture.top}' not found under {sc_out_dir}")
+        return 1
+
+    ir_path = sc_out_dir / "ir.json"
+    if not ir_path.is_file():
+        print(f"  ERROR: ir.json was not produced (see {work / 'prism.log'})")
+        return 1
+    try:
+        payload = json.loads(ir_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"  ERROR: ir.json is malformed: {exc} (see {work / 'prism.log'})")
+        return 1
+
+    errors = [
+        diagnostic
+        for diagnostic in _all_diagnostics(payload)
+        if diagnostic.get("severity") == "error"
+    ]
+    if errors:
+        rendered = ", ".join(
+            str(diagnostic.get("code", "<unknown>")) for diagnostic in errors
+        )
+        print(f"  ERROR: conversion emitted error diagnostic(s): {rendered}")
+        return 1
+
+    header = top_header_path.read_text(encoding="utf-8", errors="ignore")
+    missing = [
+        snippet
+        for snippet in fixture.required_top_header_snippets
+        if snippet not in header
+    ]
+    if missing:
+        print("  ERROR: generated top header is missing expected snippet(s):")
+        for snippet in missing:
+            print(f"    {snippet}")
+        return 1
+
+    print("  PASS: conversion generated ir.json and top header without error diagnostics")
+    return 0
+
+
+def _all_diagnostics(payload: dict[str, object]) -> list[dict[str, object]]:
+    diagnostics: list[dict[str, object]] = []
+    for diagnostic in payload.get("diagnostics", ()):
+        if isinstance(diagnostic, dict):
+            diagnostics.append(diagnostic)
+    for module in payload.get("modules", ()):
+        if not isinstance(module, dict):
+            continue
+        for diagnostic in module.get("diagnostics", ()):
+            if isinstance(diagnostic, dict):
+                diagnostics.append(diagnostic)
+    return diagnostics
 
 
 def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: bool = False) -> int:
@@ -687,7 +826,8 @@ def convert_with_prism(
 
 def write_stimulus(fixture: Fixture, path: Path) -> None:
     rng = random.Random(fixture.seed)
-    masks = [(1 << port.width) - 1 for port in fixture.inputs]
+    stimulus_ports = (*fixture.inputs, *fixture.inouts)
+    masks = [(1 << port.width) - 1 for port in stimulus_ports]
     lines: list[str] = []
     for _ in range(fixture.cycles):
         values = [rng.randint(0, mask) for mask in masks]
@@ -697,7 +837,10 @@ def write_stimulus(fixture: Fixture, path: Path) -> None:
 
 def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
     inputs = fixture.inputs
+    inouts = fixture.inouts
     outputs = fixture.outputs
+    stimulus_ports = (*inputs, *inouts)
+    trace_ports = (*outputs, *inouts)
 
     lines: list[str] = []
     lines.append("`timescale 1ns/1ps")
@@ -711,12 +854,25 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
             lines.append(f"  reg {port.name};")
         else:
             lines.append(f"  reg [{port.width - 1}:0] {port.name};")
+    for port in inouts:
+        if port.width == 1:
+            lines.append(f"  wire {port.name};")
+            lines.append(f"  reg _tb_drive_{port.name};")
+        else:
+            lines.append(f"  wire [{port.width - 1}:0] {port.name};")
+            lines.append(f"  reg [{port.width - 1}:0] _tb_drive_{port.name};")
     for port in outputs:
         if port.width == 1:
             lines.append(f"  wire {port.name};")
         else:
             lines.append(f"  wire [{port.width - 1}:0] {port.name};")
-    for i, _port in enumerate(inputs):
+    for port in inouts:
+        control_expr = _verilog_external_drive_expr(port)
+        z_literal = "1'bz" if port.width == 1 else f"{port.width}'b{'z' * port.width}"
+        lines.append(
+            f"  assign {port.name} = ({control_expr}) ? _tb_drive_{port.name} : {z_literal};"
+        )
+    for i, _port in enumerate(stimulus_ports):
         lines.append(f"  reg [31:0] _stim_{i};")
     lines.append("  integer stim_fd;")
     lines.append("  integer out_fd;")
@@ -728,6 +884,8 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         bindings.append(f".{fixture.clock}(clk)")
         bindings.append(f".{fixture.reset}({fixture.reset})")
     for port in inputs:
+        bindings.append(f".{port.name}({port.name})")
+    for port in inouts:
         bindings.append(f".{port.name}({port.name})")
     for port in outputs:
         bindings.append(f".{port.name}({port.name})")
@@ -765,6 +923,11 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
             lines.append(f"    {port.name} = 1'b0;")
         else:
             lines.append(f"    {port.name} = {port.width}'h0;")
+    for port in inouts:
+        if port.width == 1:
+            lines.append(f"    _tb_drive_{port.name} = 1'b0;")
+        else:
+            lines.append(f"    _tb_drive_{port.name} = {port.width}'h0;")
 
     if fixture.sequential:
         for _ in range(fixture.reset_cycles):
@@ -772,13 +935,13 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         deasserted = "1'b1" if fixture.reset_active_low else "1'b0"
         lines.append(f"    {fixture.reset} = {deasserted};")
 
-    scan_fmt = " ".join("%d" for _ in inputs)
-    scan_args = ", ".join(f"_stim_{i}" for i in range(len(inputs)))
+    scan_fmt = " ".join("%d" for _ in stimulus_ports)
+    scan_args = ", ".join(f"_stim_{i}" for i in range(len(stimulus_ports)))
 
     lines.append("    begin: stim_loop")
     lines.append("      while (1) begin")
     lines.append(f"        _r = $fscanf(stim_fd, \"{scan_fmt}\\n\", {scan_args});")
-    lines.append(f"        if (_r != {len(inputs)}) disable stim_loop;")
+    lines.append(f"        if (_r != {len(stimulus_ports)}) disable stim_loop;")
     if fixture.sequential:
         lines.append("        @(negedge clk);")
     for i, port in enumerate(inputs):
@@ -786,13 +949,22 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
             lines.append(f"        {port.name} = _stim_{i}[0];")
         else:
             lines.append(f"        {port.name} = _stim_{i}[{port.width - 1}:0];")
+    inout_offset = len(inputs)
+    for j, port in enumerate(inouts):
+        stim_index = inout_offset + j
+        if port.width == 1:
+            lines.append(f"        _tb_drive_{port.name} = _stim_{stim_index}[0];")
+        else:
+            lines.append(
+                f"        _tb_drive_{port.name} = _stim_{stim_index}[{port.width - 1}:0];"
+            )
     if fixture.sequential:
         lines.append("        @(posedge clk);")
         lines.append("        #1;")
     else:
         lines.append("        #1;")
-    out_fmt = " ".join("%0d" for _ in outputs)
-    out_args = ", ".join(port.name for port in outputs)
+    out_fmt = " ".join("%0d" for _ in trace_ports)
+    out_args = ", ".join(port.name for port in trace_ports)
     lines.append(f"        $fwrite(out_fd, \"{out_fmt}\\n\", {out_args});")
     lines.append("      end")
     lines.append("    end")
@@ -812,7 +984,10 @@ def render_systemc_tb(
     include_root: Path,
 ) -> str:
     inputs = fixture.inputs
+    inouts = fixture.inouts
     outputs = fixture.outputs
+    stimulus_ports = (*inputs, *inouts)
+    trace_ports = (*outputs, *inouts)
 
     try:
         include_rel = header_path.resolve().relative_to(include_root.resolve())
@@ -834,6 +1009,8 @@ def render_systemc_tb(
         lines.append(f"  sc_signal<bool> {fixture.reset};")
     for port in inputs:
         lines.append(f"  sc_signal<{port.sc_type}> {port.name};")
+    for port in inouts:
+        lines.append(f"  {port.sc_rv_type} {port.name};")
     for port in outputs:
         lines.append(f"  sc_signal<{port.sc_type}> {port.name};")
     lines.append("")
@@ -848,6 +1025,8 @@ def render_systemc_tb(
         lines.append(f"  dut.{fixture.clock}(clk);")
         lines.append(f"  dut.{fixture.reset}({fixture.reset});")
     for port in inputs:
+        lines.append(f"  dut.{port.name}({port.name});")
+    for port in inouts:
         lines.append(f"  dut.{port.name}({port.name});")
     for port in outputs:
         lines.append(f"  dut.{port.name}({port.name});")
@@ -867,6 +1046,8 @@ def render_systemc_tb(
             lines.append(f"  {port.name}.write(false);")
         else:
             lines.append(f"  {port.name}.write({port.sc_type}(0));")
+    for port in inouts:
+        lines.append(f"  {port.name}.write(sc_lv<{port.width}>(\"{'Z' * port.width}\"));")
     lines.append("")
 
     if fixture.sequential:
@@ -877,7 +1058,7 @@ def render_systemc_tb(
         lines.append("  sc_start(1, SC_NS);")
     lines.append("")
 
-    var_names = [f"v{i}" for i in range(len(inputs))]
+    var_names = [f"v{i}" for i in range(len(stimulus_ports))]
     lines.append("  long " + ", ".join(var_names) + ";")
     extract = "".join(f" >> {name}" for name in var_names)
     lines.append(f"  while (stim{extract}) {{")
@@ -886,14 +1067,28 @@ def render_systemc_tb(
             lines.append(f"    {port.name}.write({var_names[i]} != 0);")
         else:
             lines.append(f"    {port.name}.write({port.sc_type}({var_names[i]}));")
+    inout_offset = len(inputs)
+    for j, port in enumerate(inouts):
+        stim_var = var_names[inout_offset + j]
+        drive_expr = _systemc_external_drive_expr(fixture, port, var_names)
+        drive_value = f"sc_lv<{port.width}>(sc_uint<{port.width}>({stim_var}))"
+        z_value = f"sc_lv<{port.width}>(\"{'Z' * port.width}\")"
+        lines.append(
+            f"    {port.name}.write(({drive_expr}) ? {drive_value} : {z_value});"
+        )
     if fixture.sequential:
         lines.append("    sc_start(10, SC_NS);")
     else:
         lines.append("    sc_start(1, SC_NS);")
 
     out_parts: list[str] = []
-    for port in outputs:
-        if port.is_bool:
+    for port in trace_ports:
+        if port in inouts:
+            if port.is_bool:
+                out_parts.append(f"(int)({port.name}.read()[0] == sc_dt::SC_LOGIC_1)")
+            else:
+                out_parts.append(f"{port.name}.read().to_uint64()")
+        elif port.is_bool:
             out_parts.append(f"(int){port.name}.read()")
         else:
             out_parts.append(f"{port.name}.read().to_uint64()")
@@ -908,6 +1103,26 @@ def render_systemc_tb(
     lines.append("  return 0;")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+def _verilog_external_drive_expr(port: Port) -> str:
+    if port.external_drive_control is None:
+        return "1'b1"
+    active = "1'b1" if port.external_drive_active else "1'b0"
+    return f"{port.external_drive_control} == {active}"
+
+
+def _systemc_external_drive_expr(fixture: Fixture, port: Port, var_names: list[str]) -> str:
+    if port.external_drive_control is None:
+        return "true"
+    for index, input_port in enumerate(fixture.inputs):
+        if input_port.name == port.external_drive_control:
+            active = "!= 0" if port.external_drive_active else "== 0"
+            return f"{var_names[index]} {active}"
+    raise ValueError(
+        f"inout port {port.name!r} references unknown external drive control "
+        f"{port.external_drive_control!r}"
+    )
 
 
 def diff_traces(rtl: list[str], sc: list[str], work: Path, shift: int) -> int:

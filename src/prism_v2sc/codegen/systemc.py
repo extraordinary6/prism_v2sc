@@ -116,7 +116,7 @@ def _direct_output_assemblers(
     grouped: dict[str, list[DirectBitBridge]] = {}
     order: list[str] = []
     for bridge in direct_bit_bridges:
-        if bridge.direction != "output":
+        if bridge.direction not in {"output", "inout"}:
             continue
         if bridge.parent_name not in grouped:
             grouped[bridge.parent_name] = []
@@ -510,7 +510,8 @@ def _emit_module(
     # ``build_module_context`` so the new shadow signals end up in
     # ``ctx.signal_widths``.
     module, process_assemblers = _aggregate_multi_writer_processes(module)
-    ctx = build_module_context(module)
+    resolved_names = _resolved_signal_names(module, modules_by_name, signatures)
+    ctx = build_module_context(module, resolved_names=frozenset(resolved_names))
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
     if module.parameters:
@@ -532,7 +533,8 @@ def _emit_module(
             f"[{max(msb, lsb) - min(msb, lsb) + 1}]" for msb, lsb in signal.unpacked_dims
         )
         writer.line(
-            f"{_signal_type(signal)} {_sanitize_identifier(signal.name)}{suffix};"
+            f"{_signal_type(signal, resolved=signal.name in resolved_names)} "
+            f"{_sanitize_identifier(signal.name)}{suffix};"
         )
     if module.signals:
         writer.line()
@@ -546,9 +548,15 @@ def _emit_module(
                 f"{_sanitize_identifier(generate_for.name)}_{_sanitize_identifier(instance.name)};"
             )
     for bridge in bit_bridges:
-        writer.line(f"sc_vector<sc_signal<bool>> {bridge.name};")
+        if bridge.direction == "inout":
+            writer.line(f"sc_vector<sc_signal_rv<1>> {bridge.name};")
+        else:
+            writer.line(f"sc_vector<sc_signal<bool>> {bridge.name};")
     for bridge in direct_bit_bridges:
-        writer.line(f"sc_signal<bool> {bridge.name};")
+        if bridge.direction == "inout":
+            writer.line(f"sc_signal_rv<1> {bridge.name};")
+        else:
+            writer.line(f"sc_signal<bool> {bridge.name};")
     if module.instances or module.generate_fors:
         writer.line()
 
@@ -568,7 +576,7 @@ def _emit_module(
         _emit_bridge_method(writer, bridge)
         writer.line()
     for bridge in direct_bit_bridges:
-        if bridge.direction == "input":
+        if bridge.direction in {"input", "inout"}:
             _emit_direct_bridge_method(writer, bridge)
             writer.line()
     for assembler in _direct_output_assemblers(direct_bit_bridges):
@@ -667,6 +675,13 @@ def _emit_constructor(
         writer.line(f"SC_METHOD({bridge.method_name});")
         if bridge.direction == "input":
             writer.line(f"sensitive << {bridge.parent_name};")
+        elif bridge.direction == "inout":
+            writer.line(f"sensitive << {bridge.parent_name};")
+            writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+            writer.indent()
+            writer.line(f"sensitive << {bridge.name}[i];")
+            writer.dedent()
+            writer.line("}")
         else:
             writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
             writer.indent()
@@ -676,7 +691,7 @@ def _emit_constructor(
         writer.line()
 
     for bridge in direct_bit_bridges:
-        if bridge.direction != "input":
+        if bridge.direction not in {"input", "inout"}:
             continue
         writer.line(f"SC_METHOD({bridge.method_name});")
         writer.line(f"sensitive << {bridge.parent_name};")
@@ -787,6 +802,19 @@ def _emit_bridge_method(writer: CodeWriter, bridge: GenerateBitBridge) -> None:
         writer.line(f"{bridge.name}[i].write({bridge.parent_name}.read()[i]);")
         writer.dedent()
         writer.line("}")
+    elif bridge.direction == "inout":
+        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+        writer.indent()
+        writer.line(f"{bridge.name}[i].write(sc_lv<1>({bridge.parent_name}.read()[i]));")
+        writer.dedent()
+        writer.line("}")
+        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
+        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
+        writer.indent()
+        writer.line(f"__tmp[i] = {bridge.name}[i].read()[0];")
+        writer.dedent()
+        writer.line("}")
+        writer.line(f"{bridge.parent_name}.write(__tmp);")
     else:
         writer.line(f"auto __tmp = {bridge.parent_name}.read();")
         writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
@@ -804,6 +832,10 @@ def _emit_direct_bridge_method(writer: CodeWriter, bridge: DirectBitBridge) -> N
     writer.indent()
     if bridge.direction == "input":
         writer.line(f"{bridge.name}.write({bridge.parent_name}.read()[{bridge.index_expr}]);")
+    elif bridge.direction == "inout":
+        writer.line(
+            f"{bridge.name}.write(sc_lv<1>({bridge.parent_name}.read()[{bridge.index_expr}]));"
+        )
     else:
         writer.line(f"auto __tmp = {bridge.parent_name}.read();")
         writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
@@ -817,7 +849,10 @@ def _emit_direct_output_assembler(writer: CodeWriter, assembler: DirectOutputAss
     writer.indent()
     writer.line(f"auto __tmp = {assembler.parent_name}.read();")
     for bridge in assembler.bridges:
-        writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
+        if bridge.direction == "inout":
+            writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read()[0];")
+        else:
+            writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
     writer.line(f"{assembler.parent_name}.write(__tmp);")
     writer.dedent()
     writer.line("}")
@@ -881,7 +916,7 @@ def _generate_bit_bridges(
                 if match is None:
                     continue
                 child_port = child_ports.get(port.name)
-                if child_port is None or child_port.direction not in {"input", "output"}:
+                if child_port is None or child_port.direction not in {"input", "output", "inout"}:
                     continue
                 parent_name, _index = match
                 base = (
@@ -917,7 +952,7 @@ def _direct_bit_bridges(
             if match is None:
                 continue
             child_port = child_ports.get(port.name)
-            if child_port is None or child_port.direction not in {"input", "output"}:
+            if child_port is None or child_port.direction not in {"input", "output", "inout"}:
                 continue
             parent_name, index_expr = match
             base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port.name)}"
@@ -947,6 +982,89 @@ def _child_ports_lookup(
     if signature is not None:
         return {port.name: port for port in signature.ports}
     return {}
+
+
+def _resolved_signal_names(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> set[str]:
+    """Return module-local names that must use SystemC resolved vectors.
+
+    ``inout`` ports need resolved channels at their boundary. Internal nets
+    also need them when they feed child ``inout`` ports or when the module
+    drives them with a high-impedance branch such as ``assign bus = oe ? x :
+    'z``.
+    """
+    resolved = {port.name for port in module.ports if port.direction == "inout"}
+    internal_signal_names = {signal.name for signal in module.signals}
+
+    for assign in module.continuous_assigns:
+        if not _contains_xz_literal(assign.right_expr):
+            continue
+        base = lvalue_base_name(assign.left_expr) if assign.left_expr is not None else ""
+        if not base:
+            base = _binding_base_name(assign.left)
+        if base in internal_signal_names or base in resolved:
+            resolved.add(base)
+
+    for instance in module.instances:
+        _collect_inout_binding_names(instance, modules_by_name, signatures, resolved)
+    for generate_for in module.generate_fors:
+        for instance in generate_for.instances:
+            _collect_inout_binding_names(instance, modules_by_name, signatures, resolved)
+    return resolved
+
+
+def _collect_inout_binding_names(
+    instance: InstanceIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+    resolved: set[str],
+) -> None:
+    child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
+    if not child_ports:
+        return
+    for port_name, value in _resolve_instance_ports(instance, signatures):
+        child_port = child_ports.get(port_name)
+        if child_port is None or child_port.direction != "inout":
+            continue
+        base = _binding_base_name(value)
+        if base:
+            resolved.add(base)
+
+
+def _binding_base_name(expr: str) -> str:
+    match = re.match(r"\s*(?P<name>[A-Za-z_][A-Za-z0-9_$]*)", expr or "")
+    return match.group("name") if match else ""
+
+
+def _contains_xz_literal(expr: object) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    if expr.get("kind") == "intconst" and expr.get("has_xz"):
+        return True
+    for key in (
+        "target",
+        "operand",
+        "value",
+        "cond",
+        "true",
+        "false",
+        "left",
+        "right",
+        "msb",
+        "lsb",
+        "index",
+        "count",
+    ):
+        if _contains_xz_literal(expr.get(key)):
+            return True
+    for key in ("parts", "args"):
+        children = expr.get(key)
+        if isinstance(children, list) and any(_contains_xz_literal(child) for child in children):
+            return True
+    return False
 
 
 def _method_sensitivity(module: ModuleIR, method_name: str, ctx: ModuleContext) -> list[str]:
@@ -1406,6 +1524,13 @@ def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> s
     else:
         rhs = _cpp_rvalue(assign.right)
     if assign.left_expr is not None and assign.left_expr.get("kind") == "identifier":
+        base = lvalue_base_name(assign.left_expr)
+        if base in ctx.resolved_names:
+            width = max(1, ctx.signal_widths.get(base, 1))
+            return (
+                f"{render_lvalue(assign.left_expr, ctx)}"
+                f".write({_render_resolved_drive(assign.right_expr, ctx, width, fallback=rhs)});"
+            )
         return f"{render_lvalue(assign.left_expr, ctx)}.write({rhs});"
     if assign.left_expr is not None and assign.left_expr.get("kind") in {"bitselect", "partselect"}:
         base = lvalue_base_name(assign.left_expr)
@@ -1418,6 +1543,101 @@ def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> s
                 f"{sanitized}.write(__tmp_{sanitized}); }}"
             )
     return _emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)
+
+
+def _render_resolved_drive(
+    expr: dict[str, object] | None,
+    ctx: ModuleContext,
+    width: int,
+    *,
+    fallback: str | None = None,
+) -> str:
+    width = max(1, width)
+    if isinstance(expr, dict):
+        kind = expr.get("kind")
+        if kind == "cond":
+            cond = render_rvalue(expr.get("cond"), ctx)
+            true_branch = _render_resolved_drive(expr.get("true"), ctx, width)
+            false_branch = _render_resolved_drive(expr.get("false"), ctx, width)
+            return f"({cond} ? {true_branch} : {false_branch})"
+        if kind == "intconst" and expr.get("has_xz"):
+            return f"sc_lv<{width}>(\"{_xz_literal_bits(expr, width)}\")"
+        if kind == "repeat":
+            repeated = _repeat_xz_bits(expr, ctx, width)
+            if repeated is not None:
+                return f"sc_lv<{width}>(\"{repeated}\")"
+        if kind == "concat":
+            concat = _concat_xz_bits(expr, ctx, width)
+            if concat is not None:
+                return f"sc_lv<{width}>(\"{concat}\")"
+    numeric = fallback if fallback is not None else render_rvalue(expr, ctx)
+    return f"sc_lv<{width}>(sc_uint<{width}>({numeric}))"
+
+
+def _repeat_xz_bits(expr: dict[str, object], ctx: ModuleContext, width: int) -> str | None:
+    value = expr.get("value")
+    if not isinstance(value, dict):
+        return None
+    count = const_eval(expr.get("count"), ctx) or 0
+    if count <= 0:
+        return None
+    value_width = max(1, infer_width(value, ctx))
+    if value.get("kind") == "intconst" and value.get("has_xz"):
+        bits = _xz_literal_bits(value, value_width) * count
+        return _fit_bit_string(bits, width)
+    return None
+
+
+def _concat_xz_bits(expr: dict[str, object], ctx: ModuleContext, width: int) -> str | None:
+    parts = expr.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return None
+    rendered: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            return None
+        part_width = max(1, infer_width(part, ctx))
+        if part.get("kind") == "intconst" and part.get("has_xz"):
+            rendered.append(_xz_literal_bits(part, part_width))
+            continue
+        if part.get("kind") == "repeat":
+            repeated = _repeat_xz_bits(part, ctx, part_width)
+            if repeated is None:
+                return None
+            rendered.append(repeated)
+            continue
+        return None
+    return _fit_bit_string("".join(rendered), width)
+
+
+def _xz_literal_bits(expr: dict[str, object], width: int) -> str:
+    base = expr.get("base")
+    digits = str(expr.get("digits", "") or "")
+    if not isinstance(base, int) or base not in _BITS_PER_DIGIT or not digits:
+        return "X" * max(1, width)
+    bits_per_digit = _BITS_PER_DIGIT[base]
+    pieces: list[str] = []
+    for digit in digits:
+        if digit in {"x", "X"}:
+            pieces.append("X" * bits_per_digit)
+        elif digit in {"z", "Z", "?"}:
+            pieces.append("Z" * bits_per_digit)
+        else:
+            try:
+                pieces.append(format(int(digit, base), f"0{bits_per_digit}b"))
+            except ValueError:
+                pieces.append("X" * bits_per_digit)
+    return _fit_bit_string("".join(pieces), max(1, width))
+
+
+def _fit_bit_string(bits: str, width: int) -> str:
+    width = max(1, width)
+    if len(bits) >= width:
+        return bits[-width:]
+    pad = "0"
+    if bits and bits[0] in {"X", "Z"}:
+        pad = bits[0]
+    return pad * (width - len(bits)) + bits
 
 
 def _collect_written_base_names(process: ProcessIR, ctx: ModuleContext | None = None) -> list[str]:
@@ -1489,11 +1709,13 @@ def _port_type(port: PortIR) -> str:
     if port.direction == "output":
         return f"sc_out<{dtype}>"
     if port.direction == "inout":
-        return f"sc_inout<{dtype}>"
+        return f"sc_inout_rv<{_width_expr(port.width)}>"
     return f"sc_signal<{dtype}>"
 
 
-def _signal_type(signal: SignalIR) -> str:
+def _signal_type(signal: SignalIR, *, resolved: bool = False) -> str:
+    if resolved:
+        return f"sc_signal_rv<{_width_expr(signal.width)}>"
     return f"sc_signal<{_sc_type(signal.width, signal.signed)}>"
 
 

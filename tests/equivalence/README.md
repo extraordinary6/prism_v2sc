@@ -1,6 +1,6 @@
 # RTL ↔ SystemC Equivalence Harness
 
-This directory holds the functional-equivalence harness invoked by `.github/workflows/equivalence.yml`. For each fixture it:
+This directory holds the functional-equivalence harness invoked by `.github/workflows/equivalence.yml`. For each trace-equivalence fixture it:
 
 1. Runs `prism-v2sc` to lower the RTL into per-module SystemC headers.
 2. Generates a deterministic per-fixture stimulus file.
@@ -12,6 +12,8 @@ This directory holds the functional-equivalence harness invoked by `.github/work
 Comparison is **near-cycle-accurate**: inputs are driven at the negedge of the clock and outputs are sampled after the posedge so combinational propagation has time to settle through delta cycles in SystemC. Default behavior is strict line-by-line matching; pass `--shift-tolerance N` to drop the first `N` SystemC trace entries before diffing if a fixture's SystemC model legitimately lags the RTL by a fixed number of cycles.
 
 The SystemC testbench `#include`s the **top module's** per-module hpp at its mirrored relative path under `build/equivalence/<fixture>/systemc/`. Children are pulled in transitively via the top hpp's `#include` chain.
+
+Conversion-only fixtures use the same harness for SV constructs that `prism-v2sc` can lower but Icarus Verilog cannot compile. They run `prism-v2sc`, validate `ir.json`, check the top header exists, and assert no error diagnostics.
 
 ## Fixtures
 
@@ -36,8 +38,23 @@ The SystemC testbench `#include`s the **top module's** per-module hpp at its mir
 | `casex_priority` | combinational | priority encoder using `casex` wildcards |
 | `signed_shift_cast` | combinational | `$signed(x) >>> n` — verifies arithmetic right shift via the `sc_int` cast |
 | `regfile_mem` | sequential | 8-entry register file backed by an unpacked array `reg [7:0] mem [0:7]`; verifies the per-cell `sc_signal` array lowering |
+| `procedural_for` | combinational | constant-bound procedural `for` loop unrolling |
+| `typedef_enum_fsm` | sequential | typedef aliases plus enum member values |
+| `packed_aggregate_demo` | combinational | packed struct/union flattening and field access |
+| `package_import` | sequential | package wildcard/explicit imports, package functions, typedefs, and parameters |
+| `inout_bus` | combinational | whole-vector `inout` lowering through resolved SystemC vectors |
 
 Each fixture is described by a `Fixture` dataclass in `run_equivalence.py` (top module name, port directions/widths, clock/reset names, simulation cycle count, seed). To add a fixture: drop a `.v` under `fixtures/` and add a new `Fixture(...)` entry to `FIXTURES`.
+
+## Conversion Fixtures
+
+Trace equivalence also depends on the RTL simulator accepting the source. When Icarus cannot compile a supported SV construct, the harness keeps CI coverage through a conversion fixture instead.
+
+| Fixture | What it checks |
+| --- | --- |
+| `interface_modport` | simple packed-signal interfaces plus simple modport input/output directions flatten to ordinary `iface__field` signals/ports and generated top-header bindings |
+
+Conversion fixtures are described by a `ConversionFixture` dataclass in `run_equivalence.py`. They do not need `iverilog`, `vvp`, or SystemC.
 
 ## Diagnostic Fixtures
 
@@ -58,7 +75,7 @@ Diagnostic fixtures don't need `iverilog` / SystemC — only `prism-v2sc`. They 
 
 ## Local Usage
 
-The harness expects `iverilog`, `vvp`, and `g++` on `PATH` together with a working SystemC installation (Ubuntu: `apt install iverilog libsystemc-dev`). On Windows the easiest path is to run inside WSL with the same packages.
+Trace fixtures expect `iverilog`, `vvp`, and `g++` on `PATH` together with a working SystemC installation (Ubuntu: `apt install iverilog libsystemc-dev`). On Windows the easiest path is to run inside WSL with the same packages.
 
 Run everything:
 

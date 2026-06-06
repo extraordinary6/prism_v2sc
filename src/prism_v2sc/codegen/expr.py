@@ -85,6 +85,11 @@ class ModuleContext:
     # ``sig[i].read()`` / ``sig[i].write(...)`` rather than the
     # ``sig.read()[i]`` bit-select form.
     array_signal_names: frozenset[str] = field(default_factory=frozenset)
+    # Names emitted as SystemC resolved vectors (top-level ``inout`` ports
+    # and internal nets connected to child ``inout`` ports). Reads from
+    # these values are converted back to the converter's existing two-state
+    # expression domain.
+    resolved_names: frozenset[str] = field(default_factory=frozenset)
 
     def with_loop_var(self, name: str) -> "ModuleContext":
         return ModuleContext(
@@ -97,6 +102,7 @@ class ModuleContext:
             loop_vars=frozenset(self.loop_vars | {name}),
             local_names=self.local_names,
             array_signal_names=self.array_signal_names,
+            resolved_names=self.resolved_names,
         )
 
     def with_locals(self, names: frozenset[str]) -> "ModuleContext":
@@ -117,10 +123,15 @@ class ModuleContext:
             loop_vars=self.loop_vars,
             local_names=frozenset(self.local_names | names),
             array_signal_names=self.array_signal_names,
+            resolved_names=self.resolved_names,
         )
 
 
-def build_module_context(module: ModuleIR) -> ModuleContext:
+def build_module_context(
+    module: ModuleIR,
+    *,
+    resolved_names: frozenset[str] | None = None,
+) -> ModuleContext:
     """Build a width-aware identifier context for one module."""
     signal_names: set[str] = set()
     signal_widths: dict[str, int] = {}
@@ -153,6 +164,7 @@ def build_module_context(module: ModuleIR) -> ModuleContext:
         enum_values=enum_values,
         enum_widths=enum_widths,
         array_signal_names=frozenset(array_signal_names),
+        resolved_names=resolved_names or frozenset(),
     )
 
 
@@ -478,6 +490,11 @@ def _render_identifier_rvalue(name: str, ctx: ModuleContext, *, staged_names: fr
         # If this signal is staged, read from __next_ instead of .read()
         if staged_names is not None and name in staged_names:
             return f"__next_{sanitized}"
+        if name in ctx.resolved_names:
+            width = max(1, ctx.signal_widths.get(name, 1))
+            if width == 1:
+                return f"({sanitized}.read()[0] == sc_dt::SC_LOGIC_1)"
+            return f"sc_uint<{width}>({sanitized}.read().to_uint64())"
         return f"{sanitized}.read()"
     return sanitized
 

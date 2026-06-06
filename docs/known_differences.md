@@ -45,7 +45,7 @@
 - The supported surface is bounded by slang (IEEE 1800-2023 synthesizable subset) and by lowering coverage in this project.
 - Synthesizable `function` is supported.
 - Dynamic SV (classes, randomization, programs, runtime assertions/properties) is out of scope and surfaces as diagnostics rather than partial lowering.
-- The full SV feature rollout (`typedef`, `enum`, packed `struct`, `package`/`import`, `interface`/`modport`, unpacked arrays) is queued — see `plan.md`.
+- The supported SV surface now includes typedefs/enums, packed structs/unions, packages/imports, unpacked-array memories, whole-vector `inout`, and a simple packed-signal `interface`/`modport` flattening subset. More complex SV constructs remain queued; see `plan.md`.
 
 ## Policy
 

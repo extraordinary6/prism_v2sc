@@ -167,9 +167,19 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
                 _diagnostic(name, "unsupported_multiport", "multi-ports are not supported", "PortSymbol")
             )
         elif kind == "InterfacePortSymbol":
-            diagnostics.append(
-                _diagnostic(name, "unsupported_interface_port", "SystemVerilog interfaces are not supported", "PortSymbol")
-            )
+            flat_ports = _lower_interface_port(member)
+            if flat_ports:
+                ports.extend(flat_ports)
+                port_names.update(port.name for port in flat_ports)
+            else:
+                diagnostics.append(
+                    _diagnostic(
+                        name,
+                        "unsupported_interface_port",
+                        "SystemVerilog interface port could not be flattened",
+                        "InterfacePortSymbol",
+                    )
+                )
         elif kind == "NetSymbol":
             if member.name not in port_names:
                 signals.append(_lower_net(member))
@@ -183,7 +193,10 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             processes.append(process)
             diagnostics.extend(process_diagnostics)
         elif kind == "InstanceSymbol":
-            instances.append(_lower_instance(member))
+            if getattr(member, "isInterface", False):
+                signals.extend(_lower_interface_instance_signals(member))
+            else:
+                instances.append(_lower_instance(member))
         elif kind == "InstanceArraySymbol":
             instances.extend(_lower_instance_array(member))
         elif kind == "GenerateBlockSymbol":
@@ -287,6 +300,8 @@ def extract_signature(instance: Any) -> ModuleSignature:
         kind = type(member).__name__
         if kind == "PortSymbol":
             ports.append(_lower_port(member))
+        elif kind == "InterfacePortSymbol":
+            ports.extend(_lower_interface_port(member))
         elif kind == "ParameterSymbol":
             parameters.append(_lower_parameter(member))
     return ModuleSignature(
@@ -608,6 +623,107 @@ def _lower_port(port: Any) -> PortIR:
         width=_width_from_type(port.type),
         signed=bool(getattr(port.type, "isSigned", False)),
     )
+
+
+def _lower_interface_port(port: Any) -> list[PortIR]:
+    flat_ports: list[PortIR] = []
+    for spec in _interface_port_specs(port):
+        flat_ports.append(
+            PortIR(
+                name=_interface_flat_name(port.name, spec["port_name"]),
+                direction=spec["direction"],
+                kind=spec["kind"],
+                width=spec["width"],
+                signed=spec["signed"],
+            )
+        )
+    return flat_ports
+
+
+def _lower_interface_instance_signals(instance: Any) -> list[SignalIR]:
+    signals: list[SignalIR] = []
+    for member in getattr(instance, "body", ()) or ():
+        kind = type(member).__name__
+        if kind == "VariableSymbol":
+            signal = _lower_variable(member)
+        elif kind == "NetSymbol":
+            signal = _lower_net(member)
+        else:
+            continue
+        signals.append(
+            SignalIR(
+                name=_interface_flat_name(instance.name, signal.name),
+                kind=signal.kind,
+                width=signal.width,
+                signed=signal.signed,
+                unpacked_dims=signal.unpacked_dims,
+            )
+        )
+    return signals
+
+
+def _interface_port_specs(port: Any) -> list[dict[str, Any]]:
+    modport = _interface_port_modport_symbol(port)
+    if modport is not None:
+        specs: list[dict[str, Any]] = []
+        for member in modport:
+            if type(member).__name__ != "ModportPortSymbol":
+                continue
+            internal = getattr(member, "internalSymbol", None)
+            signal_name = getattr(internal, "name", member.name)
+            specs.append(
+                {
+                    "port_name": member.name,
+                    "signal_name": signal_name,
+                    "direction": _arg_direction_text(getattr(member, "direction", None)),
+                    "kind": _net_or_variable_kind(internal),
+                    "width": _width_from_type(getattr(member, "type", None)),
+                    "signed": bool(getattr(getattr(member, "type", None), "isSigned", False)),
+                }
+            )
+        return specs
+
+    iface_instance = _interface_port_connected_instance(port)
+    if iface_instance is None:
+        return []
+    specs = []
+    for member in getattr(iface_instance, "body", ()) or ():
+        kind = type(member).__name__
+        if kind == "VariableSymbol":
+            signal = _lower_variable(member)
+        elif kind == "NetSymbol":
+            signal = _lower_net(member)
+        else:
+            continue
+        specs.append(
+            {
+                "port_name": signal.name,
+                "signal_name": signal.name,
+                "direction": "inout",
+                "kind": signal.kind,
+                "width": signal.width,
+                "signed": signal.signed,
+            }
+        )
+    return specs
+
+
+def _interface_port_modport_symbol(port: Any) -> Any | None:
+    connection = getattr(port, "connection", None)
+    if isinstance(connection, tuple) and len(connection) >= 2 and connection[1] is not None:
+        return connection[1]
+    return None
+
+
+def _interface_port_connected_instance(port: Any) -> Any | None:
+    connection = getattr(port, "connection", None)
+    if isinstance(connection, tuple) and connection:
+        return connection[0]
+    return None
+
+
+def _interface_flat_name(interface_name: str, member_name: str) -> str:
+    return f"{interface_name}__{member_name}"
 
 
 def _lower_net(net: Any) -> SignalIR:
@@ -1189,6 +1305,9 @@ def _lower_instance(instance: Any, *, name_prefix: str = "") -> InstanceIR:
     for connection in instance.portConnections:
         port = connection.port
         port_name = getattr(port, "name", "")
+        if type(port).__name__ == "InterfacePortSymbol":
+            ports.extend(_lower_interface_connection(connection))
+            continue
         value = _render_port_connection(connection)
         ports.append(ArgIR(name=port_name, value=value))
     instance_name = f"{name_prefix}_{instance.name}" if name_prefix else instance.name
@@ -1200,12 +1319,38 @@ def _lower_instance(instance: Any, *, name_prefix: str = "") -> InstanceIR:
     )
 
 
+def _lower_interface_connection(connection: Any) -> list[ArgIR]:
+    port = connection.port
+    iface_conn = getattr(connection, "ifaceConn", None)
+    iface_instance = None
+    if isinstance(iface_conn, tuple) and iface_conn:
+        iface_instance = iface_conn[0]
+    if iface_instance is None:
+        iface_instance = _interface_port_connected_instance(port)
+    iface_name = getattr(iface_instance, "name", "")
+    if not iface_name:
+        value = _render_port_connection(connection)
+        iface_name = value.split(".", maxsplit=1)[0].strip()
+    if not iface_name:
+        return []
+
+    bindings: list[ArgIR] = []
+    for spec in _interface_port_specs(port):
+        bindings.append(
+            ArgIR(
+                name=_interface_flat_name(port.name, spec["port_name"]),
+                value=_interface_flat_name(iface_name, spec["signal_name"]),
+            )
+        )
+    return bindings
+
+
 def _lower_instance_array(array_symbol: Any, *, name_prefix: str = "") -> list[InstanceIR]:
     flattened: list[InstanceIR] = []
     for element in array_symbol.elements:
         if type(element).__name__ == "InstanceArraySymbol":
             flattened.extend(_lower_instance_array(element, name_prefix=name_prefix))
-        elif type(element).__name__ == "InstanceSymbol":
+        elif type(element).__name__ == "InstanceSymbol" and not getattr(element, "isInterface", False):
             flattened.append(_lower_instance(element, name_prefix=name_prefix))
     return flattened
 
@@ -1268,7 +1413,10 @@ def _walk_generate_block(
             processes.append(process)
             diagnostics.extend(process_diagnostics)
         elif kind == "InstanceSymbol":
-            instances.append(_lower_instance(member, name_prefix=name_prefix))
+            if getattr(member, "isInterface", False):
+                signals.extend(_lower_interface_instance_signals(member))
+            else:
+                instances.append(_lower_instance(member, name_prefix=name_prefix))
         elif kind == "InstanceArraySymbol":
             instances.extend(_lower_instance_array(member, name_prefix=name_prefix))
         elif kind == "GenerateBlockSymbol":
@@ -1304,7 +1452,7 @@ def _child_instances(instance: Any) -> list[Any]:
     children: list[Any] = []
     for member in instance.body:
         kind = type(member).__name__
-        if kind == "InstanceSymbol":
+        if kind == "InstanceSymbol" and not getattr(member, "isInterface", False):
             children.append(member)
         elif kind == "InstanceArraySymbol":
             children.extend(_collect_array_instances(member))
@@ -1322,7 +1470,7 @@ def _collect_array_instances(array_symbol: Any) -> list[Any]:
     for element in array_symbol.elements:
         if type(element).__name__ == "InstanceArraySymbol":
             found.extend(_collect_array_instances(element))
-        elif type(element).__name__ == "InstanceSymbol":
+        elif type(element).__name__ == "InstanceSymbol" and not getattr(element, "isInterface", False):
             found.append(element)
     return found
 
@@ -1331,7 +1479,7 @@ def _collect_generate_instances(block: Any) -> list[Any]:
     found: list[Any] = []
     for member in block:
         kind = type(member).__name__
-        if kind == "InstanceSymbol":
+        if kind == "InstanceSymbol" and not getattr(member, "isInterface", False):
             found.append(member)
         elif kind == "InstanceArraySymbol":
             found.extend(_collect_array_instances(member))
@@ -1387,6 +1535,10 @@ def _render_expression(expr: Any) -> str:
         if enum_const is not None:
             return str(enum_const["raw"])
         return getattr(symbol, "name", "")
+    if kind_name == "HierarchicalValue":
+        flat_name = _flatten_interface_hierarchical_value(expr)
+        if flat_name is not None:
+            return flat_name
     if kind_name == "IntegerLiteral":
         return _format_integer_literal(expr)
     if kind_name == "BinaryOp":
@@ -1453,6 +1605,10 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         if enum_const is not None:
             return enum_const
         return {"kind": "identifier", "name": getattr(symbol, "name", "")}
+    if kind_name == "HierarchicalValue":
+        flat_name = _flatten_interface_hierarchical_value(expr)
+        if flat_name is not None:
+            return {"kind": "identifier", "name": flat_name}
     if kind_name == "IntegerLiteral":
         return _lower_integer_literal(expr)
     if kind_name == "BinaryOp":
@@ -1537,6 +1693,24 @@ def _lower_packed_member_access(expr: Any) -> dict[str, Any] | None:
         "msb": _intconst_ir(offset + field_width - 1),
         "lsb": _intconst_ir(offset),
     }
+
+
+def _flatten_interface_hierarchical_value(expr: Any) -> str | None:
+    symbol = getattr(expr, "symbol", None)
+    if type(symbol).__name__ != "ModportPortSymbol":
+        return None
+    syntax = getattr(expr, "syntax", None)
+    text = str(syntax).strip() if syntax is not None else ""
+    if "." not in text:
+        return None
+    interface_name = text.split(".", maxsplit=1)[0].strip()
+    if not interface_name:
+        return None
+    internal = getattr(symbol, "internalSymbol", None)
+    member_name = getattr(internal, "name", getattr(symbol, "name", ""))
+    if not member_name:
+        return None
+    return _interface_flat_name(interface_name, member_name)
 
 
 def _packed_access_base_and_offset(expr: Any) -> tuple[dict[str, Any], int] | tuple[None, None]:

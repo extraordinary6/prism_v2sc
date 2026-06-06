@@ -1,6 +1,6 @@
 # prism_v2sc Plan
 
-Last updated: 2026-05-20.
+Last updated: 2026-06-06.
 
 This document tracks **what is implemented right now** and **what is queued next**. It is not a roadmap of aspirations; entries land here only after they exist in the code.
 
@@ -35,13 +35,15 @@ Supported RTL surface (with equivalence CI):
 - positional and named instance bindings (positional resolved via cached child signature)
 - synthesizable SV `function`
 - `generate for` (slang unrolls) and `generate if` (slang folds)
+- whole-vector `inout` ports and whole-vector hierarchical `inout` bindings
+- simple packed-signal `interface` + simple `modport` directions, flattened to ordinary `bus__field` ports/signals
 
 Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 76 unit/integration tests under `tests/` (`python -m pytest -q`).
-- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **21 trace fixtures**, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
+- 79 unit/integration tests under `tests/` (`python -m pytest -q`).
+- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **24 trace fixtures**, runs **1 conversion-only SV fixture** for `interface_modport`, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
 ## Phases Completed
@@ -95,10 +97,18 @@ have already landed are struck through here for history.
    explicit imports extract functions, typedefs, and parameters from
    packages. `package_import` fixture verifies enum, function, and parameter
    usage across package boundaries.
-9. **`inout` ports.** Single-feature audit + fixture; needs to decide
-   how to model bidirectional bus semantics under `SC_METHOD`.
-10. **`interface` + `modport`.** Large enough to warrant its own design
-    doc and an `InterfaceIR` concept. Park here until 1–9 land.
+9. ~~**`inout` ports.** Single-feature audit + fixture; needs to decide
+   how to model bidirectional bus semantics under `SC_METHOD`.~~ Done:
+   whole-vector `inout` ports use SystemC resolved vectors
+   (`sc_inout_rv` / `sc_signal_rv`), Z branches emit real `sc_lv` high-Z
+   drives, and `inout_bus` verifies mutually exclusive external/DUT
+   drivers across a hierarchical whole-bus binding.
+10. ~~**`interface` + `modport`.** Large enough to warrant its own design
+    doc and an `InterfaceIR` concept. Park here until 1–9 land.~~ Done:
+    minimal packed-signal interfaces with simple modports are flattened into
+    ordinary module ports/signals (`bus__field`), and `interface_modport`
+    verifies hierarchical modport connections with producer/consumer
+    directions in the CI conversion-only fixture path.
 
 Cross-cutting hardening that runs alongside the above:
 

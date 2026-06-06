@@ -2,19 +2,20 @@
 
 What `prism_v2sc` actually supports today, what it explicitly rejects, and where the silent risks are. Sourced from `frontend/lower.py` kind dispatch, `codegen/expr.py` operator map, the diagnostic table, and the `tests/equivalence/fixtures/` set. Update this doc whenever the lowerer's behavior changes.
 
-The classification is by **evidence strength**, not by syntactic category — the question "is this safe to feed in?" is really "do we have a CI-level proof?" CI gives that proof in two flavors:
+The classification is by **evidence strength**, not by syntactic category — the question "is this safe to feed in?" is really "do we have a CI-level proof?" CI gives that proof in three flavors:
 
 - **Trace-equivalence fixtures** (section A): co-simulate the RTL with `iverilog` and the generated SystemC with `libsystemc-dev`, diff per-cycle outputs.
-- **Diagnostic fixtures** (section B): run `prism-v2sc` on RTL that's *supposed* to be rejected or flagged, assert the expected diagnostic codes land in `ir.json`. Lets us pin the contract for rejection/approximation paths that trace equivalence can't reach.
+- **Conversion-only fixtures** (section B): run `prism-v2sc`, validate `ir.json` and generated headers, and assert no error diagnostics for SV constructs that Icarus cannot compile.
+- **Diagnostic fixtures** (section C): run `prism-v2sc` on RTL that's *supposed* to be rejected or flagged, assert the expected diagnostic codes land in `ir.json`. Lets us pin the contract for rejection/approximation paths that trace equivalence can't reach.
 
 ## A. Trace-equivalence-verified (cycle-accurate trace match)
 
-Twenty-two fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
+Twenty-four fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file/`. Anything in this table is verified at trace-diff granularity by `.github/workflows/equivalence.yml`.
 
 | Category | Verified surface |
 | --- | --- |
 | **Structure** | module def / inst, named + positional port binding, parameter override (slang elaborates), nested hierarchy, multi-file build with `+incdir+` / `-D` / nested `-f` filelists |
-| **Ports & signals** | `input` / `output`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]` |
+| **Ports & signals** | `input` / `output`, whole-vector `inout`, `wire`, `reg`, vector `[N:0]`, parameterized `[WIDTH-1:0]`; `inout` lowers to SystemC resolved vectors and is verified for mutually exclusive external/DUT drivers across a whole-bus hierarchical binding |
 | **Memories** | unpacked arrays (`reg [W-1:0] mem [0:D-1]`) lowered to a per-cell `sc_signal<sc_uint<W>>` array; per-cell `.write()` / `.read()` gives Verilog nonblocking semantics via SystemC delta cycles |
 | **Combinational** | `always @(*)`, `always_comb`, `always_latch`, continuous `assign` |
 | **Sequential** | `always @(posedge clk)`, `always_ff`, async reset (`posedge clk or negedge rst_n` style) |
@@ -26,12 +27,21 @@ Twenty-two fixtures under `tests/equivalence/fixtures/*.{v,sv}` plus `multi_file
 | **Type aliases** | `typedef` / `enum` flattened to bit-width metadata in `ModuleIR.type_aliases`; enum members lower to integer constants |
 | **Packed aggregates** | packed `struct` / `union` flattened to one vector; field reads and writes lower through bit/part-selects (`packed_aggregate_demo`) |
 | **Packages** | `package` + `import pkg::*` / `import pkg::item` extract functions, typedefs, and parameters from packages; package parameters emit as template arguments (`package_import`) |
+| **Bidirectional buses** | whole-vector `inout` ports and whole-vector hierarchical `inout` bindings use `sc_inout_rv` / `sc_signal_rv`; high-Z assignment branches emit `sc_lv<W>("ZZ...")` (`inout_bus`) |
 | **Generate** | `generate for` (slang unrolls), `generate if` (slang folds), bit-select bindings on the unrolled instances aggregate into a single writer per parent signal |
 | **Functions** | synthesizable `function`, multi-parameter, `case` in body, called from `always @(*)`, `return` statement supported |
 | **Multi-writer aggregation** | multiple procedural blocks writing different bit/part-select slices of the same parent signal land in one shadow-driven assembler — verified by the `slice_writers` fixture |
 | **System calls** | `$signed(x)` / `$unsigned(x)` emit real `sc_int<W>` / `sc_uint<W>` casts (was a no-op before — silently dropped sign information) |
 
-## B. Diagnostic-CI-verified (rejection / approximation contract)
+## B. Conversion-CI-verified (lowering / header contract)
+
+One fixture runs through the default `.github/workflows/equivalence.yml` harness without RTL trace-diffing. This covers SV source that pyslang/prism lowers but Icarus Verilog cannot compile as a golden RTL simulator.
+
+| Fixture | Verified surface | Why it is not a trace fixture |
+| --- | --- | --- |
+| `interface_modport` | simple interfaces containing packed variables plus simple `modport` input/output directions flatten to ordinary module ports/signals named `iface__field`; generated headers contain flattened top signals and producer/consumer bindings | Icarus rejects the interface port declarations (`stream_if.master bus`, `stream_if.slave bus`) used by the fixture |
+
+## C. Diagnostic-CI-verified (rejection / approximation contract)
 
 Six fixtures under `tests/equivalence/fixtures/diagnostics/`. Each runs `prism-v2sc` on RTL designed to trigger specific diagnostic codes and asserts those codes appear in the resulting `ir.json`. These cover behavior trace equivalence can't reach: rejection cases, configurations the converter intentionally approximates, and slang's own elaboration diagnostics.
 
@@ -40,7 +50,7 @@ Six fixtures under `tests/equivalence/fixtures/diagnostics/`. Each runs `prism-v
 | `driver_conflict_procedural` | `multiple_procedural_drivers`, `multiple_always_ff_drivers` | two `always_ff` blocks writing the same whole signal — a real conflict that must be reported, not lowered |
 | `mixed_assignment_styles` | `mixed_assignment_styles` | same signal driven with both `=` and `<=` — a style conflict |
 | `blocking_in_always_ff` | `blocking_in_always_ff` | blocking `=` inside `always_ff` — fires as a warning |
-| `xz_literal_approximated` | `x_z_literal_approximated` | X/Z literals are collapsed to 0; iverilog propagates X, so traces would necessarily diverge |
+| `xz_literal_approximated` | `x_z_literal_approximated` | outside resolved `inout` drive contexts, X/Z literals are collapsed to 0; iverilog propagates X, so traces would necessarily diverge |
 | `slang_unknown_module` | `slang_UnknownModule` | unknown instance target — iverilog also fails to elaborate, no trace to compare |
 | `slang_duplicate_definition` | `slang_DuplicateDefinition` | duplicate module definition — same reason |
 
@@ -48,7 +58,7 @@ The driver-conflict-slice-aware variant moved out of this section into A: the
 underlying multi-writer aggregation (`slice_writers` fixture) now verifies
 trace-level correctness too.
 
-## C. Explicitly rejected (loud diagnostic, no silent miscompile)
+## D. Explicitly rejected (loud diagnostic, no silent miscompile)
 
 These all surface through diagnostic fixtures or unit tests already. Listed
 here for documentation of the rejection contract.
@@ -56,36 +66,37 @@ here for documentation of the rejection contract.
 | Diagnostic | What it rejects |
 | --- | --- |
 | `unsupported_multiport` | SystemVerilog multi-ports |
-| `unsupported_interface_port` | `interface`-typed ports |
+| `unsupported_interface_port` | interface-typed ports that cannot be flattened into the simple packed-signal/modport subset |
 | `unsupported_initial` | `initial` blocks |
 | `unsupported_task_first_round` | `task` (functions are supported) |
 | `unsupported_<kind>` | any statement or expression kind the lowerer doesn't recognize; the slang node-class name lands in the diagnostic code so it's debuggable |
 
 Use `--fail-on-diagnostics` in CI when error-level diagnostics must hard-fail the conversion.
 
-## D. Priority 1 — common RTL that we *don't* fully support yet
+## E. Priority 1 — common RTL that we *don't* fully support yet
 
-These are the dangerous ones: most either silently miscompile or take the `unsupported_<kind>` exit path even though the construct is common in real designs. Each item needs a fixture (trace or diagnostic) before we can claim either way.
+These are the dangerous ones: most either silently miscompile or take the `unsupported_<kind>` exit path even though the construct is common in real designs. Each item needs a fixture (trace, conversion, or diagnostic) before we can claim either way.
 
 | Gap | Why it matters | Current behavior |
 | --- | --- | --- |
 | Procedural `while` / `repeat` | loop constructs in synthesizable RTL | `unsupported_<kind>` diagnostic |
-| `inout` ports | bidirectional bus interfaces | no specific handling; needs an audit |
+| bit-select hierarchical `inout` bindings | child `inout` ports connected to `bus[i]` need a carefully audited proxy model | not trace-equivalence-verified; use whole-vector `inout` bindings for the supported path |
+| complex interfaces | clocking blocks, interface tasks/functions, nested interfaces, interface arrays, modport expressions/exports | not trace-equivalence-verified; current support is packed-signal/simple-modport flattening |
 | `defparam` | legacy code | slang resolves it at elaboration; **no fixture pins behavior** |
 | `signed`-declared ports in the equivalence harness | true signed-port designs (not just `$signed` casts) | the `Port` dataclass in `run_equivalence.py` doesn't carry a `signed` flag yet, so trace fixtures can't drive `sc_int` ports |
 
-## E. Priority 2 — SystemVerilog feature rollout
+## F. Priority 2 — SystemVerilog feature rollout
 
-slang already parses every entry here; the gap is `ModuleIR` doesn't carry the symbol shape yet. Land them one at a time, each with its own fixture.
+slang already parses every entry here; the gap is `ModuleIR` doesn't carry the symbol shape yet. Land them one at a time, each with its own trace, conversion, or diagnostic fixture.
 
 | Feature | Where it lands | Estimated size |
 | --- | --- | --- |
 | ~~`typedef` + `enum` flattened to bit-width~~ | Done: `frontend/lower._lower_module` records the width mapping and enum member values | small |
 | ~~Packed `struct` / `union` (flatten to one `sc_uint<sum>` with field bit-offsets)~~ | Done: alias metadata records fields and member access lowers to bit/part-selects | medium |
 | ~~`package` + `import`~~ | Done: wildcard and explicit imports extract functions, typedefs, and parameters from packages | small (mostly free) |
-| `interface` + `modport` | a new `InterfaceIR` concept end-to-end; currently rejected outright | large — needs its own design doc |
+| ~~`interface` + `modport`~~ | Done for the simple packed-signal/modport subset: interface instances and ports flatten into ordinary `bus__field` signals/ports, verified by the `interface_modport` conversion fixture; complex interface constructs remain a Priority 1 gap | medium |
 
-## F. Priority 3 — intentionally out of scope
+## G. Priority 3 — intentionally out of scope
 
 Stays rejected. These are either non-synthesizable or require runtime infrastructure SystemC's `SC_METHOD` model doesn't provide.
 
@@ -110,7 +121,7 @@ The roadmap below feeds Phase 11 in `plan.md`. Each step lands as an isolated PR
 6. ~~**`typedef` + `enum`.** Cheapest SV feature with broad payoff; small IR change.~~ Done: `typedef_enum_fsm` verifies enum members and aliased state storage.
 7. ~~**Packed `struct`.** Builds on the typedef work.~~ Done: `packed_aggregate_demo` verifies packed struct fields and packed union overlays.
 8. ~~**`package` / `import`.** slang has already resolved them; mostly a "release the brake" change.~~ Done: `package_import` verifies wildcard imports extract functions, typedefs, enum members, and parameters. Also added `return` statement support for function bodies.
-9. **`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.
-10. **`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.
+9. ~~**`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.~~ Done: whole-vector `inout` ports use resolved SystemC vectors, high-Z RHS branches emit real `sc_lv` Z drives, and `inout_bus` verifies mutually exclusive external/DUT drivers across a hierarchical whole-bus binding.
+10. ~~**`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.~~ Done for the simple packed-signal/modport subset: interface instances and ports flatten into ordinary `bus__field` signals/ports, verified by the `interface_modport` conversion fixture.
 
-Updated whenever a row in C / D / E moves into A or B.
+Updated whenever a row in D / E / F moves into A, B, or C.
