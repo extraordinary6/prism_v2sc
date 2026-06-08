@@ -10,6 +10,7 @@ from typing import Sequence
 from .frontend.flow import compute_source_root
 from .frontend.preprocess import collect_sources
 from . import __version__
+from .power.cli import add_power_arguments, handle_power_commands, run_power_report
 from .verify.harness import convert_with_metrics, write_report
 
 
@@ -66,12 +67,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
+    add_power_arguments(parser)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    report_only = (
+        args.power_report
+        and not args.power_static
+        and args.power_instrument is None
+        and not args.sources
+        and not args.filelist
+    )
+    if report_only:
+        static_path = args.power_report_static
+        if static_path is None:
+            default_static = Path("power_static.json")
+            static_path = default_static if default_static.exists() else None
+        run_power_report(args.power_report, static_path, args.power_report_output)
+        return 0
 
     if not args.sources and not args.filelist:
         parser.error("at least one Verilog source file or --filelist is required")
@@ -86,6 +103,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not source_set.sources:
         parser.error("no Verilog source files resolved from positional inputs and filelists")
+
+    if handle_power_commands(
+        args,
+        list(source_set.sources),
+        args.top,
+        include_dirs=source_set.include_dirs,
+        defines=source_set.defines,
+        out_dir=args.out,
+    ):
+        return 0
 
     args.out.mkdir(parents=True, exist_ok=True)
 

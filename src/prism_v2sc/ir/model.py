@@ -7,6 +7,15 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class SourceLocIR:
+    """Source location in the original RTL."""
+
+    file: str
+    line: int
+    column: int
+
+
+@dataclass(frozen=True)
 class WidthIR:
     """Verilog packed width range."""
 
@@ -32,6 +41,7 @@ class PortIR:
     kind: str = "wire"
     width: WidthIR | None = None
     signed: bool = False
+    loc: SourceLocIR | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,7 @@ class SignalIR:
     # it is ``((0, 15),)``. Codegen treats signals with non-empty
     # ``unpacked_dims`` as ``sc_signal<inner> name[D0][D1]...;`` arrays.
     unpacked_dims: tuple[tuple[int, int], ...] = ()
+    loc: SourceLocIR | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +99,7 @@ class ContinuousAssignIR:
     right: str
     left_expr: dict[str, Any] | None = None
     right_expr: dict[str, Any] | None = None
+    loc: SourceLocIR | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,7 @@ class ProcessIR:
     sensitivity: tuple[SensitivityIR, ...] = field(default_factory=tuple)
     statements: tuple[str, ...] = field(default_factory=tuple)
     structured_statements: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    loc: SourceLocIR | None = None
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,7 @@ from prism_v2sc.ir.model import (
     ProcessIR,
     SensitivityIR,
     SignalIR,
+    SourceLocIR,
     SubroutineIR,
     SubroutineParamIR,
     TypeAliasIR,
@@ -159,7 +160,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
         if kind == "ParameterSymbol":
             parameters.append(_lower_parameter(member))
         elif kind == "PortSymbol":
-            port = _lower_port(member)
+            port = _lower_port(member, source_manager)
             ports.append(port)
             port_names.add(port.name)
         elif kind == "MultiPortSymbol":
@@ -182,14 +183,14 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
                 )
         elif kind == "NetSymbol":
             if member.name not in port_names:
-                signals.append(_lower_net(member))
+                signals.append(_lower_net(member, source_manager))
         elif kind == "VariableSymbol":
             if member.name not in port_names:
-                signals.append(_lower_variable(member))
+                signals.append(_lower_variable(member, source_manager))
         elif kind == "ContinuousAssignSymbol":
-            continuous_assigns.append(_lower_continuous_assign(member))
+            continuous_assigns.append(_lower_continuous_assign(member, source_manager))
         elif kind == "ProceduralBlockSymbol":
-            process, process_diagnostics = _lower_procedural_block(member, name)
+            process, process_diagnostics = _lower_procedural_block(member, name, source_manager)
             processes.append(process)
             diagnostics.extend(process_diagnostics)
         elif kind == "InstanceSymbol":
@@ -205,6 +206,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             _walk_generate_block(
                 member, name, signals, continuous_assigns, processes, instances,
                 diagnostics, port_names, name_prefix=getattr(member, "name", "") or "",
+                source_manager=source_manager,
             )
         elif kind == "GenerateBlockArraySymbol":
             array_name = getattr(member, "name", "") or ""
@@ -219,6 +221,7 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
                     _walk_generate_block(
                         sub, name, signals, continuous_assigns, processes, instances,
                         diagnostics, port_names, name_prefix=prefix,
+                        source_manager=source_manager,
                     )
                 finally:
                     _genvar_subst_stack.pop()
@@ -613,15 +616,17 @@ def _parameter_initializer_text(parameter: Any) -> str:
     return _constant_value_text(value)
 
 
-def _lower_port(port: Any) -> PortIR:
+def _lower_port(port: Any, source_manager: Any = None) -> PortIR:
     direction = _port_direction_text(port.direction)
     internal_kind = _net_or_variable_kind(getattr(port, "internalSymbol", None))
+    loc = _extract_source_loc(port, source_manager) if source_manager else None
     return PortIR(
         name=port.name,
         direction=direction,
         kind=internal_kind,
         width=_width_from_type(port.type),
         signed=bool(getattr(port.type, "isSigned", False)),
+        loc=loc,
     )
 
 
@@ -726,16 +731,18 @@ def _interface_flat_name(interface_name: str, member_name: str) -> str:
     return f"{interface_name}__{member_name}"
 
 
-def _lower_net(net: Any) -> SignalIR:
+def _lower_net(net: Any, source_manager: Any = None) -> SignalIR:
+    loc = _extract_source_loc(net, source_manager) if source_manager else None
     return SignalIR(
         name=net.name,
         kind="wire",
         width=_width_from_type(net.type),
         signed=bool(getattr(net.type, "isSigned", False)),
+        loc=loc,
     )
 
 
-def _lower_variable(variable: Any) -> SignalIR:
+def _lower_variable(variable: Any, source_manager: Any = None) -> SignalIR:
     declared_reg = bool(getattr(variable.type, "isDeclaredReg", False))
     # Peel off any unpacked dimensions before classifying the cell type
     # and computing the per-cell packed width.
@@ -743,12 +750,14 @@ def _lower_variable(variable: Any) -> SignalIR:
     if not declared_reg:
         declared_reg = bool(getattr(cell_type, "isDeclaredReg", False))
     kind = "reg" if declared_reg else _slang_type_kind(cell_type)
+    loc = _extract_source_loc(variable, source_manager) if source_manager else None
     return SignalIR(
         name=variable.name,
         kind=kind,
         width=_width_from_type(cell_type),
         signed=bool(getattr(cell_type, "isSigned", False)),
         unpacked_dims=unpacked_dims,
+        loc=loc,
     )
 
 
@@ -770,19 +779,21 @@ def _peel_unpacked_dims(slang_type: Any) -> tuple[Any, tuple[tuple[int, int], ..
     return current, tuple(dims)
 
 
-def _lower_continuous_assign(assign: Any) -> ContinuousAssignIR:
+def _lower_continuous_assign(assign: Any, source_manager: Any = None) -> ContinuousAssignIR:
     expr = assign.assignment
     left = expr.left
     right = expr.right
+    loc = _extract_source_loc(assign, source_manager) if source_manager else None
     return ContinuousAssignIR(
         left=_render_expression(left),
         right=_render_expression(right),
         left_expr=_lower_expression(left),
         right_expr=_lower_expression(right),
+        loc=loc,
     )
 
 
-def _lower_procedural_block(block: Any, module_name: str) -> tuple[ProcessIR, list[DiagnosticIR]]:
+def _lower_procedural_block(block: Any, module_name: str, source_manager: Any = None) -> tuple[ProcessIR, list[DiagnosticIR]]:
     kind_name = str(block.procedureKind).rsplit(".", 1)[-1]
     sensitivity, statement = _split_timing(block.body)
 
@@ -811,12 +822,14 @@ def _lower_procedural_block(block: Any, module_name: str) -> tuple[ProcessIR, li
             )
         )
 
+    loc = _extract_source_loc(block, source_manager) if source_manager else None
     return (
         ProcessIR(
             kind=process_kind,
             sensitivity=tuple(sensitivity),
             statements=summaries,
             structured_statements=structured,
+            loc=loc,
         ),
         diagnostics,
     )
@@ -1390,6 +1403,7 @@ def _walk_generate_block(
     port_names: set[str],
     *,
     name_prefix: str = "",
+    source_manager: Any = None,
 ) -> None:
     """Flatten an elaborated generate block back into the parent module's lists.
 
@@ -1403,13 +1417,13 @@ def _walk_generate_block(
     for member in block:
         kind = type(member).__name__
         if kind == "NetSymbol" and member.name not in port_names:
-            signals.append(_lower_net(member))
+            signals.append(_lower_net(member, source_manager))
         elif kind == "VariableSymbol" and member.name not in port_names:
-            signals.append(_lower_variable(member))
+            signals.append(_lower_variable(member, source_manager))
         elif kind == "ContinuousAssignSymbol":
-            continuous_assigns.append(_lower_continuous_assign(member))
+            continuous_assigns.append(_lower_continuous_assign(member, source_manager))
         elif kind == "ProceduralBlockSymbol":
-            process, process_diagnostics = _lower_procedural_block(member, module_name)
+            process, process_diagnostics = _lower_procedural_block(member, module_name, source_manager)
             processes.append(process)
             diagnostics.extend(process_diagnostics)
         elif kind == "InstanceSymbol":
@@ -1426,7 +1440,7 @@ def _walk_generate_block(
             inner_prefix = f"{name_prefix}_{inner_name}" if name_prefix and inner_name else (name_prefix or inner_name)
             _walk_generate_block(
                 member, module_name, signals, continuous_assigns, processes, instances,
-                diagnostics, port_names, name_prefix=inner_prefix,
+                diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
             )
         elif kind == "GenerateBlockArraySymbol":
             array_name = getattr(member, "name", "") or ""
@@ -1441,7 +1455,7 @@ def _walk_generate_block(
                 try:
                     _walk_generate_block(
                         sub, module_name, signals, continuous_assigns, processes, instances,
-                        diagnostics, port_names, name_prefix=inner_prefix,
+                        diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
                     )
                 finally:
                     _genvar_subst_stack.pop()
@@ -1922,6 +1936,37 @@ def _resolve_source_path(instance: Any, source_manager: Any) -> str:
     except Exception:
         return ""
     return ""
+
+
+def _extract_source_loc(symbol: Any, source_manager: Any) -> SourceLocIR | None:
+    """Extract source location from a slang symbol.
+
+    Args:
+        symbol: A slang symbol (e.g., PortSymbol, VariableSymbol, etc.)
+        source_manager: The slang SourceManager
+
+    Returns:
+        SourceLocIR if location is available, None otherwise
+    """
+    try:
+        location = getattr(symbol, "location", None)
+        if location is None:
+            return None
+
+        if hasattr(source_manager, "getFullPath") and hasattr(location, "buffer"):
+            file_path = str(source_manager.getFullPath(location.buffer))
+            line = 0
+            column = 0
+
+            if hasattr(source_manager, "getLineNumber"):
+                line = int(source_manager.getLineNumber(location))
+            if hasattr(source_manager, "getColumnNumber"):
+                column = int(source_manager.getColumnNumber(location))
+
+            return SourceLocIR(file=file_path, line=line, column=column)
+    except Exception:
+        pass
+    return None
 
 
 def _diagnostic(module: str, code: str, message: str, node: str, severity: str = "error") -> DiagnosticIR:

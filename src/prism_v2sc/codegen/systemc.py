@@ -16,7 +16,7 @@ Two entry points:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import os
 import re
@@ -46,6 +46,13 @@ from .expr import (
     render_lvalue,
     render_rvalue,
     sanitize_identifier,
+)
+from .instrumentation import (
+    InstrumentationConfig,
+    generate_dump_api,
+    generate_instrumentation_declarations,
+    generate_instrumentation_init,
+    generate_sampling_processes,
 )
 from .writer import CodeWriter
 
@@ -335,7 +342,10 @@ def banner() -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_systemc_header(design: DesignIR) -> str:
+def generate_systemc_header(
+    design: DesignIR,
+    instrumentation_config: InstrumentationConfig | None = None,
+) -> str:
     """Generate every module as one concatenated SystemC header string.
 
     Equivalent to ``emit_systemc_files`` but returns the concatenated text
@@ -351,6 +361,9 @@ def generate_systemc_header(design: DesignIR) -> str:
     writer.line()
     writer.line("#include <systemc>")
     writer.line("#include <string>")
+    if instrumentation_config is not None and instrumentation_config.enabled:
+        writer.line("#include <cstdint>")
+        writer.line("#include <ostream>")
     writer.line()
     writer.line("using namespace sc_core;")
     writer.line("using namespace sc_dt;")
@@ -362,7 +375,14 @@ def generate_systemc_header(design: DesignIR) -> str:
     modules = _dependency_order(list(design.modules))
     modules_by_name = {module.name: module for module in modules}
     for module in modules:
-        _emit_module(writer, module, modules_by_name, signatures, include_children=False)
+        _emit_module(
+            writer,
+            module,
+            modules_by_name,
+            signatures,
+            include_children=False,
+            instrumentation_config=instrumentation_config,
+        )
         writer.line()
 
     writer.line(f"#endif  // {guard}")
@@ -380,6 +400,7 @@ def emit_systemc_files(
     source_root: Path,
     *,
     signatures: dict[str, ModuleSignature] | None = None,
+    instrumentation_config: InstrumentationConfig | None = None,
 ) -> list[Path]:
     """Write one ``.hpp`` per module under ``out_dir``, mirroring RTL layout.
 
@@ -392,7 +413,14 @@ def emit_systemc_files(
 
     written: list[Path] = []
     for module in _dependency_order(list(design.modules)):
-        target = render_module_file(module, modules_by_name, sigs, out_dir, source_root)
+        target = render_module_file(
+            module,
+            modules_by_name,
+            sigs,
+            out_dir,
+            source_root,
+            instrumentation_config=instrumentation_config,
+        )
         path = _module_output_path(module, out_dir, source_root)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(target, encoding="utf-8")
@@ -406,6 +434,8 @@ def render_module_file(
     signatures: dict[str, ModuleSignature],
     out_dir: Path,
     source_root: Path,
+    *,
+    instrumentation_config: InstrumentationConfig | None = None,
 ) -> str:
     """Render a single module's SystemC hpp text (no disk side effects)."""
     writer = CodeWriter()
@@ -415,6 +445,9 @@ def render_module_file(
     writer.line()
     writer.line("#include <systemc>")
     writer.line("#include <string>")
+    if instrumentation_config is not None and instrumentation_config.enabled:
+        writer.line("#include <cstdint>")
+        writer.line("#include <ostream>")
 
     child_includes = _child_include_paths(module, modules_by_name, out_dir, source_root)
     if child_includes:
@@ -430,7 +463,14 @@ def render_module_file(
     writer.line(f"#define {guard}")
     writer.line()
 
-    _emit_module(writer, module, modules_by_name, signatures, include_children=False)
+    _emit_module(
+        writer,
+        module,
+        modules_by_name,
+        signatures,
+        include_children=False,
+        instrumentation_config=instrumentation_config,
+    )
     writer.line()
     writer.line(f"#endif  // {guard}")
     return writer.render()
@@ -503,6 +543,7 @@ def _emit_module(
     signatures: dict[str, ModuleSignature],
     *,
     include_children: bool,
+    instrumentation_config: InstrumentationConfig | None = None,
 ) -> None:
     class_name = _sanitize_identifier(module.name)
     # Rewrite per-process bit/part writes that share a parent signal so the
@@ -514,6 +555,7 @@ def _emit_module(
     ctx = build_module_context(module, resolved_names=frozenset(resolved_names))
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
+    module_instrumentation = _module_instrumentation_config(module, instrumentation_config)
     if module.parameters:
         template_params = ", ".join(
             f"int {_sanitize_identifier(parameter.name)} = {_cpp_expr(parameter.value)}"
@@ -525,6 +567,8 @@ def _emit_module(
 
     for port in module.ports:
         writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)};")
+    if _needs_power_sample_strobe(module_instrumentation):
+        writer.line("sc_in<bool> __power_sample_strobe;")
     if module.ports:
         writer.line()
 
@@ -560,6 +604,11 @@ def _emit_module(
     if module.instances or module.generate_fors:
         writer.line()
 
+    for declaration in generate_instrumentation_declarations(module_instrumentation):
+        writer.line(declaration)
+    if module_instrumentation.enabled:
+        writer.line()
+
     methods = _method_specs(module, ctx)
     for subroutine in module.subroutines:
         _emit_subroutine(writer, subroutine, ctx)
@@ -586,11 +635,67 @@ def _emit_module(
         _emit_process_slice_assembler(writer, assembler)
         writer.line()
 
+    power_sampling_processes = generate_sampling_processes(module_instrumentation)
+    for process in power_sampling_processes:
+        writer.line(f"void {process.method_name}() {{")
+        writer.indent()
+        for body_line in process.body.splitlines():
+            writer.line(body_line)
+        writer.dedent()
+        writer.line("}")
+        writer.line()
+
+    dump_api = generate_dump_api(module_instrumentation)
+    if dump_api:
+        for body_line in dump_api.splitlines():
+            writer.line(body_line)
+        writer.line()
+
     _emit_constructor(
-        writer, module, ctx, methods, bit_bridges, direct_bit_bridges, process_assemblers, signatures
+        writer,
+        module,
+        ctx,
+        methods,
+        bit_bridges,
+        direct_bit_bridges,
+        process_assemblers,
+        signatures,
+        module_instrumentation,
+        power_sampling_processes,
     )
     writer.dedent()
     writer.line("};")
+
+
+def _module_instrumentation_config(
+    module: ModuleIR,
+    config: InstrumentationConfig | None,
+) -> InstrumentationConfig:
+    if config is None or not config.enabled or config.probe_plan is None:
+        return InstrumentationConfig()
+    probes = tuple(
+        probe for probe in config.probe_plan.probes if probe.module_name == module.name
+    )
+    if not probes:
+        return InstrumentationConfig()
+    module_plan = replace(
+        config.probe_plan,
+        probes=probes,
+        probe_count=len(probes),
+        state_probe_count=sum(1 for probe in probes if probe.signal_class == "state"),
+        comb_probe_count=sum(1 for probe in probes if probe.signal_class == "comb"),
+        memory_probe_count=sum(1 for probe in probes if probe.signal_class == "memory_cell"),
+        warnings=(),
+        estimated_counter_count=len(probes) * 3,
+        estimated_storage_bytes=len(probes) * 3 * 8,
+    )
+    return replace(config, enabled=True, probe_plan=module_plan)
+
+
+def _needs_power_sample_strobe(config: InstrumentationConfig) -> bool:
+    if not config.enabled or config.probe_plan is None:
+        return False
+    return any(probe.clock_domain is None for probe in config.probe_plan.probes)
 
 
 def _emit_constructor(
@@ -602,6 +707,8 @@ def _emit_constructor(
     direct_bit_bridges: list[DirectBitBridge],
     process_assemblers: list[ProcessSliceAssembler],
     signatures: dict[str, ModuleSignature],
+    instrumentation_config: InstrumentationConfig,
+    power_sampling_processes: list,
 ) -> None:
     class_name = _sanitize_identifier(module.name)
     init_list = [f"{_sanitize_identifier(instance.name)}(\"{instance.name}\")" for instance in module.instances]
@@ -622,6 +729,11 @@ def _emit_constructor(
     else:
         writer.line(f"SC_CTOR({class_name}) {{")
     writer.indent()
+
+    for init_line in generate_instrumentation_init(instrumentation_config):
+        writer.line(init_line)
+    if instrumentation_config.enabled:
+        writer.line()
 
     for method_name, _body_lines in methods:
         writer.line(f"SC_METHOD({method_name});")
@@ -707,6 +819,18 @@ def _emit_constructor(
         writer.line(f"SC_METHOD({assembler.method_name});")
         sensitivities = "".join(f" << {shadow}" for shadow, _msb, _lsb in assembler.slots)
         writer.line(f"sensitive{sensitivities};")
+        writer.line()
+
+    for process in power_sampling_processes:
+        writer.line(f"SC_METHOD({process.method_name});")
+        if process.clock_domain:
+            writer.line(
+                "sensitive << "
+                f"{_sanitize_identifier(process.clock_domain)}.{_systemc_edge(process.clock_edge or 'posedge')}();"
+            )
+        else:
+            writer.line("sensitive << __power_sample_strobe.pos();")
+        writer.line("dont_initialize();")
         writer.line()
 
     writer.dedent()

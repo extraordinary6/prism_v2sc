@@ -191,3 +191,53 @@ endmodule
     assert second_assign["left_expr"]["kind"] == "partselect"
     assert second_assign["left_expr"]["msb"]["value"] == 3
     assert second_assign["left_expr"]["lsb"]["value"] == 0
+
+
+def test_source_location_in_ir(tmp_path: Path) -> None:
+    """Verify that source location information is captured in IR nodes."""
+    rtl = tmp_path / "loc_test.v"
+    rtl.write_text(
+        """module loc_test(
+  input wire clk,
+  input wire [7:0] data_in,
+  output reg [7:0] data_out
+);
+  wire [7:0] temp;
+
+  assign temp = data_in + 8'd1;
+
+  always @(posedge clk) begin
+    data_out <= temp;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "loc_test")
+    module = next(module for module in design.modules if module.name == "loc_test")
+
+    # Check that ports have location info
+    clk_port = next(port for port in module.ports if port.name == "clk")
+    assert clk_port.loc is not None
+    assert clk_port.loc.line > 0
+    assert clk_port.loc.column >= 0
+    assert str(rtl) in clk_port.loc.file
+
+    # Check that signals have location info
+    temp_signal = next(signal for signal in module.signals if signal.name == "temp")
+    assert temp_signal.loc is not None
+    assert temp_signal.loc.line > 0
+
+    # Check that continuous assigns have location info
+    assert len(module.continuous_assigns) > 0
+    assign = module.continuous_assigns[0]
+    assert assign.loc is not None
+    assert assign.loc.line > 0
+
+    # Check that processes have location info
+    assert len(module.processes) > 0
+    process = module.processes[0]
+    assert process.loc is not None
+    assert process.loc.line > 0
+
