@@ -10,7 +10,12 @@ from typing import Sequence
 from .frontend.flow import compute_source_root
 from .frontend.preprocess import collect_sources
 from . import __version__
-from .power.cli import add_power_arguments, handle_power_commands, run_power_report
+from .power.cli import (
+    add_power_arguments,
+    handle_power_commands,
+    run_power_profile_from_dump,
+    run_power_report,
+)
 from .verify.harness import convert_with_metrics, write_report
 
 
@@ -77,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report_only = (
         args.power_report
+        and not args.power_profile_dump
         and not args.power_static
         and args.power_instrument is None
         and not args.sources
@@ -88,6 +94,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             default_static = Path("power_static.json")
             static_path = default_static if default_static.exists() else None
         run_power_report(args.power_report, static_path, args.power_report_output)
+        return 0
+
+    profile_dump_only = (
+        args.power_profile_dump
+        and not args.power_report
+        and not args.power_static
+        and args.power_instrument is None
+        and not args.sources
+        and not args.filelist
+    )
+    if profile_dump_only:
+        try:
+            run_power_profile_from_dump(
+                args.power_profile_dump,
+                args.power_profile_output,
+                workload_name=args.power_workload_name,
+                cycle_count=args.power_workload_cycles,
+                top_module=args.power_profile_top or args.top or "unknown",
+                sources=tuple(args.power_profile_source),
+                vector_file=args.power_vector_file,
+                seed=args.power_seed,
+                reset_cycles=args.power_reset_cycles,
+            )
+        except FileNotFoundError as exc:
+            parser.error(str(exc))
         return 0
 
     if not args.sources and not args.filelist:

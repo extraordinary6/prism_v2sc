@@ -1,0 +1,205 @@
+{
+  "version": "1.0",
+  "design": {
+    "top_module": "power_soc_top",
+    "timestamp": "2026-06-08T00:00:00"
+  },
+  "suspects": [
+    {
+      "module": "power_soc_top",
+      "signal": "busy",
+      "reason_code": "high_fanout_candidate",
+      "message": "Signal 'busy' has high fanout (12 loads)",
+      "recommendation": "High fanout signals dissipate more dynamic power; consider buffering or reducing fanout",
+      "severity": "info",
+      "width": 1,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 15,
+        "column": 8
+      },
+      "metrics": {
+        "fanout": 12
+      }
+    },
+    {
+      "module": "control_sequencer",
+      "signal": "packet_count",
+      "reason_code": "counter_activity_candidate",
+      "message": "Counter pattern detected: 'packet_count' += constant",
+      "recommendation": "Counters toggle frequently; consider gating or reducing update rate",
+      "severity": "info",
+      "width": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+        "line": 11,
+        "column": 34
+      },
+      "metrics": {}
+    },
+    {
+      "module": "reg_bank",
+      "signal": "q3",
+      "reason_code": "clock_gating_candidate",
+      "message": "Wide register 'q3' (64 bits) may benefit from clock gating",
+      "recommendation": "Consider adding an enable signal to gate updates when 'q3' is idle",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 17,
+        "column": 33
+      },
+      "metrics": {}
+    },
+    {
+      "module": "reg_bank",
+      "signal": "q2",
+      "reason_code": "clock_gating_candidate",
+      "message": "Wide register 'q2' (64 bits) may benefit from clock gating",
+      "recommendation": "Consider adding an enable signal to gate updates when 'q2' is idle",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 16,
+        "column": 33
+      },
+      "metrics": {}
+    },
+    {
+      "module": "reg_bank",
+      "signal": "q0",
+      "reason_code": "clock_gating_candidate",
+      "message": "Wide register 'q0' (64 bits) may benefit from clock gating",
+      "recommendation": "Consider adding an enable signal to gate updates when 'q0' is idle",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 14,
+        "column": 33
+      },
+      "metrics": {}
+    },
+    {
+      "module": "reg_bank",
+      "signal": "q1",
+      "reason_code": "clock_gating_candidate",
+      "message": "Wide register 'q1' (64 bits) may benefit from clock gating",
+      "recommendation": "Consider adding an enable signal to gate updates when 'q1' is idle",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 15,
+        "column": 33
+      },
+      "metrics": {}
+    },
+    {
+      "module": "wide_crossbar",
+      "signal": "out",
+      "reason_code": "wide_mux_candidate",
+      "message": "Signal 'out' has 3 muxes and is 64 bits wide",
+      "recommendation": "Consider reducing mux width or using case statements with synthesis attributes",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/wide_crossbar.v",
+        "line": 9,
+        "column": 33
+      },
+      "metrics": {
+        "mux_count": 3
+      }
+    },
+    {
+      "module": "wide_crossbar",
+      "signal": "out",
+      "reason_code": "glitch_risk_structural",
+      "message": "Signal 'out' has deep combinational logic (depth 4)",
+      "recommendation": "Deep logic can produce glitches; consider pipeline registers to reduce glitch power",
+      "severity": "info",
+      "width": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/wide_crossbar.v",
+        "line": 9,
+        "column": 33
+      },
+      "metrics": {
+        "depth": 4,
+        "nodes": 16
+      }
+    },
+    {
+      "module": "vector_alu",
+      "signal": "mix1",
+      "reason_code": "glitch_risk_structural",
+      "message": "Signal 'mix1' has deep combinational logic (depth 4)",
+      "recommendation": "Deep logic can produce glitches; consider pipeline registers to reduce glitch power",
+      "severity": "info",
+      "width": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 12,
+        "column": 26
+      },
+      "metrics": {
+        "depth": 4,
+        "nodes": 11
+      }
+    },
+    {
+      "module": "vector_alu",
+      "signal": "mix2",
+      "reason_code": "glitch_risk_structural",
+      "message": "Signal 'mix2' has deep combinational logic (depth 4)",
+      "recommendation": "Deep logic can produce glitches; consider pipeline registers to reduce glitch power",
+      "severity": "info",
+      "width": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 13,
+        "column": 26
+      },
+      "metrics": {
+        "depth": 4,
+        "nodes": 13
+      }
+    },
+    {
+      "module": "vector_alu",
+      "signal": "result",
+      "reason_code": "glitch_risk_structural",
+      "message": "Signal 'result' has deep combinational logic (depth 4)",
+      "recommendation": "Deep logic can produce glitches; consider pipeline registers to reduce glitch power",
+      "severity": "info",
+      "width": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 9,
+        "column": 33
+      },
+      "metrics": {
+        "depth": 4,
+        "nodes": 14
+      }
+    },
+    {
+      "module": "wide_accumulator",
+      "signal": "accum",
+      "reason_code": "clock_gating_candidate",
+      "message": "Wide register 'accum' (64 bits) may benefit from clock gating",
+      "recommendation": "Consider adding an enable signal to gate updates when 'accum' is idle",
+      "severity": "info",
+      "width": 64,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/wide_accumulator.v",
+        "line": 7,
+        "column": 33
+      },
+      "metrics": {}
+    }
+  ]
+}

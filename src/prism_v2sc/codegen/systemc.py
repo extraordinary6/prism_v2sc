@@ -556,6 +556,11 @@ def _emit_module(
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
     module_instrumentation = _module_instrumentation_config(module, instrumentation_config)
+    module_needs_power_sample_strobe = _module_subtree_needs_power_sample_strobe(
+        module,
+        modules_by_name,
+        instrumentation_config,
+    )
     if module.parameters:
         template_params = ", ".join(
             f"int {_sanitize_identifier(parameter.name)} = {_cpp_expr(parameter.value)}"
@@ -567,7 +572,7 @@ def _emit_module(
 
     for port in module.ports:
         writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)};")
-    if _needs_power_sample_strobe(module_instrumentation):
+    if module_needs_power_sample_strobe:
         writer.line("sc_in<bool> __power_sample_strobe;")
     if module.ports:
         writer.line()
@@ -645,7 +650,14 @@ def _emit_module(
         writer.line("}")
         writer.line()
 
-    dump_api = generate_dump_api(module_instrumentation)
+    dump_api = generate_dump_api(
+        module_instrumentation,
+        child_dump_lines=_child_power_dump_lines(
+            module,
+            modules_by_name,
+            instrumentation_config,
+        ),
+    )
     if dump_api:
         for body_line in dump_api.splitlines():
             writer.line(body_line)
@@ -659,7 +671,9 @@ def _emit_module(
         bit_bridges,
         direct_bit_bridges,
         process_assemblers,
+        modules_by_name,
         signatures,
+        instrumentation_config,
         module_instrumentation,
         power_sampling_processes,
     )
@@ -698,6 +712,99 @@ def _needs_power_sample_strobe(config: InstrumentationConfig) -> bool:
     return any(probe.clock_domain is None for probe in config.probe_plan.probes)
 
 
+def _module_subtree_has_instrumentation(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    config: InstrumentationConfig | None,
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    if config is None or not config.enabled or config.probe_plan is None:
+        return False
+    if module.name in seen:
+        return False
+    local = _module_instrumentation_config(module, config)
+    if local.enabled:
+        return True
+    next_seen = seen | {module.name}
+    for child_name in _module_dependencies(module):
+        child = modules_by_name.get(child_name)
+        if child is not None and _module_subtree_has_instrumentation(child, modules_by_name, config, next_seen):
+            return True
+    return False
+
+
+def _module_subtree_needs_power_sample_strobe(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    config: InstrumentationConfig | None,
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    if config is None or not config.enabled or config.probe_plan is None:
+        return False
+    if module.name in seen:
+        return False
+    local = _module_instrumentation_config(module, config)
+    if _needs_power_sample_strobe(local):
+        return True
+    next_seen = seen | {module.name}
+    for child_name in _module_dependencies(module):
+        child = modules_by_name.get(child_name)
+        if child is not None and _module_subtree_needs_power_sample_strobe(child, modules_by_name, config, next_seen):
+            return True
+    return False
+
+
+def _child_needs_power_sample_strobe(
+    instance: InstanceIR,
+    modules_by_name: dict[str, ModuleIR],
+    config: InstrumentationConfig | None,
+) -> bool:
+    child = modules_by_name.get(instance.module)
+    return child is not None and _module_subtree_needs_power_sample_strobe(child, modules_by_name, config)
+
+
+def _child_has_power_dump_api(
+    instance: InstanceIR,
+    modules_by_name: dict[str, ModuleIR],
+    config: InstrumentationConfig | None,
+) -> bool:
+    child = modules_by_name.get(instance.module)
+    return child is not None and _module_subtree_has_instrumentation(child, modules_by_name, config)
+
+
+def _child_power_dump_lines(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    config: InstrumentationConfig | None,
+) -> list[str]:
+    if config is None or not config.enabled or config.probe_plan is None:
+        return []
+
+    lines: list[str] = []
+    for instance in module.instances:
+        if not _child_has_power_dump_api(instance, modules_by_name, config):
+            continue
+        member_name = _sanitize_identifier(instance.name)
+        path_name = _cpp_string_literal("." + instance.name)
+        lines.append(f"{member_name}.prism_power_dump(os, false, instance_path + {path_name});")
+
+    for generate_for in module.generate_fors:
+        vector_count = _generate_for_count_expr(generate_for)
+        for instance in generate_for.instances:
+            if not _child_has_power_dump_api(instance, modules_by_name, config):
+                continue
+            vector_name = f"{_sanitize_identifier(generate_for.name)}_{_sanitize_identifier(instance.name)}"
+            path_prefix = _cpp_string_literal(f".{generate_for.name}.{instance.name}[")
+            lines.append(f"for (int __power_child_i = 0; __power_child_i < {vector_count}; ++__power_child_i) {{")
+            lines.append(
+                f"    {vector_name}[__power_child_i].prism_power_dump("
+                f"os, false, instance_path + {path_prefix} + std::to_string(__power_child_i) + \"]\");"
+            )
+            lines.append("}")
+
+    return lines
+
+
 def _emit_constructor(
     writer: CodeWriter,
     module: ModuleIR,
@@ -706,7 +813,9 @@ def _emit_constructor(
     bit_bridges: list[GenerateBitBridge],
     direct_bit_bridges: list[DirectBitBridge],
     process_assemblers: list[ProcessSliceAssembler],
+    modules_by_name: dict[str, ModuleIR],
     signatures: dict[str, ModuleSignature],
+    root_instrumentation_config: InstrumentationConfig | None,
     instrumentation_config: InstrumentationConfig,
     power_sampling_processes: list,
 ) -> None:
@@ -751,6 +860,11 @@ def _emit_constructor(
             instance_name,
             instance,
             signatures,
+            bind_power_sample_strobe=_child_needs_power_sample_strobe(
+                instance,
+                modules_by_name,
+                root_instrumentation_config,
+            ),
             direct_bridge_by_port={
                 bridge.port_name: bridge.name
                 for bridge in direct_bit_bridges
@@ -771,6 +885,11 @@ def _emit_constructor(
                 instance,
                 signatures,
                 loop_var=loop_var,
+                bind_power_sample_strobe=_child_needs_power_sample_strobe(
+                    instance,
+                    modules_by_name,
+                    root_instrumentation_config,
+                ),
                 bit_bridge_by_port={
                     bridge.port_name: bridge.name
                     for bridge in bit_bridges
@@ -845,6 +964,7 @@ def _emit_instance_bindings(
     loop_var: str | None = None,
     bit_bridge_by_port: dict[str, str] | None = None,
     direct_bridge_by_port: dict[str, str] | None = None,
+    bind_power_sample_strobe: bool = False,
 ) -> None:
     """Emit ``inst.<port>(<value>);`` lines, resolving positional via signature."""
     resolved_ports = _resolve_instance_ports(instance, signatures)
@@ -864,6 +984,8 @@ def _emit_instance_bindings(
             f"{instance_ref}.{_sanitize_identifier(port_name)}"
             f"({_cpp_binding_expr(value, loop_var=loop_var)});"
         )
+    if bind_power_sample_strobe:
+        writer.line(f"{instance_ref}.__power_sample_strobe(__power_sample_strobe);")
 
 
 def _resolve_instance_ports(
@@ -1937,6 +2059,11 @@ def _cpp_rvalue(expr: str) -> str:
 
 def _cpp_expr(expr: str) -> str:
     return _convert_verilog_constants(expr)
+
+
+def _cpp_string_literal(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _cpp_binding_expr(expr: str, loop_var: str | None = None) -> str:

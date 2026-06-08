@@ -281,23 +281,35 @@ def generate_sampling_processes(config: InstrumentationConfig) -> list[SamplingP
     return processes
 
 
-def generate_dump_api(config: InstrumentationConfig) -> str:
+def generate_dump_api(
+    config: InstrumentationConfig,
+    *,
+    child_dump_lines: list[str] | tuple[str, ...] = (),
+) -> str:
     """Generate power profile dump API.
 
     Returns C++ code for the dump method.
     """
-    if not config.enabled or config.probe_plan is None:
+    has_local_probes = config.enabled and config.probe_plan is not None
+    if not has_local_probes and not child_dump_lines:
         return ""
 
     lines = []
     lines.append("void prism_power_dump(std::ostream& os) const {")
-    lines.append('    os << "# Power Profile Data\\n";')
+    lines.append("    prism_power_dump(os, true, name());")
+    lines.append("}")
+    lines.append("")
+    lines.append("void prism_power_dump(std::ostream& os, bool include_header, const std::string& instance_path) const {")
+    lines.append("    if (include_header) {")
+    lines.append('        os << "# Power Profile Data\\n";')
     lines.append(
-        '    os << "signal,sample_count,change_count,toggle_count,'
-        'module,width,signal_class,high_cycle_count,bit_toggle_counts\\n";'
+        '        os << "signal,sample_count,change_count,toggle_count,'
+        'module,width,signal_class,high_cycle_count,bit_toggle_counts,instance_path\\n";'
     )
+    lines.append("    }")
 
-    for probe in config.probe_plan.probes:
+    local_probes = config.probe_plan.probes if has_local_probes and config.probe_plan is not None else ()
+    for probe in local_probes:
         signal = _counter_suffix(probe)
 
         sample_count = f"__power_sample_count_{signal}" if config.track_samples else "0"
@@ -318,7 +330,11 @@ def generate_dump_api(config: InstrumentationConfig) -> str:
             lines.append('        if (__power_i != 0) { os << ";"; }')
             lines.append(f"        os << __power_bit_toggle_count_{signal}[__power_i];")
             lines.append("    }")
+        lines.append('    os << "," << instance_path;')
         lines.append('    os << "\\n";')
+
+    for child_line in child_dump_lines:
+        lines.append(f"    {child_line}")
 
     lines.append("}")
 
@@ -341,6 +357,7 @@ def generate_manifest_json(config: InstrumentationConfig) -> dict[str, Any]:
     for probe in config.probe_plan.probes:
         probe_info = {
             "signal": probe.rtl_signal_name,
+            "instance_path": probe.instance_path,
             "module": probe.module_name,
             "width": probe.width,
             "signal_class": probe.signal_class,

@@ -285,3 +285,45 @@ top.v
     assert len(assigns) == 1
     assert assigns[0]["left"] == "y"
     assert assigns[0]["right"] == "(~a)"
+
+
+def test_cli_converts_power_dump_csv_to_profile_json(tmp_path: Path) -> None:
+    dump = tmp_path / "power_dump.csv"
+    dump.write_text(
+        """# Power Profile Data
+signal,sample_count,change_count,toggle_count,module,width,signal_class,high_cycle_count,bit_toggle_counts,instance_path
+q,12,5,18,leaf,8,state,40,1;2;3;4;2;2;2;2,dut.u_leaf
+""",
+        encoding="utf-8",
+    )
+    profile = tmp_path / "power_profile.json"
+
+    assert (
+        main(
+            [
+                "--power-profile-dump",
+                str(dump),
+                "--power-profile-output",
+                str(profile),
+                "--power-workload-name",
+                "real_vectors",
+                "--power-workload-cycles",
+                "12",
+                "--power-profile-top",
+                "top",
+                "--power-profile-source",
+                "rtl/sources.f",
+                "--power-reset-cycles",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(profile.read_text(encoding="utf-8"))
+    assert payload["workload"]["name"] == "real_vectors"
+    assert payload["workload"]["total_cycles"] == 12
+    assert payload["workload"]["top_module"] == "top"
+    assert payload["workload"]["sources"] == ["rtl/sources.f"]
+    assert payload["workload"]["reset_cycles"] == 2
+    assert payload["probes"][0]["instance_path"] == "dut.u_leaf"

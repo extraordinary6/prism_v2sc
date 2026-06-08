@@ -176,6 +176,9 @@ def parse_power_dump(dump_path: Path) -> dict[str, Any]:
             "change_count": _parse_int(row.get("change_count"), default=0),
             "toggle_count": _parse_int(row.get("toggle_count"), default=0),
         }
+        instance_path = row.get("instance_path")
+        if instance_path:
+            probe["instance_path"] = instance_path
         high_cycle_count = _parse_int(row.get("high_cycle_count"), default=0)
         if high_cycle_count:
             probe["high_cycle_count"] = high_cycle_count

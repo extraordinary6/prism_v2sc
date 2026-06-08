@@ -13,6 +13,7 @@ from prism_v2sc.analysis.probe_planning import create_probe_plan, ProbePlanPolic
 from prism_v2sc.codegen.instrumentation import InstrumentationConfig, generate_manifest_json
 from prism_v2sc.codegen.systemc import emit_systemc_files
 from prism_v2sc.frontend.flow import compute_source_root
+from prism_v2sc.power.runner import WorkloadMetadata, create_power_profile_json
 from prism_v2sc.power.schemas import export_power_static_json
 
 
@@ -183,6 +184,42 @@ def run_power_report(
     return report
 
 
+def run_power_profile_from_dump(
+    dump_path: Path,
+    output_path: Path,
+    *,
+    workload_name: str | None = None,
+    cycle_count: int = 0,
+    top_module: str = "unknown",
+    sources: list[str] | tuple[str, ...] = (),
+    vector_file: str | None = None,
+    seed: int | None = None,
+    reset_cycles: int = 0,
+) -> None:
+    """Convert a raw prism_power_dump CSV into power_profile.json."""
+    if not dump_path.is_file():
+        raise FileNotFoundError(f"power dump CSV not found: {dump_path}")
+
+    if workload_name is None:
+        workload_name = dump_path.stem
+
+    print(f"Loading power dump CSV from: {dump_path}", file=sys.stderr)
+    create_power_profile_json(
+        dump_path,
+        WorkloadMetadata(
+            name=workload_name,
+            cycle_count=cycle_count,
+            top_module=top_module,
+            sources=list(sources),
+            vector_file=vector_file,
+            seed=seed,
+            reset_cycles=reset_cycles,
+        ),
+        output_path,
+    )
+    print(f"Power profile written to: {output_path}", file=sys.stderr)
+
+
 def add_power_arguments(parser: Any) -> None:
     """Add power analysis arguments to argument parser.
 
@@ -232,6 +269,70 @@ def add_power_arguments(parser: Any) -> None:
         type=Path,
         metavar='FILE',
         help='Static analysis JSON to join into --power-report'
+    )
+
+    power_group.add_argument(
+        '--power-profile-dump',
+        type=Path,
+        metavar='CSV',
+        help='Convert a prism_power_dump CSV into power_profile.json'
+    )
+
+    power_group.add_argument(
+        '--power-profile-output',
+        type=Path,
+        default=Path('power_profile.json'),
+        metavar='FILE',
+        help='Output path for --power-profile-dump (default: power_profile.json)'
+    )
+
+    power_group.add_argument(
+        '--power-workload-name',
+        metavar='NAME',
+        help='Workload name to record in power_profile.json'
+    )
+
+    power_group.add_argument(
+        '--power-workload-cycles',
+        type=int,
+        default=0,
+        metavar='N',
+        help='Total workload cycles to record in power_profile.json'
+    )
+
+    power_group.add_argument(
+        '--power-profile-top',
+        metavar='MODULE',
+        help='Top module name to record in power_profile.json'
+    )
+
+    power_group.add_argument(
+        '--power-profile-source',
+        action='append',
+        default=[],
+        metavar='PATH',
+        help='RTL source or filelist path to record as profile metadata (repeatable)'
+    )
+
+    power_group.add_argument(
+        '--power-vector-file',
+        metavar='PATH',
+        help='Optional workload vector file path to record and hash'
+    )
+
+    power_group.add_argument(
+        '--power-seed',
+        type=int,
+        metavar='N',
+        help='Optional workload random seed metadata'
+    )
+
+    power_group.add_argument(
+        '--power-reset-cycles',
+        type=int,
+        default=0,
+        metavar='N',
+        help='Reset cycle count metadata for --power-profile-dump'
     )
 
     power_group.add_argument(
@@ -306,6 +407,20 @@ def handle_power_commands(
             include_dirs=include_dirs,
             defines=defines,
             deep_profile=args.power_deep_profile,
+        )
+        handled = True
+
+    if args.power_profile_dump:
+        run_power_profile_from_dump(
+            args.power_profile_dump,
+            args.power_profile_output,
+            workload_name=args.power_workload_name,
+            cycle_count=args.power_workload_cycles,
+            top_module=args.power_profile_top or top,
+            sources=tuple(str(source) for source in sources) + tuple(args.power_profile_source),
+            vector_file=args.power_vector_file,
+            seed=args.power_seed,
+            reset_cycles=args.power_reset_cycles,
         )
         handled = True
 

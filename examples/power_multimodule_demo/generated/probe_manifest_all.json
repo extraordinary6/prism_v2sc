@@ -1,0 +1,1266 @@
+{
+  "design_name": "power_soc_top",
+  "top_module": "power_soc_top",
+  "probe_count": 34,
+  "state_probe_count": 9,
+  "comb_probe_count": 25,
+  "memory_probe_count": 0,
+  "policy": "all_signals",
+  "warnings": [],
+  "estimated_counter_count": 102,
+  "estimated_storage_bytes": 816,
+  "probes": [
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "busy",
+      "systemc_member_name": "busy",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 15,
+        "column": 8
+      },
+      "static_reason_codes": [
+        "high_fanout_candidate"
+      ]
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "result",
+      "systemc_member_name": "result",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 12,
+        "column": 33
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "packets",
+      "systemc_member_name": "packets",
+      "width": 16,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 13,
+        "column": 34
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "mix_mode",
+      "systemc_member_name": "mix_mode",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 16,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "mux_sel",
+      "systemc_member_name": "mux_sel",
+      "width": 2,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 17,
+        "column": 14
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "q0",
+      "systemc_member_name": "q0",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 18,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "q1",
+      "systemc_member_name": "q1",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 19,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "q2",
+      "systemc_member_name": "q2",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 20,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "q3",
+      "systemc_member_name": "q3",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 21,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "mux_out",
+      "systemc_member_name": "mux_out",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 22,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "alu_out",
+      "systemc_member_name": "alu_out",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 23,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "accum_out",
+      "systemc_member_name": "accum_out",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 24,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en0",
+      "systemc_member_name": "lane_en0",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 26,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en1",
+      "systemc_member_name": "lane_en1",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 27,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en2",
+      "systemc_member_name": "lane_en2",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 28,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en3",
+      "systemc_member_name": "lane_en3",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 29,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en4",
+      "systemc_member_name": "lane_en4",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 30,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en5",
+      "systemc_member_name": "lane_en5",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 31,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en6",
+      "systemc_member_name": "lane_en6",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 32,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "power_soc_top",
+      "module_name": "power_soc_top",
+      "rtl_signal_name": "lane_en7",
+      "systemc_member_name": "lane_en7",
+      "width": 1,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+        "line": 33,
+        "column": 8
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "control_sequencer",
+      "module_name": "control_sequencer",
+      "rtl_signal_name": "busy",
+      "systemc_member_name": "busy",
+      "width": 1,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+        "line": 8,
+        "column": 31
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "control_sequencer",
+      "module_name": "control_sequencer",
+      "rtl_signal_name": "mux_sel",
+      "systemc_member_name": "mux_sel",
+      "width": 2,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+        "line": 9,
+        "column": 31
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "control_sequencer",
+      "module_name": "control_sequencer",
+      "rtl_signal_name": "mix_mode",
+      "systemc_member_name": "mix_mode",
+      "width": 1,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+        "line": 10,
+        "column": 31
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "control_sequencer",
+      "module_name": "control_sequencer",
+      "rtl_signal_name": "packet_count",
+      "systemc_member_name": "packet_count",
+      "width": 16,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+        "line": 11,
+        "column": 34
+      },
+      "static_reason_codes": [
+        "counter_activity_candidate"
+      ]
+    },
+    {
+      "instance_path": "reg_bank",
+      "module_name": "reg_bank",
+      "rtl_signal_name": "q0",
+      "systemc_member_name": "q0",
+      "width": 64,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 14,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "clock_gating_candidate"
+      ]
+    },
+    {
+      "instance_path": "reg_bank",
+      "module_name": "reg_bank",
+      "rtl_signal_name": "q1",
+      "systemc_member_name": "q1",
+      "width": 64,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 15,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "clock_gating_candidate"
+      ]
+    },
+    {
+      "instance_path": "reg_bank",
+      "module_name": "reg_bank",
+      "rtl_signal_name": "q2",
+      "systemc_member_name": "q2",
+      "width": 64,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 16,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "clock_gating_candidate"
+      ]
+    },
+    {
+      "instance_path": "reg_bank",
+      "module_name": "reg_bank",
+      "rtl_signal_name": "q3",
+      "systemc_member_name": "q3",
+      "width": 64,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+        "line": 17,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "clock_gating_candidate"
+      ]
+    },
+    {
+      "instance_path": "wide_crossbar",
+      "module_name": "wide_crossbar",
+      "rtl_signal_name": "out",
+      "systemc_member_name": "out",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/wide_crossbar.v",
+        "line": 9,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "wide_mux_candidate",
+        "glitch_risk_structural"
+      ]
+    },
+    {
+      "instance_path": "vector_alu",
+      "module_name": "vector_alu",
+      "rtl_signal_name": "result",
+      "systemc_member_name": "result",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 9,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "glitch_risk_structural"
+      ]
+    },
+    {
+      "instance_path": "vector_alu",
+      "module_name": "vector_alu",
+      "rtl_signal_name": "mix1",
+      "systemc_member_name": "mix1",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 12,
+        "column": 26
+      },
+      "static_reason_codes": [
+        "glitch_risk_structural"
+      ]
+    },
+    {
+      "instance_path": "vector_alu",
+      "module_name": "vector_alu",
+      "rtl_signal_name": "mix2",
+      "systemc_member_name": "mix2",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 13,
+        "column": 26
+      },
+      "static_reason_codes": [
+        "glitch_risk_structural"
+      ]
+    },
+    {
+      "instance_path": "vector_alu",
+      "module_name": "vector_alu",
+      "rtl_signal_name": "mix0",
+      "systemc_member_name": "mix0",
+      "width": 64,
+      "signal_class": "comb",
+      "clock_domain": null,
+      "clock_edge": null,
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+        "line": 11,
+        "column": 26
+      },
+      "static_reason_codes": []
+    },
+    {
+      "instance_path": "wide_accumulator",
+      "module_name": "wide_accumulator",
+      "rtl_signal_name": "accum",
+      "systemc_member_name": "accum",
+      "width": 64,
+      "signal_class": "state",
+      "clock_domain": "clk",
+      "clock_edge": "posedge",
+      "source_loc": {
+        "file": "examples/power_multimodule_demo/rtl/datapath/wide_accumulator.v",
+        "line": 7,
+        "column": 33
+      },
+      "static_reason_codes": [
+        "clock_gating_candidate"
+      ]
+    }
+  ],
+  "instrumentation": {
+    "instrumentation_version": "1.0",
+    "probes": [
+      {
+        "signal": "busy",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 15,
+          "column": 8
+        }
+      },
+      {
+        "signal": "result",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 12,
+          "column": 33
+        }
+      },
+      {
+        "signal": "packets",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 16,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 13,
+          "column": 34
+        }
+      },
+      {
+        "signal": "mix_mode",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 16,
+          "column": 8
+        }
+      },
+      {
+        "signal": "mux_sel",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 2,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 17,
+          "column": 14
+        }
+      },
+      {
+        "signal": "q0",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 18,
+          "column": 26
+        }
+      },
+      {
+        "signal": "q1",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 19,
+          "column": 26
+        }
+      },
+      {
+        "signal": "q2",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 20,
+          "column": 26
+        }
+      },
+      {
+        "signal": "q3",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 21,
+          "column": 26
+        }
+      },
+      {
+        "signal": "mux_out",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 22,
+          "column": 26
+        }
+      },
+      {
+        "signal": "alu_out",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 23,
+          "column": 26
+        }
+      },
+      {
+        "signal": "accum_out",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 24,
+          "column": 26
+        }
+      },
+      {
+        "signal": "lane_en0",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 26,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en1",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 27,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en2",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 28,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en3",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 29,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en4",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 30,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en5",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 31,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en6",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 32,
+          "column": 8
+        }
+      },
+      {
+        "signal": "lane_en7",
+        "instance_path": "power_soc_top",
+        "module": "power_soc_top",
+        "width": 1,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/top/power_soc_top.v",
+          "line": 33,
+          "column": 8
+        }
+      },
+      {
+        "signal": "busy",
+        "instance_path": "control_sequencer",
+        "module": "control_sequencer",
+        "width": 1,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+          "line": 8,
+          "column": 31
+        }
+      },
+      {
+        "signal": "mux_sel",
+        "instance_path": "control_sequencer",
+        "module": "control_sequencer",
+        "width": 2,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+          "line": 9,
+          "column": 31
+        }
+      },
+      {
+        "signal": "mix_mode",
+        "instance_path": "control_sequencer",
+        "module": "control_sequencer",
+        "width": 1,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+          "line": 10,
+          "column": 31
+        }
+      },
+      {
+        "signal": "packet_count",
+        "instance_path": "control_sequencer",
+        "module": "control_sequencer",
+        "width": 16,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/control/control_sequencer.v",
+          "line": 11,
+          "column": 34
+        }
+      },
+      {
+        "signal": "q0",
+        "instance_path": "reg_bank",
+        "module": "reg_bank",
+        "width": 64,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+          "line": 14,
+          "column": 33
+        }
+      },
+      {
+        "signal": "q1",
+        "instance_path": "reg_bank",
+        "module": "reg_bank",
+        "width": 64,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+          "line": 15,
+          "column": 33
+        }
+      },
+      {
+        "signal": "q2",
+        "instance_path": "reg_bank",
+        "module": "reg_bank",
+        "width": 64,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+          "line": 16,
+          "column": 33
+        }
+      },
+      {
+        "signal": "q3",
+        "instance_path": "reg_bank",
+        "module": "reg_bank",
+        "width": 64,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/reg_bank.v",
+          "line": 17,
+          "column": 33
+        }
+      },
+      {
+        "signal": "out",
+        "instance_path": "wide_crossbar",
+        "module": "wide_crossbar",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/wide_crossbar.v",
+          "line": 9,
+          "column": 33
+        }
+      },
+      {
+        "signal": "result",
+        "instance_path": "vector_alu",
+        "module": "vector_alu",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+          "line": 9,
+          "column": 33
+        }
+      },
+      {
+        "signal": "mix1",
+        "instance_path": "vector_alu",
+        "module": "vector_alu",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+          "line": 12,
+          "column": 26
+        }
+      },
+      {
+        "signal": "mix2",
+        "instance_path": "vector_alu",
+        "module": "vector_alu",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+          "line": 13,
+          "column": 26
+        }
+      },
+      {
+        "signal": "mix0",
+        "instance_path": "vector_alu",
+        "module": "vector_alu",
+        "width": 64,
+        "signal_class": "comb",
+        "clock_domain": null,
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/vector_alu.v",
+          "line": 11,
+          "column": 26
+        }
+      },
+      {
+        "signal": "accum",
+        "instance_path": "wide_accumulator",
+        "module": "wide_accumulator",
+        "width": 64,
+        "signal_class": "state",
+        "clock_domain": "clk",
+        "columns": {
+          "sample_count": true,
+          "change_count": true,
+          "toggle_count": true,
+          "high_cycle_count": true,
+          "bit_toggle_counts": true
+        },
+        "source_loc": {
+          "file": "examples/power_multimodule_demo/rtl/datapath/wide_accumulator.v",
+          "line": 7,
+          "column": 33
+        }
+      }
+    ]
+  }
+}

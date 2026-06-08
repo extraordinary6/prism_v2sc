@@ -21,6 +21,7 @@ from prism_v2sc.power.cli import (
     run_power_static,
     run_power_instrument,
     run_power_report,
+    run_power_profile_from_dump,
     add_power_arguments,
     handle_power_commands,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "run_power_static",
     "run_power_instrument",
     "run_power_report",
+    "run_power_profile_from_dump",
     "add_power_arguments",
     "handle_power_commands",
     # Runner (P6)

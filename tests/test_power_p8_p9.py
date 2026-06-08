@@ -93,10 +93,10 @@ def test_parse_deep_dump_records_bit_counts_and_memory_summary(tmp_path: Path) -
     dump = tmp_path / "dump.csv"
     dump.write_text(
         """# Power Profile Data
-signal,sample_count,change_count,toggle_count,module,width,signal_class,high_cycle_count,bit_toggle_counts
-mem[0],10,2,5,top,8,memory_cell,20,0;1;0;1;0;1;0;2
-mem[1],10,1,3,top,8,memory_cell,10,0;0;0;1;0;1;0;1
-q,10,4,9,top,8,state,30,1;1;1;1;1;1;1;2
+signal,sample_count,change_count,toggle_count,module,width,signal_class,high_cycle_count,bit_toggle_counts,instance_path
+mem[0],10,2,5,top,8,memory_cell,20,0;1;0;1;0;1;0;2,dut.u_mem
+mem[1],10,1,3,top,8,memory_cell,10,0;0;0;1;0;1;0;1,dut.u_mem
+q,10,4,9,top,8,state,30,1;1;1;1;1;1;1;2,dut
 """,
         encoding="utf-8",
     )
@@ -105,6 +105,7 @@ q,10,4,9,top,8,state,30,1;1;1;1;1;1;1;2
 
     assert profile["probes"][0]["bit_toggle_counts"] == [0, 1, 0, 1, 0, 1, 0, 2]
     assert profile["probes"][0]["high_cycle_count"] == 20
+    assert profile["probes"][0]["instance_path"] == "dut.u_mem"
     assert profile["memory_summary"] == [
         {
             "module": "top",
@@ -324,6 +325,42 @@ endmodule
 
     metrics = analyze_expression_metrics(module)
     assert {"hi", "lo"}.issubset(metrics)
+
+
+def test_multimodule_power_codegen_recurses_dump_and_strobe(tmp_path: Path) -> None:
+    rtl = tmp_path / "multi.v"
+    rtl.write_text(
+        """
+module child(input wire [7:0] a, output wire [7:0] y);
+  wire [7:0] tmp;
+  assign tmp = a ^ 8'h5a;
+  assign y = tmp;
+endmodule
+
+module top(input wire [7:0] a, output wire [7:0] y);
+  child u_child(.a(a), .y(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "top")
+    plan = create_probe_plan(
+        design,
+        ProbePlanPolicy(
+            probe_comb_suspects_only=False,
+            probe_ports=True,
+        ),
+    )
+    header = generate_systemc_header(
+        design,
+        InstrumentationConfig(enabled=True, probe_plan=plan, per_bit_counters=True),
+    )
+
+    assert "sc_in<bool> __power_sample_strobe;" in header
+    assert "u_child.__power_sample_strobe(__power_sample_strobe);" in header
+    assert 'bit_toggle_counts,instance_path\\n";' in header
+    assert "void prism_power_dump(std::ostream& os, bool include_header, const std::string& instance_path) const" in header
+    assert 'u_child.prism_power_dump(os, false, instance_path + ".u_child");' in header
 
 
 def test_linux_systemc_profile_collection_smoke(tmp_path: Path) -> None:

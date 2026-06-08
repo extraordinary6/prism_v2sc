@@ -28,6 +28,7 @@ class PowerHotspot:
     source_loc: dict[str, Any] | None
     confidence: str = "medium"  # low, medium, high
     signal_class: str = "unknown"
+    instance_path: str | None = None
     dimensions: list[str] | None = None
     metrics: dict[str, Any] | None = None
     limitations: list[str] | None = None
@@ -208,6 +209,7 @@ def combine_static_and_dynamic(
             source_loc=probe.get("source_loc") or loc_map.get((module, signal)) or loc_by_signal.get(signal),
             confidence=confidence,
             signal_class=probe.get("signal_class", "unknown"),
+            instance_path=probe.get("instance_path"),
             dimensions=dimensions,
             metrics=metrics,
             limitations=limitations,
@@ -412,6 +414,7 @@ def generate_power_report(
             {
                 "rank": h.rank,
                 "module": h.module,
+                "instance_path": h.instance_path,
                 "signal": h.signal,
                 "score": round(h.score, 2),
                 "width": h.width,
@@ -475,6 +478,7 @@ def select_deep_profile_targets(
         selected.append(
             {
                 "module": hotspot.module,
+                "instance_path": hotspot.instance_path,
                 "signal": hotspot.signal,
                 "score": round(hotspot.score, 2),
                 "width": hotspot.width,
@@ -516,6 +520,7 @@ def generate_workload_comparison_report(
                 "top_hotspots": [
                     {
                         "module": hotspot.module,
+                        "instance_path": hotspot.instance_path,
                         "signal": hotspot.signal,
                         "score": round(hotspot.score, 2),
                         "dimensions": hotspot.dimensions or [],

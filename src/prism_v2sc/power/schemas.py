@@ -39,6 +39,7 @@ POWER_STATIC_SCHEMA = {
                 "required": ["module", "signal", "reason_code", "message"],
                 "properties": {
                     "module": {"type": "string"},
+                    "instance_path": {"type": "string"},
                     "signal": {"type": "string"},
                     "reason_code": {
                         "type": "string",
@@ -173,6 +174,7 @@ POWER_REPORT_SCHEMA = {
                     "rank": {"type": "integer", "minimum": 1},
                     "module": {"type": "string"},
                     "signal": {"type": "string"},
+                    "instance_path": {"type": ["string", "null"]},
                     "score": {"type": "number", "minimum": 0},
                     "width": {"type": "integer"},
                     "toggle_count": {"type": "integer"},
@@ -312,6 +314,7 @@ def export_power_report_json(hotspots: list[Any], summary: dict[str, Any]) -> di
                 "rank": i + 1,
                 "module": h.get("module"),
                 "signal": h.get("signal"),
+                "instance_path": h.get("instance_path"),
                 "score": h.get("score", 0.0),
                 "width": h.get("width"),
                 "toggle_count": h.get("toggle_count"),
