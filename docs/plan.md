@@ -1,6 +1,6 @@
 # prism_v2sc Plan
 
-Last updated: 2026-06-06.
+Last updated: 2026-07-09.
 
 This document tracks **what is implemented right now** and **what is queued next**. It is not a roadmap of aspirations; entries land here only after they exist in the code.
 
@@ -42,8 +42,8 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 79 unit/integration tests under `tests/` (`python -m pytest -q`).
-- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **24 trace fixtures**, runs **1 conversion-only SV fixture** for `interface_modport`, and asserts diagnostic codes for **6 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
+- 164 unit/integration tests under `tests/` (`python -m pytest -q`).
+- Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **40 trace fixtures**, runs **5 conversion-only fixtures**, and asserts diagnostic codes plus `--fail-on-diagnostics` behavior for **14 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
 
 ## Phases Completed

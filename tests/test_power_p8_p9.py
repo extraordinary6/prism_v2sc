@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +27,89 @@ from prism_v2sc.power.scoring import (
 )
 
 from _pyslang_helper import lower_via_pyslang
+
+
+_SYSTEMC_ROOT_ENV_VARS = ("SYSTEMC_HOME", "SYSTEMC_ROOT")
+_SYSTEMC_DEFAULT_ROOTS = (Path("/usr"), Path("/usr/local/systemc-2.3.4"))
+
+
+def _split_flags(value: str) -> list[str]:
+    return shlex.split(value) if value else []
+
+
+def _systemc_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for name in _SYSTEMC_ROOT_ENV_VARS:
+        value = os.environ.get(name)
+        if value:
+            roots.append(Path(value))
+    roots.extend(_SYSTEMC_DEFAULT_ROOTS)
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved not in seen:
+            deduped.append(root)
+            seen.add(resolved)
+    return tuple(deduped)
+
+
+def _has_systemc_header(include_dir: Path) -> bool:
+    return (include_dir / "systemc").is_file() or (include_dir / "systemc.h").is_file()
+
+
+def _systemc_compile_flags_or_skip() -> tuple[list[str], list[str], list[str]]:
+    cxx_flags = _split_flags(os.environ.get("SC_CXXFLAGS", ""))
+    ld_flags = _split_flags(os.environ.get("SC_LDFLAGS", ""))
+    libs = _split_flags(os.environ.get("SC_LIBS", "-lsystemc -pthread"))
+
+    for root in _systemc_roots():
+        include_dir = root / "include"
+        if not _has_systemc_header(include_dir):
+            continue
+
+        root_cxx_flags = [] if include_dir == Path("/usr/include") else [f"-I{include_dir}"]
+        for lib_dir in (root / "lib64", root / "lib-linux64", root / "lib"):
+            if (lib_dir / "libsystemc.so").exists() or (lib_dir / "libsystemc.a").exists():
+                return (
+                    [*root_cxx_flags, *cxx_flags],
+                    [f"-L{lib_dir}", f"-Wl,-rpath,{lib_dir}", *ld_flags],
+                    libs,
+                )
+        return [*root_cxx_flags, *cxx_flags], ld_flags, libs
+
+    if cxx_flags or ld_flags or os.environ.get("SC_LIBS"):
+        return cxx_flags, ld_flags, libs
+
+    pytest.skip(
+        "SystemC headers are not available; set SYSTEMC_HOME or "
+        "SC_CXXFLAGS/SC_LDFLAGS/SC_LIBS"
+    )
+
+
+def _compile_systemc_runner(source: Path, exe: Path, include_dir: Path) -> None:
+    cxx = os.environ.get("CXX", "g++")
+    if shutil.which(cxx) is None:
+        pytest.skip(f"{cxx} is not available")
+
+    cxx_flags, ld_flags, libs = _systemc_compile_flags_or_skip()
+    subprocess.run(
+        [
+            cxx,
+            "-I",
+            str(include_dir),
+            *cxx_flags,
+            str(source),
+            "-o",
+            str(exe),
+            *ld_flags,
+            *libs,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_systemc_codegen_integrates_power_instrumentation(tmp_path: Path) -> None:
@@ -366,10 +451,6 @@ endmodule
 def test_linux_systemc_profile_collection_smoke(tmp_path: Path) -> None:
     if sys.platform != "linux":
         pytest.skip("Linux SystemC smoke is exercised by the Linux CI workflow")
-    if shutil.which("g++") is None:
-        pytest.skip("g++ is not available")
-    if not Path("/usr/include/systemc").exists():
-        pytest.skip("SystemC headers are not available")
 
     rtl = tmp_path / "simple.v"
     rtl.write_text(
@@ -412,22 +493,7 @@ int sc_main(int argc, char** argv) {
         encoding="utf-8",
     )
     exe = tmp_path / "runner"
-    subprocess.run(
-        [
-            "g++",
-            "-std=c++17",
-            "-I",
-            str(out_dir),
-            str(runner),
-            "-lsystemc",
-            "-pthread",
-            "-o",
-            str(exe),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    _compile_systemc_runner(runner, exe, out_dir)
     dump = tmp_path / "dump.csv"
     subprocess.run([str(exe), str(dump)], check=True, capture_output=True, text=True)
 
@@ -439,10 +505,6 @@ int sc_main(int argc, char** argv) {
 def test_linux_power_instrumentation_preserves_systemc_trace(tmp_path: Path) -> None:
     if sys.platform != "linux":
         pytest.skip("Linux SystemC instrumentation guard is exercised by CI")
-    if shutil.which("g++") is None:
-        pytest.skip("g++ is not available")
-    if not Path("/usr/include/systemc").exists():
-        pytest.skip("SystemC headers are not available")
 
     rtl = tmp_path / "simple.v"
     rtl.write_text(
@@ -500,22 +562,7 @@ int sc_main(int argc, char** argv) {{
             encoding="utf-8",
         )
         exe = tmp_path / name
-        subprocess.run(
-            [
-                "g++",
-                "-std=c++17",
-                "-I",
-                str(include_dir),
-                str(runner),
-                "-lsystemc",
-                "-pthread",
-                "-o",
-                str(exe),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _compile_systemc_runner(runner, exe, include_dir)
         result = subprocess.run([str(exe)], check=True, capture_output=True, text=True, cwd=tmp_path)
         return [line for line in result.stdout.splitlines() if line.strip().isdigit()]
 

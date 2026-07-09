@@ -80,6 +80,35 @@ endmodule
     assert 'u_child("u_child")' in header
 
 
+def test_template_defaults_do_not_reference_parent_localparams(tmp_path: Path) -> None:
+    rtl = tmp_path / "param_scope.v"
+    rtl.write_text(
+        """
+module child #(parameter WIDTH = 4) (
+  input wire [WIDTH-1:0] a,
+  output wire [WIDTH-1:0] y
+);
+  assign y = a;
+endmodule
+
+module top #(parameter BASE = 5) (
+  input wire [7:0] a,
+  output wire [7:0] y
+);
+  localparam CHILD_W = BASE + 3;
+  child #(.WIDTH(CHILD_W)) u_child(.a(a), .y(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "top")
+
+    header = generate_systemc_header(design)
+
+    assert "child<8> u_child;" in header
+    assert "WIDTH = CHILD_W" not in header
+
+
 def test_generate_for_unrolls_into_flattened_instances(tmp_path: Path) -> None:
     """slang elaborates generate-for into N concrete instances. The IR's
     ``generate_fors`` is empty; each unrolled iteration lands as a plain
@@ -156,6 +185,51 @@ endmodule
     assert "q.write(__next_q);" in header
     assert "SC_METHOD(always_ff_0);" in header
     assert "sensitive << clk.pos() << rst_n.neg();" in header
+
+
+def test_nonblocking_chain_reads_pre_edge_values(tmp_path: Path) -> None:
+    rtl = tmp_path / "nba_chain.v"
+    rtl.write_text(
+        """
+module nba_chain(input wire clk, input wire [7:0] d, output reg [7:0] a, output reg [7:0] b);
+  always @(posedge clk) begin
+    a <= d;
+    b <= a;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "nba_chain")
+
+    header = generate_systemc_header(design)
+
+    assert "__next_a = d.read();" in header
+    assert "__next_b = a.read();" in header
+    assert "__next_b = __next_a;" not in header
+
+
+def test_blocking_temp_in_ff_feeds_later_nonblocking_rhs(tmp_path: Path) -> None:
+    rtl = tmp_path / "ff_temp.v"
+    rtl.write_text(
+        """
+module ff_temp(input wire clk, input wire [7:0] a, input wire [7:0] b, output reg [7:0] result);
+  reg [8:0] sum;
+  always @(posedge clk) begin
+    sum = {1'b0, a} + {1'b0, b};
+    result <= sum[8] ? 8'hff : sum[7:0];
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "ff_temp")
+
+    header = generate_systemc_header(design)
+
+    assert "__next_sum =" in header
+    assert "__next_result = (__next_sum[8] ? 0xff : __next_sum.range(7, 0));" in header
+    assert "sum.read()[8]" not in header
 
 
 def test_generate_systemc_header_for_typedef_enum(tmp_path: Path) -> None:

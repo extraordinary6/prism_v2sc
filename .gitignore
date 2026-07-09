@@ -9,3 +9,8 @@ parsetab.py
 build/
 tests/tmp/
 .claude/
+.venv/
+csrc/
+*.daidir/
+simv
+ucli.key

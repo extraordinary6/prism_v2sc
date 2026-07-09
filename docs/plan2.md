@@ -35,8 +35,8 @@ Power diagnostics 是 RTL 设计期的相对诊断工具，目标是指出活动
 - codegen 已输出层级化 one-module-per-header SystemC，模块成员为 public，
   统一注册 `SC_METHOD`，并已有 `__next_*` staging 与 `__shadow_*`
   slice 多写者聚合机制。
-- 当前 equivalence harness 可导入 25 个 trace fixtures、1 个
-  conversion fixture、6 个 diagnostic fixtures；README 当前报告 85 个
+- 当前 equivalence harness 可导入 40 个 trace fixtures、5 个
+  conversion fixtures、14 个 diagnostic fixtures；`pytest` 当前报告 164 个
   unit/integration tests。
 - `analysis/drivers.py` 已有真实分析 pass，可作为遍历结构化语句的风格参考；
   `analysis/dependencies.py` / `analysis/sensitivity.py` 仍是 placeholder。

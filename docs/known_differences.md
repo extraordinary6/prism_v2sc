@@ -11,16 +11,16 @@
 ## Process Semantics
 
 - Each process becomes its own `SC_METHOD`. Arbitrary delta-cycle ordering is not modeled; we trade exact event scheduling for predictable, readable output.
-- Combinational `always` and continuous `assign` outputs use a per-output ``__next_<signal>`` staging pattern. Inter-statement reads of a just-written signal therefore see the **pre-block** value rather than the just-staged value. This is rare in synthesizable RTL but worth knowing.
-- Nonblocking assignments inside `always @(posedge ...)` blocks share the same staged ``__next_*`` pattern, including for bit-select and part-select LHS.
-- Modules with multiple procedural blocks emit an `event_scheduler_approximated` warning. The recommended (and CI-exercised) style is **one procedural block per output**.
+- Combinational `always` outputs use a per-output ``__next_<signal>`` staging pattern, and RHS reads of signals written earlier in the same process are routed through the staged value. Blocking read-after-write within one combinational process is trace-verified by `staged_read_after_write`.
+- Nonblocking assignments inside `always @(posedge ...)` blocks schedule LHS updates through staged ``__next_*`` temporaries, including for bit-select and part-select LHS. RHS expressions read the pre-edge signal value, preserving Verilog NBA chain behavior; blocking temporaries assigned earlier in the same FF block are still read through their immediate staged value. `nba_chain` and `package_import` trace-verify these two paths.
+- Modules with multiple procedural blocks emit an `event_scheduler_approximated` warning. Mutually dependent combinational blocks are pinned by the `comb_process_order` diagnostic fixture rather than being treated as fully scheduled Verilog semantics. The recommended (and CI-exercised) style is **one procedural block per output** unless a dedicated trace fixture covers the pattern.
 
 ## Expression Lowering
 
-- Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` operand casts. Widths are inferred from declared port/signal widths and from sized literals; if a width cannot be inferred it falls back to 1.
+- Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` / `sc_biguint<W>` operand casts. Widths are inferred from declared port/signal widths and from sized literals; if a width cannot be inferred it falls back to 1.
 - Reduction operators `&x`, `|x`, `^x` (and their inverted forms) lower to `sc_uint`'s `and_reduce()` / `or_reduce()` / `xor_reduce()` methods.
-- X/Z values inside literals are approximated as zero in generated C++ expressions. The IR records `has_xz=true` so downstream tooling can still see the original intent.
-- Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>`. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Full SystemVerilog mixed signed/unsigned context sizing is still not exhaustively modeled.
+- X/Z values inside non-`inout` literals are approximated as zero in generated C++ expressions and emit `x_z_literal_approximated` diagnostics; `xz_logic_rejected` pins that this is a warning contract, not a trace-equivalent claim. The IR records `has_xz=true` so downstream tooling can still see the original intent.
+- Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>` for widths up to 64 bits and `sc_bigint<W>` / `sc_biguint<W>` beyond that. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Full SystemVerilog mixed signed/unsigned context sizing is still not exhaustively modeled.
 
 ## Selects and Bindings
 
@@ -46,6 +46,7 @@
 - The supported surface is bounded by slang (IEEE 1800-2023 synthesizable subset) and by lowering coverage in this project.
 - Synthesizable `function` is supported.
 - Dynamic SV (classes, randomization, programs, runtime assertions/properties) is out of scope and surfaces as diagnostics rather than partial lowering.
+- Tasks and system-task expression statements are out of scope; `task_system_task_rejected` pins both the task diagnostic and the unsupported expression-statement diagnostic.
 - The supported SV surface now includes typedefs/enums, packed structs/unions, packages/imports, unpacked-array memories, whole-vector `inout`, and a simple packed-signal `interface`/`modport` flattening subset. More complex SV constructs remain queued; see `plan.md`.
 
 ## Policy

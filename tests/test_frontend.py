@@ -70,6 +70,50 @@ endmodule
     assert code_to_severity["blocking_in_always_ff"] == "warning"
 
 
+def test_lower_design_reports_overlapping_slice_writers(tmp_path: Path) -> None:
+    rtl = tmp_path / "overlap.v"
+    rtl.write_text(
+        """
+module overlap(input wire clk, input wire [3:0] a, input wire [3:0] b, output reg [7:0] q);
+  always @(posedge clk) begin
+    q[3:0] <= a;
+  end
+  always @(posedge clk) begin
+    q[5:2] <= b;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "overlap")
+    codes = {diagnostic.code for diagnostic in design.diagnostics}
+
+    assert "overlapping_procedural_writes" in codes
+
+
+def test_lower_design_allows_non_overlapping_slice_writers(tmp_path: Path) -> None:
+    rtl = tmp_path / "non_overlap.v"
+    rtl.write_text(
+        """
+module non_overlap(input wire clk, input wire a, input wire b, output reg [1:0] q);
+  always @(posedge clk) begin
+    q[0] <= a;
+  end
+  always @(posedge clk) begin
+    q[1] <= b;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "non_overlap")
+    codes = {diagnostic.code for diagnostic in design.diagnostics}
+
+    assert "overlapping_procedural_writes" not in codes
+
+
 def test_lower_design_keeps_only_top_reachable_modules(tmp_path: Path) -> None:
     rtl = tmp_path / "hier.v"
     rtl.write_text(
@@ -240,4 +284,3 @@ endmodule
     process = module.processes[0]
     assert process.loc is not None
     assert process.loc.line > 0
-

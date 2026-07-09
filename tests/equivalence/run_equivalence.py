@@ -1,14 +1,14 @@
 """RTL vs prism_v2sc-generated SystemC equivalence harness.
 
 This script is intended to run in CI (Linux) where Icarus Verilog
-(`iverilog`/`vvp`) and SystemC (libsystemc-dev) are installed alongside
-Python + pyslang. For each fixture it:
+(`iverilog`/`vvp`) or VCS, and SystemC (libsystemc-dev) are installed
+alongside Python + pyslang. For each fixture it:
 
   1. Runs prism-v2sc to lower the RTL into a SystemC header.
   2. Generates a deterministic stimulus file.
   3. Generates a matching Verilog testbench and a SystemC testbench that
      both consume the same stimulus file.
-  4. Builds and runs the RTL testbench with iverilog/vvp.
+  4. Builds and runs the RTL testbench with iverilog/vvp or VCS.
   5. Builds and runs the SystemC testbench with $CXX + -lsystemc.
   6. Diffs the per-cycle output traces.
 
@@ -50,7 +50,10 @@ class Port:
     def sc_type(self) -> str:
         if self.is_bool:
             return "bool"
-        return f"sc_{'int' if self.signed else 'uint'}<{self.width}>"
+        family = "bigint" if self.signed else "biguint"
+        if self.width <= 64:
+            family = "int" if self.signed else "uint"
+        return f"sc_{family}<{self.width}>"
 
     @property
     def sc_rv_type(self) -> str:
@@ -205,6 +208,19 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=128,
     ),
     Fixture(
+        name="filelist_edges",
+        sources=(),
+        filelist="filelist_edges/sources.f",
+        top="filelist_edges_top",
+        inputs=(Port("en", 1), Port("sel", 1), Port("a", 8), Port("b", 8)),
+        outputs=(Port("y", 8), Port("comb", 8)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
         name="gen_demo",
         sources=("gen_demo.v",),
         top="gen_demo",
@@ -297,6 +313,115 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=128,
     ),
     Fixture(
+        name="signed_mixed_context",
+        sources=("signed_mixed_context.sv",),
+        top="signed_mixed_context",
+        inputs=(
+            Port("s", 8, signed=True),
+            Port("u", 8),
+            Port("narrow_s", 4, signed=True),
+            Port("sh", 3),
+            Port("sel", 1),
+        ),
+        outputs=(
+            Port("sum_math", 9, signed=True),
+            Port("diff_math", 9, signed=True),
+            Port("lt_math", 1),
+            Port("lt_bits", 1),
+            Port("shifted_lo", 8, signed=True),
+            Port("chosen", 9, signed=True),
+        ),
+        sequential=False,
+        cycles=256,
+    ),
+    Fixture(
+        name="width_boundaries",
+        sources=("width_boundaries.v",),
+        top="width_boundaries",
+        inputs=(
+            Port("a1", 1),
+            Port("a2", 2),
+            Port("a31", 31),
+            Port("a32", 32),
+            Port("a33", 33),
+            Port("a63", 63),
+            Port("a64", 64),
+            Port("a65", 65),
+            Port("sh", 6),
+        ),
+        outputs=(
+            Port("y1", 1),
+            Port("y2", 2),
+            Port("y31", 31),
+            Port("y32", 32),
+            Port("y33", 33),
+            Port("y63", 63),
+            Port("y64", 64),
+            Port("y65", 65),
+            Port("cmp65", 1),
+        ),
+        sequential=False,
+        cycles=256,
+    ),
+    Fixture(
+        name="nested_selects",
+        sources=("nested_selects.v",),
+        top="nested_selects",
+        inputs=(
+            Port("sel", 3),
+            Port("mode", 2),
+            Port("a", 8),
+            Port("b", 8),
+            Port("c", 8),
+            Port("d", 8),
+        ),
+        outputs=(
+            Port("ternary_y", 8),
+            Port("case_y", 8),
+            Port("nested_case_y", 8),
+        ),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="part_select_assembly",
+        sources=("part_select_assembly.v",),
+        top="part_select_assembly",
+        inputs=(
+            Port("n0", 4),
+            Port("n1", 4),
+            Port("n2", 4),
+            Port("n3", 4),
+            Port("lower", 16),
+            Port("upper", 16),
+            Port("flag", 1),
+        ),
+        outputs=(
+            Port("assembled", 16),
+            Port("wide", 33),
+        ),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="staged_read_after_write",
+        sources=("staged_read_after_write.v",),
+        top="staged_read_after_write",
+        inputs=(Port("a", 8), Port("b", 8), Port("sel", 1)),
+        outputs=(Port("y", 8), Port("tap", 8)),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="blocking_comb_chain",
+        sources=("blocking_comb_chain.v",),
+        top="blocking_comb_chain",
+        inputs=(Port("din", 8), Port("mask", 8), Port("mode", 2)),
+        outputs=(Port("y", 8), Port("tap", 8)),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
         name="regfile_mem",
         sources=("regfile_mem.v",),
         top="regfile_mem",
@@ -309,6 +434,51 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=128,
     ),
     Fixture(
+        name="memory_edges",
+        sources=("memory_edges.v",),
+        top="memory_edges",
+        inputs=(Port("we", 1), Port("wr_addr", 2), Port("rd_addr", 2), Port("din", 8)),
+        outputs=(Port("rd_data", 8), Port("wr_old", 8), Port("rd_xor", 8)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
+        name="nba_chain",
+        sources=("nba_chain.v",),
+        top="nba_chain",
+        inputs=(Port("en", 1), Port("din", 8), Port("salt", 8)),
+        outputs=(Port("a", 8), Port("b", 8), Port("c", 8), Port("mix", 8)),
+        sequential=True,
+        clock="clk",
+        reset="rst_n",
+        reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
+        name="async_reset_edges",
+        sources=("async_reset_edges.v",),
+        top="async_reset_edges",
+        inputs=(Port("en", 1), Port("din", 8)),
+        outputs=(Port("q", 8), Port("flag", 1)),
+        sequential=True,
+        clock="clk",
+        reset="rst",
+        reset_active_low=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="param_hierarchy_edges",
+        sources=("param_hierarchy_edges.v",),
+        top="param_hierarchy_edges",
+        inputs=(Port("a", 8), Port("b", 8)),
+        outputs=(Port("sum", 9), Port("low_mix", 3), Port("folded", 8)),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
         name="procedural_for",
         sources=("procedural_for.v",),
         top="procedural_for",
@@ -318,6 +488,33 @@ FIXTURES: tuple[Fixture, ...] = (
         clock="clk",
         reset="rst_n",
         reset_active_low=True,
+        cycles=128,
+    ),
+    Fixture(
+        name="procedural_for_edges",
+        sources=("procedural_for_edges.v",),
+        top="procedural_for_edges",
+        inputs=(Port("din", 8), Port("mask", 8)),
+        outputs=(Port("down", 8), Port("window", 8), Port("nested", 8)),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="latch_edges",
+        sources=("latch_edges.v",),
+        top="latch_edges",
+        inputs=(Port("load", 1), Port("hold_hi", 1), Port("din", 8), Port("hi", 4)),
+        outputs=(Port("q", 8), Port("mirror", 8)),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
+        name="sensitivity_edges",
+        sources=("sensitivity_edges.v",),
+        top="sensitivity_edges",
+        inputs=(Port("a", 8), Port("b", 8), Port("idx", 2), Port("sel", 1)),
+        outputs=(Port("y", 8), Port("picked", 1)),
+        sequential=False,
         cycles=128,
     ),
     Fixture(
@@ -363,6 +560,16 @@ FIXTURES: tuple[Fixture, ...] = (
         sequential=False,
         cycles=128,
     ),
+    Fixture(
+        name="inout_edges",
+        sources=("inout_edges.sv",),
+        top="inout_edges",
+        inputs=(Port("oe", 1), Port("din", 8)),
+        inouts=(Port("bus", 8, external_drive_control="oe", external_drive_active=False),),
+        outputs=(Port("child_seen", 8), Port("folded", 8), Port("top_seen", 8)),
+        sequential=False,
+        cycles=128,
+    ),
 )
 
 
@@ -377,6 +584,53 @@ CONVERSION_FIXTURES: tuple[ConversionFixture, ...] = (
             "sc_signal<bool> bus__valid;",
             "u_src.bus__req(bus__req);",
             "u_sink.bus__rsp(bus__rsp);",
+        ),
+    ),
+    ConversionFixture(
+        name="interface_modport_variants",
+        sources=("interface_modport_variants/interface_modport_variants.sv",),
+        top="interface_modport_variants",
+        required_top_header_snippets=(
+            "sc_signal<sc_uint<4>> lane_a__req;",
+            "sc_signal<sc_uint<4>> lane_b__rsp;",
+            "src_a.lane__req(lane_a__req);",
+            "snk_b.lane__rsp(lane_b__rsp);",
+        ),
+    ),
+    ConversionFixture(
+        name="package_multifile",
+        sources=(
+            "package_multifile/pkg_defs.sv",
+            "package_multifile/package_multifile.sv",
+        ),
+        top="package_multifile",
+        required_top_header_snippets=(
+            "sc_signal<sc_uint<8>> tmp;",
+            "tmp.write(__next_tmp);",
+            "y.write(__next_y);",
+        ),
+    ),
+    ConversionFixture(
+        name="generate_named_blocks",
+        sources=("generate_named_blocks/generate_named_blocks.v",),
+        top="generate_named_blocks",
+        required_top_header_snippets=(
+            "gen_named_cell lane_0_even_u;",
+            "lane_0_even_u.a(__bridge_lane_0_even_u_a);",
+            "assign_0",
+        ),
+    ),
+    ConversionFixture(
+        name="typedef_package_enum",
+        sources=(
+            "typedef_package_enum/enum_pkg.sv",
+            "typedef_package_enum/typedef_package_enum.sv",
+        ),
+        top="typedef_package_enum",
+        required_top_header_snippets=(
+            "sc_signal<sc_uint<2>> op;",
+            "op_seen.write(__next_op_seen);",
+            "case 0:",
         ),
     ),
 )
@@ -422,10 +676,58 @@ DIAGNOSTIC_FIXTURES: tuple[DiagnosticFixture, ...] = (
         expected_codes=("blocking_in_always_ff",),
     ),
     DiagnosticFixture(
+        name="comb_process_order",
+        sources=("diagnostics/comb_process_order.v",),
+        top="comb_process_order",
+        expected_codes=("event_scheduler_approximated",),
+    ),
+    DiagnosticFixture(
         name="xz_literal_approximated",
         sources=("diagnostics/xz_literal.v",),
         top="xz_lit",
         expected_codes=("x_z_literal_approximated",),
+    ),
+    DiagnosticFixture(
+        name="xz_logic_rejected",
+        sources=("diagnostics/xz_logic_rejected.v",),
+        top="xz_logic_rejected",
+        expected_codes=("x_z_literal_approximated",),
+    ),
+    DiagnosticFixture(
+        name="overlap_slice_writers",
+        sources=("diagnostics/overlap_slice_writers.v",),
+        top="overlap_slice_writers",
+        expected_codes=("overlapping_procedural_writes",),
+    ),
+    DiagnosticFixture(
+        name="mixed_assignment_deeper",
+        sources=("diagnostics/mixed_assignment_deeper.v",),
+        top="mixed_assignment_deeper",
+        expected_codes=("mixed_assignment_styles",),
+    ),
+    DiagnosticFixture(
+        name="while_repeat_rejected",
+        sources=("diagnostics/while_repeat_rejected.v",),
+        top="while_repeat_rejected",
+        expected_codes=("unsupported_whileloop", "unsupported_repeatloop"),
+    ),
+    DiagnosticFixture(
+        name="interface_complex_rejected",
+        sources=("diagnostics/interface_complex_rejected.sv",),
+        top="interface_complex_rejected",
+        expected_codes=("unsupported_interface_port",),
+    ),
+    DiagnosticFixture(
+        name="task_system_task_rejected",
+        sources=("diagnostics/task_system_task_rejected.sv",),
+        top="task_system_task_rejected",
+        expected_codes=("unsupported_task_first_round", "unsupported_expression_statement_call"),
+    ),
+    DiagnosticFixture(
+        name="dynamic_sv_rejected",
+        sources=("diagnostics/dynamic_sv_rejected.sv",),
+        top="dynamic_sv_rejected",
+        expected_codes=("unsupported_classtype",),
     ),
     DiagnosticFixture(
         name="slang_unknown_module",
@@ -463,6 +765,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow the SystemC trace to lag the RTL trace by N cycles (drop first N SC entries before diffing).",
     )
     parser.add_argument(
+        "--rtl-sim",
+        choices=("auto", "iverilog", "vcs"),
+        default="auto",
+        help="RTL simulator backend for trace fixtures (default: auto).",
+    )
+    parser.add_argument(
         "--keep-going",
         action="store_true",
         help="Don't stop after the first failing fixture.",
@@ -473,6 +781,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Generate SystemC, stimulus, and testbenches but skip iverilog/SystemC build and diff.",
     )
     args = parser.parse_args(argv)
+    args.work = args.work.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
 
     selected: list[Fixture] = [
@@ -492,9 +801,12 @@ def main(argv: list[str] | None = None) -> int:
         print("error: no fixtures match the selection", file=sys.stderr)
         return 2
 
+    rtl_sim = (
+        select_rtl_simulator(args.rtl_sim)
+        if selected and not args.dry_run
+        else args.rtl_sim
+    )
     if selected and not args.dry_run:
-        require_tool("iverilog")
-        require_tool("vvp")
         require_tool(os.environ.get("CXX", "g++"))
 
     summary: list[tuple[str, str]] = []
@@ -505,6 +817,7 @@ def main(argv: list[str] | None = None) -> int:
             fixture,
             args.work / fixture.name,
             shift_tolerance=args.shift_tolerance,
+            rtl_sim=rtl_sim,
             dry_run=args.dry_run,
         )
         summary.append((fixture.name, "PASS" if rc == 0 else "FAIL"))
@@ -543,6 +856,28 @@ def require_tool(name: str) -> None:
     if shutil.which(name) is None:
         print(f"error: required tool '{name}' not found on PATH", file=sys.stderr)
         sys.exit(2)
+
+
+def select_rtl_simulator(requested: str) -> str:
+    if requested == "iverilog":
+        require_tool("iverilog")
+        require_tool("vvp")
+        return "iverilog"
+    if requested == "vcs":
+        require_tool(os.environ.get("VCS", "vcs"))
+        return "vcs"
+
+    if shutil.which("iverilog") is not None and shutil.which("vvp") is not None:
+        return "iverilog"
+    if shutil.which(os.environ.get("VCS", "vcs")) is not None:
+        print("  note: iverilog/vvp not found; using VCS for RTL simulation")
+        return "vcs"
+
+    print(
+        "error: no RTL simulator found; install iverilog/vvp or set VCS to a VCS executable",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 
 def run_diagnostic_fixture(fixture: DiagnosticFixture, work: Path) -> int:
@@ -607,6 +942,33 @@ def run_diagnostic_fixture(fixture: DiagnosticFixture, work: Path) -> int:
         print(f"    seen codes: {sorted(seen_codes) or '<none>'}")
         print(f"    log: {log_path}")
         return 1
+
+    expected_fail_rc = 2 if any(
+        diagnostic.get("severity") == "error" for diagnostic in _all_diagnostics(payload)
+    ) else 0
+    fail_out_dir = work / "systemc_fail_on"
+    fail_cmd = [
+        sys.executable,
+        "-m",
+        "prism_v2sc",
+        "--top",
+        fixture.top,
+        "--fail-on-diagnostics",
+        "--out",
+        str(fail_out_dir),
+        *(str(source) for source in sources),
+    ]
+    fail_log_path = work / "prism_fail_on.log"
+    print(f"  $ {' '.join(fail_cmd)}")
+    with fail_log_path.open("w", encoding="utf-8") as log:
+        fail_result = subprocess.run(fail_cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+    if fail_result.returncode != expected_fail_rc:
+        print(
+            "  ERROR: --fail-on-diagnostics returned "
+            f"{fail_result.returncode}, expected {expected_fail_rc} (see {fail_log_path})"
+        )
+        return 1
+
     print(f"  PASS: all {len(fixture.expected_codes)} expected diagnostic(s) present")
     return 0
 
@@ -686,7 +1048,14 @@ def _all_diagnostics(payload: dict[str, object]) -> list[dict[str, object]]:
     return diagnostics
 
 
-def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: bool = False) -> int:
+def run_fixture(
+    fixture: Fixture,
+    work: Path,
+    *,
+    shift_tolerance: int,
+    rtl_sim: str,
+    dry_run: bool = False,
+) -> int:
     work.mkdir(parents=True, exist_ok=True)
     sources = [FIXTURE_DIR / source for source in fixture.sources]
     for source in sources:
@@ -702,7 +1071,7 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
         if not filelist_path.is_file():
             print(f"  ERROR: missing filelist {filelist_path}")
             return 2
-        # Reuse the prism preprocess parser so iverilog gets the same -I / -D set.
+        # Reuse the prism preprocess parser so the RTL simulator gets the same -I / -D set.
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
         try:
             from prism_v2sc.frontend.preprocess import collect_sources
@@ -755,22 +1124,14 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
         print("  dry-run: generated SystemC header, stimulus, Verilog TB, SystemC TB")
         return 0
 
-    vvp_path = work / "rtl.vvp"
-    iverilog_cmd = [
-        "iverilog",
-        "-g2012",
-        *[f"-I{include_dir}" for include_dir in extra_includes],
-        *[f"-D{define}" for define in extra_defines],
-        "-o",
-        str(vvp_path),
-        str(vtb_path),
-        *[str(source) for source in sources],
-    ]
-    if run_logged(iverilog_cmd, work / "iverilog.log") != 0:
-        print(f"  iverilog build failed (see {work / 'iverilog.log'})")
-        return 1
-    if run_logged(["vvp", str(vvp_path)], work / "vvp.log", cwd=work) != 0:
-        print(f"  vvp run failed (see {work / 'vvp.log'})")
+    if run_rtl_testbench(
+        rtl_sim,
+        work,
+        vtb_path,
+        sources,
+        include_dirs=extra_includes,
+        defines=extra_defines,
+    ) != 0:
         return 1
 
     sctb_exe = work / "tb_sc"
@@ -805,6 +1166,113 @@ def run_fixture(fixture: Fixture, work: Path, *, shift_tolerance: int, dry_run: 
         work,
         shift_tolerance,
     )
+
+
+def run_rtl_testbench(
+    rtl_sim: str,
+    work: Path,
+    testbench: Path,
+    sources: list[Path],
+    *,
+    include_dirs: list[Path],
+    defines: list[str],
+) -> int:
+    if rtl_sim == "iverilog":
+        return run_iverilog_testbench(
+            work,
+            testbench,
+            sources,
+            include_dirs=include_dirs,
+            defines=defines,
+        )
+    if rtl_sim == "vcs":
+        return run_vcs_testbench(
+            work,
+            testbench,
+            sources,
+            include_dirs=include_dirs,
+            defines=defines,
+        )
+
+    print(f"  ERROR: unsupported RTL simulator backend: {rtl_sim}")
+    return 2
+
+
+def run_iverilog_testbench(
+    work: Path,
+    testbench: Path,
+    sources: list[Path],
+    *,
+    include_dirs: list[Path],
+    defines: list[str],
+) -> int:
+    vvp_path = work / "rtl.vvp"
+    iverilog_cmd = [
+        "iverilog",
+        "-g2012",
+        *[f"-I{include_dir}" for include_dir in include_dirs],
+        *[f"-D{define}" for define in defines],
+        "-o",
+        str(vvp_path),
+        str(testbench),
+        *[str(source) for source in sources],
+    ]
+    if run_logged(iverilog_cmd, work / "iverilog.log") != 0:
+        print(f"  iverilog build failed (see {work / 'iverilog.log'})")
+        return 1
+    if run_logged(["vvp", str(vvp_path)], work / "vvp.log", cwd=work) != 0:
+        print(f"  vvp run failed (see {work / 'vvp.log'})")
+        return 1
+    return 0
+
+
+def run_vcs_testbench(
+    work: Path,
+    testbench: Path,
+    sources: list[Path],
+    *,
+    include_dirs: list[Path],
+    defines: list[str],
+) -> int:
+    vcs = os.environ.get("VCS", "vcs")
+    vcs_flags = [
+        flag
+        for flag in os.environ.get(
+            "VCS_FLAGS",
+            "-full64 -sverilog -timescale=1ns/1ps",
+        ).split()
+        if flag
+    ]
+    vcs_run_flags = [flag for flag in os.environ.get("VCS_RUN_FLAGS", "").split() if flag]
+    vcs_env = os.environ.copy()
+    vcs_env.setdefault("VCS_TARGET_ARCH", "linux64")
+
+    exe = work / "rtl_simv"
+    vcs_cmd = [
+        vcs,
+        *vcs_flags,
+        *[f"+incdir+{include_dir}" for include_dir in include_dirs],
+        *[f"+define+{define}" for define in defines],
+        "-o",
+        exe.name,
+        str(testbench.resolve()),
+        *[str(source.resolve()) for source in sources],
+    ]
+    if run_logged(vcs_cmd, work / "vcs.log", cwd=work, env=vcs_env) != 0:
+        print(f"  VCS build failed (see {work / 'vcs.log'})")
+        return 1
+    if (
+        run_logged(
+            [f"./{exe.name}", *vcs_run_flags],
+            work / "vcs_run.log",
+            cwd=work,
+            env=vcs_env,
+        )
+        != 0
+    ):
+        print(f"  VCS run failed (see {work / 'vcs_run.log'})")
+        return 1
+    return 0
 
 
 def convert_with_prism(
@@ -845,11 +1313,20 @@ def write_stimulus(fixture: Fixture, path: Path) -> None:
     rng = random.Random(fixture.seed)
     stimulus_ports = (*fixture.inputs, *fixture.inouts)
     masks = [(1 << port.width) - 1 for port in stimulus_ports]
+    hex_io = _uses_hex_io(fixture)
     lines: list[str] = []
     for _ in range(fixture.cycles):
         values = [rng.randint(0, mask) for mask in masks]
-        lines.append(" ".join(str(value) for value in values))
+        if hex_io:
+            lines.append(" ".join(format(value, "x") for value in values))
+        else:
+            lines.append(" ".join(str(value) for value in values))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _uses_hex_io(fixture: Fixture) -> bool:
+    ports = (*fixture.inputs, *fixture.outputs, *fixture.inouts)
+    return any(port.width > 32 for port in ports)
 
 
 def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
@@ -858,6 +1335,7 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
     outputs = fixture.outputs
     stimulus_ports = (*inputs, *inouts)
     trace_ports = (*outputs, *inouts)
+    hex_io = _uses_hex_io(fixture)
 
     lines: list[str] = []
     lines.append("`timescale 1ns/1ps")
@@ -879,8 +1357,9 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         lines.append(
             f"  assign {port.name} = ({control_expr}) ? _tb_drive_{port.name} : {z_literal};"
         )
-    for i, _port in enumerate(stimulus_ports):
-        lines.append(f"  reg [31:0] _stim_{i};")
+    for i, port in enumerate(stimulus_ports):
+        stim_width = port.width if hex_io else 32
+        lines.append(f"  reg [{stim_width - 1}:0] _stim_{i};")
     lines.append("  integer stim_fd;")
     lines.append("  integer out_fd;")
     lines.append("  integer _r;")
@@ -940,9 +1419,11 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         for _ in range(fixture.reset_cycles):
             lines.append("    @(posedge clk);")
         deasserted = "1'b1" if fixture.reset_active_low else "1'b0"
+        lines.append("    #1;")
         lines.append(f"    {fixture.reset} = {deasserted};")
 
-    scan_fmt = " ".join("%d" for _ in stimulus_ports)
+    scan_token = "%h" if hex_io else "%d"
+    scan_fmt = " ".join(scan_token for _ in stimulus_ports)
     scan_args = ", ".join(f"_stim_{i}" for i in range(len(stimulus_ports)))
 
     lines.append("    begin: stim_loop")
@@ -970,7 +1451,8 @@ def render_verilog_tb(fixture: Fixture, stim_path: Path, out_path: Path) -> str:
         lines.append("        #1;")
     else:
         lines.append("        #1;")
-    out_fmt = " ".join("%0d" for _ in trace_ports)
+    out_token = "%0h" if hex_io else "%0d"
+    out_fmt = " ".join(out_token for _ in trace_ports)
     out_args = ", ".join(port.name for port in trace_ports)
     lines.append(f"        $fwrite(out_fd, \"{out_fmt}\\n\", {out_args});")
     lines.append("      end")
@@ -995,6 +1477,7 @@ def render_systemc_tb(
     outputs = fixture.outputs
     stimulus_ports = (*inputs, *inouts)
     trace_ports = (*outputs, *inouts)
+    hex_io = _uses_hex_io(fixture)
 
     try:
         include_rel = header_path.resolve().relative_to(include_root.resolve())
@@ -1010,6 +1493,13 @@ def render_systemc_tb(
     lines.append("")
     lines.append("int sc_main(int argc, char* argv[]) {")
     lines.append("  (void)argc; (void)argv;")
+    if hex_io:
+        lines.append("  auto __hex_token = [](const std::string& token) { return std::string(\"0x0\") + token; };")
+        lines.append("  auto __trim_hex = [](std::string text) {")
+        lines.append("    if (text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) text.erase(0, 2);")
+        lines.append("    while (text.size() > 1 && text[0] == '0') text.erase(0, 1);")
+        lines.append("    return text.empty() ? std::string(\"0\") : text;")
+        lines.append("  };")
 
     if fixture.sequential:
         lines.append("  sc_clock clk(\"clk\", 10, SC_NS, 0.5, 0, SC_NS, false);")
@@ -1066,19 +1556,36 @@ def render_systemc_tb(
     lines.append("")
 
     var_names = [f"v{i}" for i in range(len(stimulus_ports))]
-    lines.append("  long " + ", ".join(var_names) + ";")
+    if hex_io:
+        lines.append("  std::string " + ", ".join(var_names) + ";")
+    else:
+        lines.append("  long " + ", ".join(var_names) + ";")
     extract = "".join(f" >> {name}" for name in var_names)
     lines.append(f"  while (stim{extract}) {{")
     for i, port in enumerate(inputs):
         if port.is_bool:
-            lines.append(f"    {port.name}.write({var_names[i]} != 0);")
+            if hex_io:
+                lines.append(f"    {port.name}.write({var_names[i]} != \"0\");")
+            else:
+                lines.append(f"    {port.name}.write({var_names[i]} != 0);")
         else:
-            lines.append(f"    {port.name}.write({port.sc_type}({var_names[i]}));")
+            if hex_io:
+                lines.append(
+                    f"    {port.name}.write({port.sc_type}(__hex_token({var_names[i]}).c_str()));"
+                )
+            else:
+                lines.append(f"    {port.name}.write({port.sc_type}({var_names[i]}));")
     inout_offset = len(inputs)
     for j, port in enumerate(inouts):
         stim_var = var_names[inout_offset + j]
-        drive_expr = _systemc_external_drive_expr(fixture, port, var_names)
-        drive_value = f"sc_lv<{port.width}>(sc_uint<{port.width}>({stim_var}))"
+        drive_expr = _systemc_external_drive_expr(fixture, port, var_names, hex_io=hex_io)
+        if hex_io:
+            drive_value = (
+                f"sc_lv<{port.width}>({_systemc_unsigned_type(port.width)}"
+                f"(__hex_token({stim_var}).c_str()))"
+            )
+        else:
+            drive_value = f"sc_lv<{port.width}>(sc_uint<{port.width}>({stim_var}))"
         z_value = f"sc_lv<{port.width}>(\"{'Z' * port.width}\")"
         lines.append(
             f"    {port.name}.write(({drive_expr}) ? {drive_value} : {z_value});"
@@ -1090,7 +1597,17 @@ def render_systemc_tb(
 
     out_parts: list[str] = []
     for port in trace_ports:
-        if port in inouts:
+        if hex_io:
+            if port in inouts:
+                if port.is_bool:
+                    out_parts.append(f"(({port.name}.read()[0] == sc_dt::SC_LOGIC_1) ? \"1\" : \"0\")")
+                else:
+                    out_parts.append(f"__trim_hex({port.name}.read().to_string(sc_dt::SC_HEX))")
+            elif port.is_bool:
+                out_parts.append(f"({port.name}.read() ? \"1\" : \"0\")")
+            else:
+                out_parts.append(f"__trim_hex({port.name}.read().to_string(sc_dt::SC_HEX))")
+        elif port in inouts:
             if port.is_bool:
                 out_parts.append(f"(int)({port.name}.read()[0] == sc_dt::SC_LOGIC_1)")
             elif port.signed:
@@ -1131,17 +1648,31 @@ def _verilog_external_drive_expr(port: Port) -> str:
     return f"{port.external_drive_control} == {active}"
 
 
-def _systemc_external_drive_expr(fixture: Fixture, port: Port, var_names: list[str]) -> str:
+def _systemc_external_drive_expr(
+    fixture: Fixture,
+    port: Port,
+    var_names: list[str],
+    *,
+    hex_io: bool = False,
+) -> str:
     if port.external_drive_control is None:
         return "true"
     for index, input_port in enumerate(fixture.inputs):
         if input_port.name == port.external_drive_control:
-            active = "!= 0" if port.external_drive_active else "== 0"
+            if hex_io:
+                active = '!= "0"' if port.external_drive_active else '== "0"'
+            else:
+                active = "!= 0" if port.external_drive_active else "== 0"
             return f"{var_names[index]} {active}"
     raise ValueError(
         f"inout port {port.name!r} references unknown external drive control "
         f"{port.external_drive_control!r}"
     )
+
+
+def _systemc_unsigned_type(width: int) -> str:
+    family = "biguint" if width > 64 else "uint"
+    return f"sc_{family}<{width}>"
 
 
 def diff_traces(rtl: list[str], sc: list[str], work: Path, shift: int) -> int:
@@ -1172,10 +1703,16 @@ def diff_traces(rtl: list[str], sc: list[str], work: Path, shift: int) -> int:
     return 0
 
 
-def run_logged(cmd: list[str], log_path: Path, *, cwd: Path | None = None) -> int:
+def run_logged(
+    cmd: list[str],
+    log_path: Path,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
     print(f"  $ {' '.join(cmd)}")
     with log_path.open("w", encoding="utf-8") as log:
-        result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=cwd)
+        result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=cwd, env=env)
     return result.returncode
 
 

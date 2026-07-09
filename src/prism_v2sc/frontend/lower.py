@@ -879,7 +879,7 @@ def _flatten_statements(statement: Any) -> tuple[Any, ...]:
 def _lower_statement(statement: Any, module_name: str, diagnostics: list[DiagnosticIR]) -> dict[str, Any]:
     kind_name = str(getattr(statement, "kind", "")).rsplit(".", 1)[-1]
     if kind_name == "ExpressionStatement":
-        return _lower_expression_statement(statement.expr)
+        return _lower_expression_statement(statement.expr, module_name, diagnostics)
     if kind_name == "Conditional":
         return _lower_conditional_statement(statement, module_name, diagnostics)
     if kind_name == "Case":
@@ -906,7 +906,11 @@ def _lower_statement(statement: Any, module_name: str, diagnostics: list[Diagnos
     return {"type": "unsupported", "node": kind_name}
 
 
-def _lower_expression_statement(expr: Any) -> dict[str, Any]:
+def _lower_expression_statement(
+    expr: Any,
+    module_name: str,
+    diagnostics: list[DiagnosticIR],
+) -> dict[str, Any]:
     kind_name = str(getattr(expr, "kind", "")).rsplit(".", 1)[-1]
     if kind_name == "Assignment":
         op_type = "nonblocking_assign" if getattr(expr, "isNonBlocking", False) else "blocking_assign"
@@ -917,6 +921,14 @@ def _lower_expression_statement(expr: Any) -> dict[str, Any]:
             "left_expr": _lower_expression(expr.left),
             "right_expr": _lower_expression(expr.right),
         }
+    diagnostics.append(
+        _diagnostic(
+            module_name,
+            f"unsupported_expression_statement_{kind_name.lower()}",
+            f"expression statement '{kind_name}' is not supported by the current SystemC emitter",
+            kind_name,
+        )
+    )
     return {"type": "unsupported", "node": kind_name}
 
 
@@ -1041,22 +1053,28 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
             end_val = _try_eval_const_expr(stop_expr.right)
             if end_val is None:
                 raise ValueError("non-constant end")
-            # i < end or i <= end
             if stop_op_text == "LessThan":
-                end_val = end_val  # exclusive
+                end_val = end_val  # i < end
             elif stop_op_text == "LessThanEqual":
-                end_val = end_val + 1  # inclusive -> exclusive
+                end_val = end_val + 1  # i <= end
+            elif stop_op_text == "GreaterThan":
+                end_val = end_val  # i > end
+            elif stop_op_text == "GreaterThanEqual":
+                end_val = end_val - 1  # i >= end
             else:
                 raise ValueError(f"unsupported stop operator {stop_op_text}")
         elif stop_right == loop_var:
             end_val = _try_eval_const_expr(stop_expr.left)
             if end_val is None:
                 raise ValueError("non-constant end")
-            # end > i or end >= i
             if stop_op_text == "GreaterThan":
-                end_val = end_val  # exclusive
+                end_val = end_val  # end > i
             elif stop_op_text == "GreaterThanEqual":
-                end_val = end_val + 1  # inclusive -> exclusive
+                end_val = end_val + 1  # end >= i
+            elif stop_op_text == "LessThan":
+                end_val = end_val  # end < i
+            elif stop_op_text == "LessThanEqual":
+                end_val = end_val - 1  # end <= i
             else:
                 raise ValueError(f"unsupported stop operator {stop_op_text}")
         else:

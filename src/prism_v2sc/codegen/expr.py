@@ -76,6 +76,7 @@ class ModuleContext:
     parameter_names: frozenset[str]
     signal_widths: dict[str, int]
     parameter_values: dict[str, int]
+    signal_signedness: dict[str, bool] = field(default_factory=dict)
     enum_values: dict[str, int] = field(default_factory=dict)
     enum_widths: dict[str, int] = field(default_factory=dict)
     loop_vars: frozenset[str] = field(default_factory=frozenset)
@@ -97,6 +98,7 @@ class ModuleContext:
             signal_names=self.signal_names,
             parameter_names=self.parameter_names,
             signal_widths=self.signal_widths,
+            signal_signedness=self.signal_signedness,
             parameter_values=self.parameter_values,
             enum_values=self.enum_values,
             enum_widths=self.enum_widths,
@@ -118,6 +120,7 @@ class ModuleContext:
             signal_names=self.signal_names,
             parameter_names=self.parameter_names,
             signal_widths=self.signal_widths,
+            signal_signedness=self.signal_signedness,
             parameter_values=self.parameter_values,
             enum_values=self.enum_values,
             enum_widths=self.enum_widths,
@@ -136,6 +139,7 @@ def build_module_context(
     """Build a width-aware identifier context for one module."""
     signal_names: set[str] = set()
     signal_widths: dict[str, int] = {}
+    signal_signedness: dict[str, bool] = {}
     parameter_names: set[str] = set()
     parameter_values: dict[str, int] = {}
 
@@ -150,10 +154,12 @@ def build_module_context(
     for port in module.ports:
         signal_names.add(port.name)
         signal_widths[port.name] = _port_width(port, parameter_values)
+        signal_signedness[port.name] = bool(port.signed)
     array_signal_names: set[str] = set()
     for signal in module.signals:
         signal_names.add(signal.name)
         signal_widths[signal.name] = _signal_width(signal, parameter_values)
+        signal_signedness[signal.name] = bool(signal.signed)
         if getattr(signal, "unpacked_dims", ()):
             array_signal_names.add(signal.name)
 
@@ -161,6 +167,7 @@ def build_module_context(
         signal_names=frozenset(signal_names),
         parameter_names=frozenset(parameter_names),
         signal_widths=signal_widths,
+        signal_signedness=signal_signedness,
         parameter_values=parameter_values,
         enum_values=enum_values,
         enum_widths=enum_widths,
@@ -221,8 +228,16 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         return _render_unop(op, operand, ctx, staged_names=staged_names)
     if kind == "cond":
         cond = render_rvalue(expr.get("cond"), ctx, staged_names=staged_names)
-        true_branch = render_rvalue(expr.get("true"), ctx, staged_names=staged_names)
-        false_branch = render_rvalue(expr.get("false"), ctx, staged_names=staged_names)
+        true_node = expr.get("true")
+        false_node = expr.get("false")
+        true_branch = render_rvalue(true_node, ctx, staged_names=staged_names)
+        false_branch = render_rvalue(false_node, ctx, staged_names=staged_names)
+        if infer_signed(true_node, ctx) and infer_signed(false_node, ctx):
+            width = max(1, infer_width(expr, ctx))
+            if width > 1:
+                target_type = systemc_int_type(width, signed=True)
+                true_branch = f"{target_type}({true_branch})"
+                false_branch = f"{target_type}({false_branch})"
         return f"({cond} ? {true_branch} : {false_branch})"
     if kind == "concat":
         return _render_concat(expr.get("parts", []), ctx, staged_names=staged_names)
@@ -392,6 +407,57 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
     if kind == "cond":
         return max(infer_width(expr.get("true"), ctx), infer_width(expr.get("false"), ctx))
     return 1
+
+
+def systemc_int_type(width: int, signed: bool = False) -> str:
+    """Return the SystemC integer type for a concrete packed width."""
+    width = max(1, int(width))
+    if width > 64:
+        return f"sc_{'bigint' if signed else 'biguint'}<{width}>"
+    return f"sc_{'int' if signed else 'uint'}<{width}>"
+
+
+def infer_signed(expr: dict[str, Any] | None, ctx: ModuleContext) -> bool:
+    """Best-effort signedness inference for expression codegen.
+
+    This intentionally stays conservative. It is used to avoid C++ conditional
+    operator ambiguity in signed ternaries, not to claim complete SV type
+    propagation.
+    """
+    if not isinstance(expr, dict):
+        return False
+    kind = expr.get("kind")
+    if kind == "intconst":
+        return bool(expr.get("signed"))
+    if kind == "identifier":
+        name = str(expr.get("name", ""))
+        return bool(ctx.signal_signedness.get(name, False))
+    if kind in {"bitselect", "partselect", "concat", "repeat"}:
+        return False
+    if kind == "cast":
+        return bool(expr.get("signed"))
+    if kind == "syscall":
+        name = str(expr.get("name", ""))
+        if name == "signed":
+            return True
+        if name == "unsigned":
+            return False
+        return False
+    if kind == "unop":
+        op = str(expr.get("op", ""))
+        if op in {"!", "&", "|", "^", "~&", "~|", "^~", "~^"}:
+            return False
+        return infer_signed(expr.get("operand"), ctx)
+    if kind == "binop":
+        op = str(expr.get("op", ""))
+        if op in {"==", "!=", "===", "!==", "<", ">", "<=", ">=", "&&", "||"}:
+            return False
+        if op in {"<<", ">>", "<<<", ">>>"}:
+            return infer_signed(expr.get("left"), ctx)
+        return infer_signed(expr.get("left"), ctx) and infer_signed(expr.get("right"), ctx)
+    if kind == "cond":
+        return infer_signed(expr.get("true"), ctx) and infer_signed(expr.get("false"), ctx)
+    return False
 
 
 def const_eval(expr: dict[str, Any] | None, ctx: ModuleContext) -> int | None:
@@ -610,15 +676,16 @@ def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext, *, staged_na
     total = sum(widths)
     if total <= 0:
         total = 1
+    target_type = systemc_int_type(total)
     pieces: list[str] = []
     bits_remaining = total
     for part, width in zip(parts, widths):
         bits_remaining -= width
         operand = render_rvalue(part, ctx, staged_names=staged_names)
         if bits_remaining > 0:
-            pieces.append(f"(sc_uint<{total}>({operand}) << {bits_remaining})")
+            pieces.append(f"({target_type}({operand}) << {bits_remaining})")
         else:
-            pieces.append(f"sc_uint<{total}>({operand})")
+            pieces.append(f"{target_type}({operand})")
     return "(" + " | ".join(pieces) + ")"
 
 
@@ -630,14 +697,15 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     total = count * width
     if total <= 0:
         total = 1
+    target_type = systemc_int_type(total)
     operand = render_rvalue(value_node, ctx, staged_names=staged_names)
     pieces: list[str] = []
     for i in range(count):
         shift = (count - 1 - i) * width
         if shift > 0:
-            pieces.append(f"(sc_uint<{total}>({operand}) << {shift})")
+            pieces.append(f"({target_type}({operand}) << {shift})")
         else:
-            pieces.append(f"sc_uint<{total}>({operand})")
+            pieces.append(f"{target_type}({operand})")
     return "(" + " | ".join(pieces) + ")"
 
 
@@ -645,9 +713,9 @@ def _render_cast(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: froz
     width = expr.get("width")
     if not isinstance(width, int) or width <= 0:
         width = infer_width(expr.get("operand"), ctx)
-    target_type = "sc_int" if bool(expr.get("signed")) else "sc_uint"
+    target_type = systemc_int_type(width, signed=bool(expr.get("signed")))
     operand = render_rvalue(expr.get("operand"), ctx, staged_names=staged_names)
-    return f"{target_type}<{max(1, width)}>({operand})"
+    return f"{target_type}({operand})"
 
 
 def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
@@ -661,14 +729,18 @@ def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: f
         # silently turns ``$signed(x) >>> n`` into a logical shift on the
         # underlying unsigned representation.
         width = infer_width(args_nodes[0], ctx) if args_nodes else 1
-        target_type = "sc_int" if name == "signed" else "sc_uint"
-        return f"{target_type}<{width}>({args[0]})"
+        target_type = systemc_int_type(width, signed=name == "signed")
+        return f"{target_type}({args[0]})"
     return f"/* $${name}() unsupported */ 0"
 
 
 def _format_intconst(expr: dict[str, Any]) -> str:
     if expr.get("has_xz"):
         return "0"
+    width = expr.get("width")
+    width_int = width if isinstance(width, int) and width > 0 else None
+    if width_int is not None and width_int > 64:
+        return _format_wide_intconst(expr, width_int)
     if expr.get("signed"):
         signed_value = expr.get("signed_value")
         if isinstance(signed_value, int):
@@ -693,6 +765,26 @@ def _format_intconst(expr: dict[str, Any]) -> str:
     if base == 8:
         return f"0{value:o}" if value > 0 else "0"
     return str(value)
+
+
+def _format_wide_intconst(expr: dict[str, Any], width: int) -> str:
+    target_type = systemc_int_type(width, signed=bool(expr.get("signed")))
+    digits = expr.get("digits")
+    base = expr.get("base", 10)
+    if isinstance(digits, str) and digits:
+        if base == 16:
+            literal = f"0x{digits}"
+        elif base == 2:
+            literal = f"0b{digits}"
+        elif base == 8:
+            literal = f"0{digits}"
+        else:
+            literal = digits
+    else:
+        value = expr.get("value", 0)
+        literal = str(value if isinstance(value, int) else 0)
+    escaped = literal.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{target_type}("{escaped}")'
 
 
 def _parse_const_literal(text: str) -> int | None:

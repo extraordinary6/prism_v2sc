@@ -11,6 +11,7 @@
 - signed based literal，例如 `8'shFF`，IR 保留原始 bit pattern `value=255`，同时记录 signed 解释 `signed_value=-1`。
 - `$signed(x)` / `$unsigned(x)` 和显式 SV cast `signed'(x)` / `unsigned'(x)` 会生成真实的 `sc_int<W>(...)` / `sc_uint<W>(...)` cast。
 - equivalence harness 已支持 signed 端口，并有 `signed_declared_arith` fixture 覆盖 signed 声明、signed 比较、算术右移和 signed literal。
+- `signed_mixed_context` fixture 覆盖推荐的 signed/unsigned 边界写法：先显式扩展或 cast 到同一宽度/符号，再做加减、比较、part-select 算术右移和三目选择。
 
 ## 不完整支持的地方
 
@@ -177,4 +178,3 @@ assign y = s_ext + 9'sd1;
 2. 对 mixed 算术先扩展到同一宽度，再运算。
 3. 新增 RTL 风格进入项目时，给 `tests/equivalence/fixtures/` 增加最小 fixture。
 4. 本地无 SystemC 头文件时，先跑 `tests/equivalence/run_equivalence.py --dry-run --keep-going`；完整 RTL/SystemC trace diff 依赖 CI。
-

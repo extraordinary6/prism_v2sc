@@ -2,6 +2,8 @@
 from pathlib import Path
 from textwrap import dedent
 
+from prism_v2sc.codegen.systemc import generate_systemc_header
+
 from _pyslang_helper import lower_via_pyslang
 
 
@@ -95,6 +97,45 @@ def test_procedural_for_loop_with_parameter_bound(tmp_path: Path) -> None:
     unrolled = stmt["false"][0]
     assert unrolled["type"] == "block"
     assert len(unrolled["statements"]) == 8, "Expected 8 iterations for WIDTH=8"
+
+
+def test_decrement_for_loop_unrolls_and_keeps_block_sensitivity(tmp_path: Path) -> None:
+    """Decrementing loops unroll, and RHS signals inside the unrolled block
+    contribute to always-comb sensitivity.
+    """
+    rtl = tmp_path / "decrement_for.v"
+    rtl.write_text(
+        dedent(
+            """\
+            module decrement_for (
+              input  wire [3:0] din,
+              input  wire [3:0] mask,
+              output reg  [3:0] out
+            );
+              integer i;
+              always @(*) begin
+                for (i = 3; i > 0; i = i - 1) begin
+                  out[i] = din[i] ^ mask[i];
+                end
+                out[0] = mask[0];
+              end
+            endmodule
+            """
+        )
+    )
+
+    design = lower_via_pyslang([rtl], "decrement_for")
+    assert len(design.diagnostics) == 0
+
+    proc = design.modules[0].processes[0]
+    unrolled = proc.structured_statements[0]
+    assert unrolled["type"] == "block"
+    assert len(unrolled["statements"]) == 3
+
+    header = generate_systemc_header(design)
+    assert "__next_out[3]" in header
+    assert "__next_out[1]" in header
+    assert "sensitive << din << mask;" in header
 
 
 def test_procedural_for_loop_nested_in_case(tmp_path: Path) -> None:

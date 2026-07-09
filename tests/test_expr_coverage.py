@@ -62,6 +62,28 @@ endmodule
     assert " h" not in " ".join(line for line in header.splitlines() if "sensitive" in line)
 
 
+def test_wide_vectors_use_sc_biguint(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module wide_top(
+  input  wire [64:0] a,
+  input  wire [63:0] b,
+  output wire [64:0] y
+);
+  assign y = (a ^ {1'b0, b}) + 65'h1ffffffffffffffff;
+endmodule
+""",
+        "wide_top",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_in<sc_biguint<65>> a;" in header
+    assert "sc_out<sc_biguint<65>> y;" in header
+    assert "sc_biguint<65>(\"0x1ffffffffffffffff\")" in header
+    assert "sc_biguint<65>(" in header
+    assert "sc_uint<65>" not in header
+
+
 def test_part_select_and_bit_select_read(tmp_path: Path) -> None:
     design = _design(
         tmp_path,
@@ -408,6 +430,26 @@ endmodule
     assert "sc_in<sc_int<8>> a;" in header
     assert "sc_out<sc_int<9>> y;" in header
     assert "sc_signal<sc_int<9>> acc;" in header
+
+
+def test_signed_ternary_branches_are_cast_to_common_sc_int(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_mux(
+  input  wire              sel,
+  input  wire signed [8:0] a,
+  input  wire signed [8:0] b,
+  input  wire signed [8:0] c,
+  output wire signed [8:0] y
+);
+  assign y = sel ? a : (b + c);
+endmodule
+""",
+        "signed_mux",
+    )
+    header = generate_systemc_header(design)
+    assert "sel.read() ? sc_int<9>(a.read()) : sc_int<9>((b.read() + c.read()))" in header
 
 
 def test_one_bit_signed_decl_does_not_collapse_to_bool(tmp_path: Path) -> None:

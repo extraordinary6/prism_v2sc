@@ -46,6 +46,7 @@ from .expr import (
     render_lvalue,
     render_rvalue,
     sanitize_identifier,
+    systemc_int_type,
 )
 from .instrumentation import (
     InstrumentationConfig,
@@ -183,6 +184,10 @@ def _walk_process_assignments(statement: object, sink: list) -> None:
     kind = statement.get("type")
     if kind in {"blocking_assign", "nonblocking_assign"}:
         sink.append(statement)
+        return
+    if kind == "block":
+        for child in statement.get("statements", ()) or ():
+            _walk_process_assignments(child, sink)
         return
     if kind == "if":
         for child in statement.get("true", ()) or ():
@@ -562,10 +567,7 @@ def _emit_module(
         instrumentation_config,
     )
     if module.parameters:
-        template_params = ", ".join(
-            f"int {_sanitize_identifier(parameter.name)} = {_cpp_expr(parameter.value)}"
-            for parameter in module.parameters
-        )
+        template_params = _template_parameter_list(module)
         writer.line(f"template <{template_params}>")
     writer.line(f"SC_MODULE({class_name}) {{")
     writer.indent()
@@ -1388,6 +1390,10 @@ def _collect_statement_rhs_sensitivity(statement: dict[str, object], ctx: Module
                     names.extend(collect_sensitivity(cond_expr, ctx))
             for child in _as_statement_list(item.get("statements")):
                 names.extend(_collect_statement_rhs_sensitivity(child, ctx))
+        return names
+    if kind == "block":
+        for child in _as_statement_list(statement.get("statements")):
+            names.extend(_collect_statement_rhs_sensitivity(child, ctx))
     return names
 
 
@@ -1501,8 +1507,23 @@ def _emit_ff_process(process: ProcessIR, ctx: ModuleContext) -> list[str]:
     for base in written_bases:
         sanitized = _sanitize_identifier(base)
         lines.append(f"auto __next_{sanitized} = {sanitized}.read();")
+    # Verilog nonblocking assignments evaluate their RHS from the pre-edge
+    # state, while blocking temporaries in the same FF block take effect
+    # immediately. LHS still schedules into __next_*; RHS reads only see
+    # __next_* for names written by blocking assignments in this process.
+    immediate_names = frozenset(
+        _collect_written_base_names(process, ctx, assignment_kinds={"blocking_assign"})
+    )
     for statement in process.structured_statements:
-        lines.extend(_emit_structured_statement(statement, indent_level=0, ctx=ctx, staged_names=staged_names))
+        lines.extend(
+            _emit_structured_statement(
+                statement,
+                indent_level=0,
+                ctx=ctx,
+                staged_names=staged_names,
+                rhs_staged_names=immediate_names,
+            )
+        )
     for base in written_bases:
         sanitized = _sanitize_identifier(base)
         lines.append(f"{sanitized}.write(__next_{sanitized});")
@@ -1515,41 +1536,73 @@ def _emit_structured_statement(
     *,
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    rhs_staged_names: frozenset[str] | None = None,
 ) -> list[str]:
     prefix = "  " * indent_level
     kind = statement.get("type")
+    rhs_names = staged_names if rhs_staged_names is None else rhs_staged_names
 
     if kind in {"blocking_assign", "nonblocking_assign"}:
-        return [prefix + _emit_tree_assignment(statement, ctx, staged_names)]
+        return [prefix + _emit_tree_assignment(statement, ctx, staged_names, rhs_staged_names=rhs_names)]
 
     if kind == "return":
         value_expr = statement.get("value_expr")
         if value_expr is None:
             return [f"{prefix}return;"]
-        value_cpp = render_rvalue(value_expr, ctx, staged_names=staged_names)
+        value_cpp = render_rvalue(value_expr, ctx, staged_names=rhs_names)
         return [f"{prefix}return {value_cpp};"]
 
     if kind == "if":
-        cond_text = _render_cond(statement, ctx, staged_names=staged_names)
+        cond_text = _render_cond(statement, ctx, staged_names=rhs_names)
         lines = [f"{prefix}if ({cond_text}) {{"]
         for child in _as_statement_list(statement.get("true")):
-            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level + 1,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    rhs_staged_names=rhs_names,
+                )
+            )
         false_branch = _as_statement_list(statement.get("false"))
         if false_branch:
             lines.append(f"{prefix}}} else {{")
             for child in false_branch:
-                lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+                lines.extend(
+                    _emit_structured_statement(
+                        child,
+                        indent_level + 1,
+                        ctx=ctx,
+                        staged_names=staged_names,
+                        rhs_staged_names=rhs_names,
+                    )
+                )
         lines.append(f"{prefix}}}")
         return lines
 
     if kind == "case":
-        return _emit_case_statement(statement, indent_level, ctx=ctx, staged_names=staged_names)
+        return _emit_case_statement(
+            statement,
+            indent_level,
+            ctx=ctx,
+            staged_names=staged_names,
+            rhs_staged_names=rhs_names,
+        )
 
     if kind == "block":
         # Unrolled for loops and other compound statements produce blocks
         lines = []
         for child in _as_statement_list(statement.get("statements")):
-            lines.extend(_emit_structured_statement(child, indent_level, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    rhs_staged_names=rhs_names,
+                )
+            )
         return lines
 
     if kind == "noop":
@@ -1566,16 +1619,23 @@ def _emit_case_statement(
     *,
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    rhs_staged_names: frozenset[str] | None = None,
 ) -> list[str]:
+    rhs_names = staged_names if rhs_staged_names is None else rhs_staged_names
     case_kind = str(statement.get("case_kind", "case"))
     if case_kind in {"casez", "casex"}:
         return _emit_wildcard_case_statement(
-            statement, indent_level, ctx=ctx, staged_names=staged_names, case_kind=case_kind
+            statement,
+            indent_level,
+            ctx=ctx,
+            staged_names=staged_names,
+            rhs_staged_names=rhs_names,
+            case_kind=case_kind,
         )
     prefix = "  " * indent_level
     expr_tree = statement.get("expr_tree")
     if isinstance(expr_tree, dict):
-        expr = render_rvalue(expr_tree, ctx, staged_names=staged_names)
+        expr = render_rvalue(expr_tree, ctx, staged_names=rhs_names)
     else:
         expr = _cpp_rvalue(str(statement.get("expr", "")))
     lines = [f"{prefix}switch ({expr}) {{"]
@@ -1584,7 +1644,7 @@ def _emit_case_statement(
         if isinstance(cond_exprs, list) and cond_exprs:
             for cond_expr in cond_exprs:
                 if isinstance(cond_expr, dict):
-                    lines.append(f"{prefix}case {_render_case_label(cond_expr, ctx, staged_names=staged_names)}:")
+                    lines.append(f"{prefix}case {_render_case_label(cond_expr, ctx, staged_names=rhs_names)}:")
                 else:
                     lines.append(f"{prefix}case {cond_expr}:")
         else:
@@ -1595,7 +1655,15 @@ def _emit_case_statement(
             else:
                 lines.append(f"{prefix}default:")
         for child in _as_statement_list(item.get("statements")):
-            lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level + 1,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    rhs_staged_names=rhs_names,
+                )
+            )
         lines.append(f"{prefix}  break;")
     lines.append(f"{prefix}}}")
     return lines
@@ -1664,6 +1732,7 @@ def _emit_wildcard_case_statement(
     *,
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    rhs_staged_names: frozenset[str] | None = None,
     case_kind: str,
 ) -> list[str]:
     """Lower ``casez`` / ``casex`` to an if / else-if / else chain.
@@ -1675,9 +1744,10 @@ def _emit_wildcard_case_statement(
     multi-cycle simulation.
     """
     prefix = "  " * indent_level
+    rhs_names = staged_names if rhs_staged_names is None else rhs_staged_names
     expr_tree = statement.get("expr_tree")
     if isinstance(expr_tree, dict):
-        sel_text = render_rvalue(expr_tree, ctx, staged_names=staged_names)
+        sel_text = render_rvalue(expr_tree, ctx, staged_names=rhs_names)
         sel_width = infer_width(expr_tree, ctx)
     else:
         sel_text = _cpp_rvalue(str(statement.get("expr", "")))
@@ -1705,7 +1775,7 @@ def _emit_wildcard_case_statement(
                 # an equality test (loses wildcard semantics, but only if
                 # the user wrote a non-literal in the case label, which is
                 # already unusual).
-                terms.append(f"(__sel == {render_rvalue(cond_expr, ctx, staged_names=staged_names)})")
+                terms.append(f"(__sel == {render_rvalue(cond_expr, ctx, staged_names=rhs_names)})")
                 continue
             mask, match, _width = spec
             terms.append(f"((__sel & {hex(mask)}) == {hex(match)})")
@@ -1713,7 +1783,15 @@ def _emit_wildcard_case_statement(
         keyword = "if" if first else "else if"
         lines.append(f"{prefix}  {keyword} ({condition}) {{")
         for child in _as_statement_list(item.get("statements")):
-            lines.extend(_emit_structured_statement(child, indent_level + 2, ctx=ctx, staged_names=staged_names))
+            lines.extend(
+                _emit_structured_statement(
+                    child,
+                    indent_level + 2,
+                    ctx=ctx,
+                    staged_names=staged_names,
+                    rhs_staged_names=rhs_names,
+                )
+            )
         lines.append(f"{prefix}  }}")
         first = False
     if default_body is not None:
@@ -1721,11 +1799,27 @@ def _emit_wildcard_case_statement(
         if first:
             # No labeled items at all — emit the default body unconditionally.
             for child in default_body:
-                lines.extend(_emit_structured_statement(child, indent_level + 1, ctx=ctx, staged_names=staged_names))
+                lines.extend(
+                    _emit_structured_statement(
+                        child,
+                        indent_level + 1,
+                        ctx=ctx,
+                        staged_names=staged_names,
+                        rhs_staged_names=rhs_names,
+                    )
+                )
         else:
             lines.append(f"{prefix}  {keyword}{{".rstrip())
             for child in default_body:
-                lines.extend(_emit_structured_statement(child, indent_level + 2, ctx=ctx, staged_names=staged_names))
+                lines.extend(
+                    _emit_structured_statement(
+                        child,
+                        indent_level + 2,
+                        ctx=ctx,
+                        staged_names=staged_names,
+                        rhs_staged_names=rhs_names,
+                    )
+                )
             lines.append(f"{prefix}  }}")
     lines.append(f"{prefix}}}")
     return lines
@@ -1742,11 +1836,13 @@ def _emit_tree_assignment(
     statement: dict[str, object],
     ctx: ModuleContext,
     staged_names: frozenset[str],
+    rhs_staged_names: frozenset[str] | None = None,
 ) -> str:
     left_expr = statement.get("left_expr")
     right_expr = statement.get("right_expr")
+    rhs_names = staged_names if rhs_staged_names is None else rhs_staged_names
     if isinstance(right_expr, dict):
-        rhs = render_rvalue(right_expr, ctx, staged_names=staged_names)
+        rhs = render_rvalue(right_expr, ctx, staged_names=rhs_names)
     else:
         rhs = _cpp_rvalue(str(statement.get("right", "")))
 
@@ -1901,11 +1997,16 @@ def _fit_bit_string(bits: str, width: int) -> str:
     return pad * (width - len(bits)) + bits
 
 
-def _collect_written_base_names(process: ProcessIR, ctx: ModuleContext | None = None) -> list[str]:
+def _collect_written_base_names(
+    process: ProcessIR,
+    ctx: ModuleContext | None = None,
+    *,
+    assignment_kinds: set[str] | None = None,
+) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for statement in process.structured_statements:
-        for base in _walk_lvalue_bases(statement):
+        for base in _walk_lvalue_bases(statement, assignment_kinds=assignment_kinds):
             if not base or base in seen:
                 continue
             if ctx is not None and base in ctx.array_signal_names:
@@ -1917,9 +2018,15 @@ def _collect_written_base_names(process: ProcessIR, ctx: ModuleContext | None = 
     return ordered
 
 
-def _walk_lvalue_bases(statement: dict[str, object]) -> list[str]:
+def _walk_lvalue_bases(
+    statement: dict[str, object],
+    *,
+    assignment_kinds: set[str] | None = None,
+) -> list[str]:
     kind = statement.get("type")
     if kind in {"blocking_assign", "nonblocking_assign"}:
+        if assignment_kinds is not None and kind not in assignment_kinds:
+            return []
         left_expr = statement.get("left_expr")
         if isinstance(left_expr, dict):
             base = lvalue_base_name(left_expr)
@@ -1933,15 +2040,20 @@ def _walk_lvalue_bases(statement: dict[str, object]) -> list[str]:
     if kind == "if":
         names: list[str] = []
         for child in _as_statement_list(statement.get("true")):
-            names.extend(_walk_lvalue_bases(child))
+            names.extend(_walk_lvalue_bases(child, assignment_kinds=assignment_kinds))
         for child in _as_statement_list(statement.get("false")):
-            names.extend(_walk_lvalue_bases(child))
+            names.extend(_walk_lvalue_bases(child, assignment_kinds=assignment_kinds))
+        return names
+    if kind == "block":
+        names = []
+        for child in _as_statement_list(statement.get("statements")):
+            names.extend(_walk_lvalue_bases(child, assignment_kinds=assignment_kinds))
         return names
     if kind == "case":
         names = []
         for item in _as_case_items(statement.get("items")):
             for child in _as_statement_list(item.get("statements")):
-                names.extend(_walk_lvalue_bases(child))
+                names.extend(_walk_lvalue_bases(child, assignment_kinds=assignment_kinds))
         return names
     return []
 
@@ -1984,7 +2096,30 @@ def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
     if width_expr == "1" and not signed:
         return "bool"
+    if width_expr.isdecimal():
+        return systemc_int_type(int(width_expr), signed=signed)
     return f"sc_{'int' if signed else 'uint'}<{width_expr}>"
+
+
+def _template_parameter_list(module: ModuleIR) -> str:
+    declared: set[str] = set()
+    rendered: list[str] = []
+    for parameter in module.parameters:
+        name = _sanitize_identifier(parameter.name)
+        default = _safe_template_default(parameter.value, declared)
+        rendered.append(f"int {name} = {default}")
+        declared.add(name)
+    return ", ".join(rendered)
+
+
+def _safe_template_default(value: str, declared: set[str]) -> str:
+    default = _cpp_expr(value)
+    if not default:
+        return "1"
+    identifiers = set(_identifiers(default))
+    if identifiers - declared:
+        return "1"
+    return default
 
 
 def _width_expr(width: WidthIR | None) -> str:
@@ -2145,7 +2280,13 @@ def _systemc_edge(edge: str) -> str:
 
 def _identifiers(expr: str) -> list[str]:
     tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", expr)
-    return _dedupe([token for token in tokens if token not in {"sc_uint", "sc_int"}])
+    return _dedupe(
+        [
+            token
+            for token in tokens
+            if token not in {"sc_uint", "sc_int", "sc_biguint", "sc_bigint"}
+        ]
+    )
 
 
 def _dedupe(items: list[str]) -> list[str]:

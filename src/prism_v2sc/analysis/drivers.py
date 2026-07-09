@@ -18,6 +18,8 @@ class AssignmentSite:
     assignment_kind: str
     target: str
     conflict_target: str
+    base_target: str
+    bit_range: tuple[int, int] | None
 
 
 def analyze_process_drivers(module_name: str, processes: tuple[ProcessIR, ...]) -> tuple[DiagnosticIR, ...]:
@@ -84,6 +86,39 @@ def analyze_process_drivers(module_name: str, processes: tuple[ProcessIR, ...]) 
                 )
             )
 
+    by_base: dict[str, list[AssignmentSite]] = defaultdict(list)
+    for site in assignments:
+        by_base[site.base_target].append(site)
+
+    for base in sorted(by_base):
+        base_sites = by_base[base]
+        reported = False
+        for left_index, left in enumerate(base_sites):
+            for right in base_sites[left_index + 1 :]:
+                if left.process_index == right.process_index:
+                    continue
+                if left.conflict_target == right.conflict_target:
+                    continue
+                if not _ranges_overlap(left.bit_range, right.bit_range):
+                    continue
+                diagnostics.append(
+                    DiagnosticIR(
+                        severity="error",
+                        module=module_name,
+                        code="overlapping_procedural_writes",
+                        message=(
+                            f"signal '{base}' has overlapping procedural writes in "
+                            f"blocks {left.process_index} and {right.process_index}: "
+                            f"{left.target}, {right.target}"
+                        ),
+                        node="Always",
+                    )
+                )
+                reported = True
+                break
+            if reported:
+                break
+
     for index, process in enumerate(processes):
         if process.kind != "always_ff":
             continue
@@ -129,6 +164,8 @@ def _collect_statement_assignments(
                     assignment_kind="blocking" if kind == "blocking_assign" else "nonblocking",
                     target=left,
                     conflict_target=_conflict_target(left),
+                    base_target=base,
+                    bit_range=_constant_bit_range(left),
                 )
             )
         return
@@ -174,6 +211,42 @@ def _conflict_target(target: str) -> str:
     if not select:
         return match.group("name")
     return f"{match.group('name')}{select.replace(' ', '')}"
+
+
+def _constant_bit_range(target: str) -> tuple[int, int] | None:
+    target = target.strip()
+    match = re.match(
+        r"^(?P<name>[A-Za-z_][A-Za-z0-9_$]*)(?:\[(?P<select>[^\]]+)\])?$",
+        target,
+    )
+    if match is None:
+        return None
+    select = match.group("select")
+    if not select:
+        return None
+    if ":" not in select:
+        try:
+            bit = int(select.strip(), 0)
+        except ValueError:
+            return None
+        return (bit, bit)
+    msb_text, lsb_text = select.split(":", maxsplit=1)
+    try:
+        msb = int(msb_text.strip(), 0)
+        lsb = int(lsb_text.strip(), 0)
+    except ValueError:
+        return None
+    return (max(msb, lsb), min(msb, lsb))
+
+
+def _ranges_overlap(left: tuple[int, int] | None, right: tuple[int, int] | None) -> bool:
+    # Whole-signal writes and dynamic selects conservatively overlap any
+    # other write to the same base signal.
+    if left is None or right is None:
+        return True
+    left_hi, left_lo = left
+    right_hi, right_lo = right
+    return max(left_lo, right_lo) <= min(left_hi, right_hi)
 
 
 def _process_has_blocking_assign(process: ProcessIR) -> bool:
