@@ -1,10 +1,11 @@
 # RTL 功耗诊断方法学（Power Diagnostics Methodology）
 
-> 本文描述一个**构建在 `prism_v2sc` 之上的 RTL 功耗热点诊断器**的设计思路与拟采用的方法学。
+> 本文描述一个**已集成在 `prism_v2sc` 中的 RTL 功耗热点诊断器**的方法学与设计边界。
 >
 > 说明：
-> - 该能力**尚未实现**，本文是面向实现的*方法学设计*，不是对已交付行为的描述（与 `docs/` 下其他文档不同，那些描述的是已落地的行为）。
-> - 本文**不含实施计划 / 阶段排期**；方法学与计划分开维护。
+> - 该能力已经实现：`--power-static` 做静态嫌疑分析，`--power-instrument` 生成插桩 SystemC，`--power-profile-dump` / `--power-report` 生成 workload-scoped profile/report。
+> - 本文仍以方法学和诚实边界为主；命令入口示例见顶层 README 和 `examples/power_multimodule_demo/README.md`，实施记录见 `docs/plan2.md`。
+> - 本文**不含新的实施计划 / 阶段排期**；方法学与计划分开维护。
 > - 阅读前置：`docs/correctness_strategy.md`（等价性如何建立）、`docs/known_differences.md`（生成 SystemC 的近似语义边界）。这两份文档直接决定了本方法学"能测什么、不能测什么"。
 
 ---
@@ -44,15 +45,15 @@ P_dyn ≈ α · C · V² · f
 
 ## 3. 信任基础：被等价性验证背书的活动量
 
-这是本方法学相对于其他 RTL 功耗工具的**核心优势**，必须重点强调。
+这是本方法学相对于普通未验证快速模型的**核心优势**，但它不是对任意用户 RTL 的形式证明。
 
-`prism_v2sc` 的等价性 CI（`tests/equivalence/run_equivalence.py`，见 `docs/correctness_strategy.md` 的 "Golden Loop"）已经证明：**生成的 SystemC 与原始 RTL 逐周期（per-cycle）输出一致**。由此可以推出一条强结论：
+`prism_v2sc` 的等价性 CI（`tests/equivalence/run_equivalence.py`，见 `docs/correctness_strategy.md` 的 "Golden Loop"）对已注册 fixtures 覆盖的支持面证明：**生成的 SystemC 与原始 RTL 在采样点输出一致**。由此可以推出一条强结论：
 
 > 功能逐周期等价 ⟹ 所有寄存器 / 状态的逐周期取值序列等价 ⟹ **寄存器 / 状态的翻转活动 = RTL 的真实翻转活动**。
 
-也就是说，本工具采集到的状态活动量**不是"估"出来的，而是被等价性测试背书过的**。一般 RTL 功耗工具的活动量来自一个未必与综合后行为一致的快速模型；而这里的活动量建立在一个"已验证与 RTL 等价"的模型之上。这一点在方法学层面是决定性的差异。
+也就是说，本工具采集到的状态活动量**不是纯结构估计**，而是来自经过 trace-equivalence、diagnostic contract 和必要时 real-design keypoint gate 约束过的 generated SystemC 模型。一般 RTL 功耗工具的活动量来自一个未必与 RTL 行为对齐的快速模型；而这里的活动量建立在一个持续回归验证的转换器之上。这一点在方法学层面是决定性的差异。
 
-> 注意边界：上述结论对**寄存器 / 状态**与**周期边界上的功能值**严格成立；对**周期内的毛刺（glitch）活动不成立**（见 §9）。
+> 注意边界：上述结论只覆盖当前支持面、已验证 fixtures 和用户实际通过的转换/验证 gate；它不替代对任意新 RTL 的形式等价。对**周期内的毛刺（glitch）活动不成立**（见 §9）。
 
 ---
 
@@ -170,10 +171,11 @@ prev = cur;
 
 `prism_v2sc` 的 IR 把表达式表示成**结构化的树**（`identifier / binop / unop / cond / concat / repeat / bitselect / partselect / ...`，schema 见 `codegen/expr.py` 顶部），这对静态结构分析非常友好。
 
-需要建立的基础设施：
+当前实现的基础设施：
 
-- **信号依赖图 / 扇入扇出**：遍历表达式树与过程语句，建立"谁驱动谁"的有向图。`analysis/` 下的 `dependencies.py`、`sensitivity.py` 目前是空 placeholder，正是它的归属；`analysis/drivers.py` 已经在遍历结构化语句做驱动冲突分析，可作为同源风格参考。
-- **表达式复杂度 / 深度指标**：从表达式树直接得到。
+- **信号依赖图 / 扇入扇出**：`analysis/dependencies.py` 遍历表达式树与过程语句，建立"谁驱动谁"的有向图；`analysis/sensitivity.py` 给状态信号做 clock-domain 归属。
+- **表达式复杂度 / 深度指标**：`analysis/expression_metrics.py` 从表达式树直接得到节点数、深度和操作符族统计。
+- **Probe planning 与合成名过滤**：`analysis/probe_planning.py` 选择 state / comb / memory / port probes，并过滤 `__next_*`、`__shadow_*` 和 bridge 类实现细节。
 
 在此之上的启发式规则（每条都对应一类真实功耗问题与一种 RTL 改法）：
 
@@ -195,10 +197,10 @@ prev = cur;
 | 反标粒度 | 现状 | 方法 |
 | --- | --- | --- |
 | 模块级 | **已可** | 每个 `ModuleIR` 带 `source_path` |
-| 信号级 | **基本可** | 信号有名字，可按名映射到声明 |
-| **语句 / 行级** | **缺，需补强** | 见下 |
+| 信号级 | **已可** | `SignalIR` / `PortIR` 带可选 `loc`，并可按名映射到声明 |
+| **语句 / 行级** | **已接入** | `ContinuousAssignIR`、`ProcessIR` 和结构化 statement dict 带可选 `loc`；覆盖取决于 slang 是否能提供对应 source range |
 
-行级反标是"指出 RTL 内可疑语句"这句话能否兑现的**命门**。当前 IR 的语句 / 信号节点**没有携带行号**：slang 的 `sourceRange` 是有的，但目前只在 `frontend/lower.py` 里用来取*模块所属文件路径*（`_resolve_source_path`），并未把行 / 列号带进 `ProcessIR` / 各 statement dict / `SignalIR`。
+行级反标是"指出 RTL 内可疑语句"这句话能否兑现的**命门**。当前 IR 已把 slang `sourceRange` 中的 `(file, line, col)` 作为可选 `loc` 接到声明、连续赋值、过程和结构化语句上。它是 best-effort：不是每个表达式节点都保证有独立位置，但热点至少可以稳定落到模块、信号和主要驱动语句。
 
 方法学：
 
@@ -248,4 +250,4 @@ prev = cur;
 
 - `docs/correctness_strategy.md` —— 等价性 CI 是本方法学 §3"活动量可信"的**唯一来源**；没有它，活动量就只是又一个未经验证的估计。
 - `docs/known_differences.md` —— 生成 SystemC 的近似语义（`SC_METHOD` 调度、`__next_` staging、X/Z 近似）**直接决定了本工具能测什么、不能测什么**（§5.3 的 delta-cycle、§10 的 glitch 不可见均源于此）。
-- `analysis/` —— 静态分析（依赖图、扇入扇出、结构规则）的落点；`dependencies.py` / `sensitivity.py` 当前为空 placeholder，`drivers.py` 提供同源风格参考。
+- `analysis/` —— 静态分析（依赖图、扇入扇出、结构规则）、probe planning 和合成名过滤的落点；`drivers.py` 提供同源风格参考。

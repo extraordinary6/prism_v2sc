@@ -15,7 +15,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="156 tests" src="https://img.shields.io/badge/tests-156%20collected-0EA5E9">
+  <img alt="185 tests" src="https://img.shields.io/badge/tests-185%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
@@ -239,13 +239,15 @@ python -m prism_v2sc --power-report build\power_profile.json `
 python -m pytest -q
 ```
 
-当前测试套件收集 156 个测试，覆盖 IR lowering、codegen 输出形态、CLI 行为、多文件输出布局、表达式覆盖、diagnostics、hardening、subroutines、静态功耗分析、probe planning、instrumentation 形态、递归 power dump 生成、profile parsing、scoring、deep profiling、workload comparison 和 power report 稳定性。
+当前测试套件收集 185 个测试，覆盖 IR lowering、codegen 输出形态、CLI 行为、多文件输出布局、表达式覆盖、diagnostics、hardening、subroutines、静态功耗分析、probe planning、instrumentation 形态、递归 power dump 生成、profile parsing、scoring、deep profiling、workload comparison 和 power report 稳定性。
 
 ## 等价性 CI
 
 `.github/workflows/equivalence.yml` 在 Linux 上运行。它用 Icarus Verilog 协同仿真 RTL fixtures，并用 `libsystemc-dev` 编译运行生成的 SystemC，然后 diff per-cycle traces。CI 也包含 Linux-only power checks：编译并运行插桩 SystemC，解析 `prism_power_dump` 输出，并比较插桩和未插桩 traces。
 
 本地 trace-equivalence 和动态功耗 smoke 需要 SystemC headers 和 libraries。没有 `<systemc>` 的机器可以本地运行 Python unit suite，并依赖 Linux CI 做最终 SystemC compile/run 检查。
+
+更深入的探索性验证和真实设计检查放在 `verification/` 下，包括外部 MHSA、OFDM FFT/IFFT、带 interface 的 ICB-to-APB bridge，以及 4x4/8x8 tinyNPU 加速器转换和一致性 gate。
 
 ## 延伸阅读
 
@@ -258,3 +260,4 @@ python -m pytest -q
 - `docs/pyslang_migration.md`：pyverilog 到 pyslang 的迁移记录。
 - `docs/plan.md`：converter phase 状态。
 - `docs/plan2.md`：power diagnostics 已完成实现清单。
+- `verification/README.md`：更深入的 verification 工作区和真实设计检查。

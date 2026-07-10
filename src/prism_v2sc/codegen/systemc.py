@@ -16,12 +16,14 @@ Two entry points:
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, replace
 from pathlib import Path
 import os
 import re
 
 from prism_v2sc.ir.model import (
+    ArgIR,
     ContinuousAssignIR,
     DesignIR,
     GenerateForIR,
@@ -41,7 +43,9 @@ from .expr import (
     build_module_context,
     collect_sensitivity,
     const_eval,
+    infer_signed,
     infer_width,
+    is_array_element_expr,
     lvalue_base_name,
     render_lvalue,
     render_rvalue,
@@ -81,6 +85,28 @@ class DirectBitBridge:
     instance_name: str
     port_name: str
     direction: str
+
+
+@dataclass(frozen=True)
+class ExprPortBridge:
+    """Bridge an input port connected to a non-net expression."""
+
+    name: str
+    method_name: str
+    instance_name: str
+    port_name: str
+    port: PortIR
+    expr: dict[str, object]
+
+
+@dataclass(frozen=True)
+class UnconnectedPortSignal:
+    """Dummy signal for an explicitly unconnected child port."""
+
+    name: str
+    instance_name: str
+    port_name: str
+    port: PortIR
 
 
 @dataclass(frozen=True)
@@ -140,7 +166,10 @@ def _direct_output_assemblers(
     ]
 
 
-def _classify_lvalue_slot(lvalue: object) -> tuple[str, int, int] | None:
+def _classify_lvalue_slot(
+    lvalue: object,
+    ctx: ModuleContext,
+) -> tuple[str, int, int] | None:
     """Return ``(parent_name, msb, lsb)`` for a constant-indexed bit/part
     select lvalue. ``msb == lsb`` for a single bit. Returns ``None`` for
     whole-signal writes, dynamic indices, or non-identifier targets.
@@ -153,10 +182,8 @@ def _classify_lvalue_slot(lvalue: object) -> tuple[str, int, int] | None:
         if not isinstance(target, dict) or target.get("kind") != "identifier":
             return None
         idx = lvalue.get("index")
-        if not isinstance(idx, dict) or idx.get("kind") != "intconst":
-            return None
-        value = idx.get("value")
-        if not isinstance(value, int):
+        value = const_eval(idx, ctx) if isinstance(idx, dict) else None
+        if value is None:
             return None
         return (str(target.get("name", "")), value, value)
     if kind == "partselect":
@@ -165,15 +192,11 @@ def _classify_lvalue_slot(lvalue: object) -> tuple[str, int, int] | None:
             return None
         msb_node = lvalue.get("msb")
         lsb_node = lvalue.get("lsb")
-        if not isinstance(msb_node, dict) or msb_node.get("kind") != "intconst":
+        msb = const_eval(msb_node, ctx) if isinstance(msb_node, dict) else None
+        lsb = const_eval(lsb_node, ctx) if isinstance(lsb_node, dict) else None
+        if msb is None or lsb is None:
             return None
-        if not isinstance(lsb_node, dict) or lsb_node.get("kind") != "intconst":
-            return None
-        msb = msb_node.get("value")
-        lsb = lsb_node.get("value")
-        if not isinstance(msb, int) or not isinstance(lsb, int):
-            return None
-        return (str(target.get("name", "")), msb, lsb)
+        return (str(target.get("name", "")), max(msb, lsb), min(msb, lsb))
     return None
 
 
@@ -201,6 +224,111 @@ def _walk_process_assignments(statement: object, sink: list) -> None:
                 _walk_process_assignments(child, sink)
 
 
+def _cast_expr_to_slice_width(expr: object, width: int) -> object:
+    """Preserve Verilog part-select assignment conversion after shadowing."""
+    if width <= 1 or not isinstance(expr, dict):
+        return expr
+    return {
+        "kind": "cast",
+        "signed": False,
+        "width": width,
+        "operand": expr,
+    }
+
+
+def _aggregate_multi_writer_continuous_assigns(
+    module: ModuleIR,
+) -> tuple[ModuleIR, list[ProcessSliceAssembler]]:
+    """Give sliced continuous assignments one SystemC writer per parent.
+
+    Multiple Verilog continuous assignments may legally drive disjoint bits
+    of one vector. Each generated ``assign_N`` SC_METHOD otherwise performs
+    a read-modify-write on the whole ``sc_signal``, which SystemC treats as
+    multiple drivers even when the Verilog slices do not overlap.
+    """
+    ctx = build_module_context(module)
+    array_signal_names = {signal.name for signal in module.signals if signal.unpacked_dims}
+    sites_per_parent: dict[str, list[tuple[int, tuple[str, int, int]]]] = {}
+    has_whole_or_dynamic_write: set[str] = set()
+
+    for index, assign in enumerate(module.continuous_assigns):
+        left_expr = assign.left_expr
+        slot = _classify_lvalue_slot(left_expr, ctx)
+        if slot is not None:
+            parent = slot[0]
+            if parent not in array_signal_names:
+                sites_per_parent.setdefault(parent, []).append((index, slot))
+            continue
+        if not isinstance(left_expr, dict):
+            continue
+        kind = left_expr.get("kind")
+        if kind == "identifier":
+            name = str(left_expr.get("name", ""))
+            if name:
+                has_whole_or_dynamic_write.add(name)
+            continue
+        target = left_expr.get("target") if kind in {"bitselect", "partselect"} else None
+        if isinstance(target, dict) and target.get("kind") == "identifier":
+            has_whole_or_dynamic_write.add(str(target.get("name", "")))
+
+    qualifying = {
+        parent: sites
+        for parent, sites in sites_per_parent.items()
+        if len(sites) > 1 and parent not in has_whole_or_dynamic_write
+    }
+    if not qualifying:
+        return module, []
+
+    rewritten_assigns = list(module.continuous_assigns)
+    extra_signals: list[SignalIR] = []
+    extra_signal_names: set[str] = set()
+    assemblers: list[ProcessSliceAssembler] = []
+
+    for parent in sorted(qualifying):
+        slot_map: dict[tuple[int, int], str] = {}
+        for index, (_, msb, lsb) in qualifying[parent]:
+            slot = (msb, lsb)
+            shadow_name = slot_map.get(slot)
+            if shadow_name is None:
+                slot_id = f"{msb}" if msb == lsb else f"{msb}_{lsb}"
+                shadow_name = f"__shadow_{parent}_{slot_id}"
+                slot_map[slot] = shadow_name
+                if shadow_name not in extra_signal_names:
+                    extra_signal_names.add(shadow_name)
+                    slot_width = abs(msb - lsb) + 1
+                    width_ir = None if slot_width == 1 else WidthIR(msb=str(slot_width - 1), lsb="0")
+                    extra_signals.append(
+                        SignalIR(name=shadow_name, kind="wire", width=width_ir, signed=False)
+                    )
+            rewritten_assigns[index] = replace(
+                rewritten_assigns[index],
+                left=shadow_name,
+                left_expr={"kind": "identifier", "name": shadow_name},
+                right_expr=_cast_expr_to_slice_width(
+                    rewritten_assigns[index].right_expr,
+                    abs(msb - lsb) + 1,
+                ),
+            )
+        assemblers.append(
+            ProcessSliceAssembler(
+                parent_name=parent,
+                method_name=f"__assemble_{parent}",
+                slots=tuple(
+                    (slot_map[(msb, lsb)], msb, lsb) for (msb, lsb) in sorted(slot_map)
+                ),
+            )
+        )
+
+    return (
+        replace(
+            module,
+            signals=tuple(extra_signals) + module.signals,
+            continuous_assigns=tuple(rewritten_assigns),
+        ),
+        assemblers,
+    )
+
+
 def _aggregate_multi_writer_processes(
     module: ModuleIR,
 ) -> tuple[ModuleIR, list[ProcessSliceAssembler]]:
@@ -219,12 +347,15 @@ def _aggregate_multi_writer_processes(
     pre-existing real conflict for driver analysis to surface).
     """
     # Gather every assignment dict per process, classified by its lvalue.
+    ctx = build_module_context(module)
     per_process: list[list[tuple[dict, tuple[str, int, int] | None]]] = []
     for process in module.processes:
         sink: list = []
         for statement in process.structured_statements:
             _walk_process_assignments(statement, sink)
-        per_process.append([(stmt, _classify_lvalue_slot(stmt.get("left_expr"))) for stmt in sink])
+        per_process.append(
+            [(stmt, _classify_lvalue_slot(stmt.get("left_expr"), ctx)) for stmt in sink]
+        )
 
     # Signals declared as unpacked arrays already render as per-cell
     # ``mem[i].write(...)``, so the parent multi-writer aggregation logic
@@ -310,6 +441,10 @@ def _aggregate_multi_writer_processes(
             left_expr["kind"] = "identifier"
             left_expr["name"] = shadow_name
             stmt["left"] = shadow_name
+            stmt["right_expr"] = _cast_expr_to_slice_width(
+                stmt.get("right_expr"),
+                abs(msb - lsb) + 1,
+            )
         assemblers.append(
             ProcessSliceAssembler(
                 parent_name=parent,
@@ -366,12 +501,15 @@ def generate_systemc_header(
     writer.line()
     writer.line("#include <systemc>")
     writer.line("#include <string>")
+    writer.line("#include <type_traits>")
     if instrumentation_config is not None and instrumentation_config.enabled:
         writer.line("#include <cstdint>")
         writer.line("#include <ostream>")
     writer.line()
     writer.line("using namespace sc_core;")
     writer.line("using namespace sc_dt;")
+    writer.line()
+    _emit_integer_type_aliases(writer)
     writer.line()
     writer.line(f"#ifndef {guard}")
     writer.line(f"#define {guard}")
@@ -450,6 +588,7 @@ def render_module_file(
     writer.line()
     writer.line("#include <systemc>")
     writer.line("#include <string>")
+    writer.line("#include <type_traits>")
     if instrumentation_config is not None and instrumentation_config.enabled:
         writer.line("#include <cstdint>")
         writer.line("#include <ostream>")
@@ -463,6 +602,8 @@ def render_module_file(
     writer.line()
     writer.line("using namespace sc_core;")
     writer.line("using namespace sc_dt;")
+    writer.line()
+    _emit_integer_type_aliases(writer)
     writer.line()
     writer.line(f"#ifndef {guard}")
     writer.line(f"#define {guard}")
@@ -551,15 +692,18 @@ def _emit_module(
     instrumentation_config: InstrumentationConfig | None = None,
 ) -> None:
     class_name = _sanitize_identifier(module.name)
-    # Rewrite per-process bit/part writes that share a parent signal so the
-    # generated SystemC has exactly one writer per signal. Must run before
-    # ``build_module_context`` so the new shadow signals end up in
-    # ``ctx.signal_widths``.
+    # Rewrite sliced continuous/procedural writes that share a parent signal
+    # so the generated SystemC has exactly one writer per signal. Must run
+    # before ``build_module_context`` so the shadow signals enter the context.
+    module, continuous_assemblers = _aggregate_multi_writer_continuous_assigns(module)
     module, process_assemblers = _aggregate_multi_writer_processes(module)
+    slice_assemblers = continuous_assemblers + process_assemblers
     resolved_names = _resolved_signal_names(module, modules_by_name, signatures)
     ctx = build_module_context(module, resolved_names=frozenset(resolved_names))
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
+    expr_port_bridges = _expr_port_bridges(module, modules_by_name, signatures)
+    unconnected_port_signals = _unconnected_port_signals(module, modules_by_name, signatures)
     module_instrumentation = _module_instrumentation_config(module, instrumentation_config)
     module_needs_power_sample_strobe = _module_subtree_needs_power_sample_strobe(
         module,
@@ -573,29 +717,28 @@ def _emit_module(
     writer.indent()
 
     for port in module.ports:
-        writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)};")
+        dims = port.declared_unpacked_dims or port.unpacked_dims
+        writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)}{_unpacked_suffix(dims)};")
     if module_needs_power_sample_strobe:
         writer.line("sc_in<bool> __power_sample_strobe;")
     if module.ports:
         writer.line()
 
     for signal in module.signals:
-        suffix = "".join(
-            f"[{max(msb, lsb) - min(msb, lsb) + 1}]" for msb, lsb in signal.unpacked_dims
-        )
         writer.line(
             f"{_signal_type(signal, resolved=signal.name in resolved_names)} "
-            f"{_sanitize_identifier(signal.name)}{suffix};"
+            f"{_sanitize_identifier(signal.name)}"
+            f"{_unpacked_suffix(signal.declared_unpacked_dims or signal.unpacked_dims)};"
         )
     if module.signals:
         writer.line()
 
     for instance in module.instances:
-        writer.line(f"{_instance_type(instance)} {_sanitize_identifier(instance.name)};")
+        writer.line(f"{_instance_type(instance, modules_by_name, signatures)} {_sanitize_identifier(instance.name)};")
     for generate_for in module.generate_fors:
         for instance in generate_for.instances:
             writer.line(
-                f"sc_vector<{_instance_type(instance)}> "
+                f"sc_vector<{_instance_type(instance, modules_by_name, signatures)}> "
                 f"{_sanitize_identifier(generate_for.name)}_{_sanitize_identifier(instance.name)};"
             )
     for bridge in bit_bridges:
@@ -608,6 +751,13 @@ def _emit_module(
             writer.line(f"sc_signal_rv<1> {bridge.name};")
         else:
             writer.line(f"sc_signal<bool> {bridge.name};")
+    for bridge in expr_port_bridges:
+        writer.line(f"sc_signal<{_sc_type(bridge.port.width, bridge.port.signed)}> {bridge.name};")
+    for dummy in unconnected_port_signals:
+        if dummy.port.direction == "inout":
+            writer.line(f"sc_signal_rv<{_width_expr(dummy.port.width)}> {dummy.name};")
+        else:
+            writer.line(f"sc_signal<{_sc_type(dummy.port.width, dummy.port.signed)}> {dummy.name};")
     if module.instances or module.generate_fors:
         writer.line()
 
@@ -638,7 +788,10 @@ def _emit_module(
     for assembler in _direct_output_assemblers(direct_bit_bridges):
         _emit_direct_output_assembler(writer, assembler)
         writer.line()
-    for assembler in process_assemblers:
+    for bridge in expr_port_bridges:
+        _emit_expr_port_bridge_method(writer, bridge, ctx)
+        writer.line()
+    for assembler in slice_assemblers:
         _emit_process_slice_assembler(writer, assembler)
         writer.line()
 
@@ -672,7 +825,9 @@ def _emit_module(
         methods,
         bit_bridges,
         direct_bit_bridges,
-        process_assemblers,
+        expr_port_bridges,
+        unconnected_port_signals,
+        slice_assemblers,
         modules_by_name,
         signatures,
         instrumentation_config,
@@ -814,6 +969,8 @@ def _emit_constructor(
     methods: list[tuple[str, list[str]]],
     bit_bridges: list[GenerateBitBridge],
     direct_bit_bridges: list[DirectBitBridge],
+    expr_port_bridges: list[ExprPortBridge],
+    unconnected_port_signals: list[UnconnectedPortSignal],
     process_assemblers: list[ProcessSliceAssembler],
     modules_by_name: dict[str, ModuleIR],
     signatures: dict[str, ModuleSignature],
@@ -849,6 +1006,7 @@ def _emit_constructor(
     for method_name, _body_lines in methods:
         writer.line(f"SC_METHOD({method_name});")
         sensitivity = _method_sensitivity(module, method_name, ctx)
+        sensitivity = _expand_sensitivity_list(sensitivity, ctx)
         if sensitivity:
             writer.line("sensitive" + "".join(f" << {name}" for name in sensitivity) + ";")
         else:
@@ -861,6 +1019,7 @@ def _emit_constructor(
             writer,
             instance_name,
             instance,
+            modules_by_name,
             signatures,
             bind_power_sample_strobe=_child_needs_power_sample_strobe(
                 instance,
@@ -871,6 +1030,16 @@ def _emit_constructor(
                 bridge.port_name: bridge.name
                 for bridge in direct_bit_bridges
                 if bridge.instance_name == instance.name
+            },
+            expr_bridge_by_port={
+                bridge.port_name: bridge.name
+                for bridge in expr_port_bridges
+                if bridge.instance_name == instance.name
+            },
+            dummy_by_port={
+                dummy.port_name: dummy.name
+                for dummy in unconnected_port_signals
+                if dummy.instance_name == instance.name
             },
         )
 
@@ -885,6 +1054,7 @@ def _emit_constructor(
                 writer,
                 f"{vector_name}[{loop_var}]",
                 instance,
+                modules_by_name,
                 signatures,
                 loop_var=loop_var,
                 bind_power_sample_strobe=_child_needs_power_sample_strobe(
@@ -936,6 +1106,16 @@ def _emit_constructor(
         writer.line(f"sensitive{sensitivities};")
         writer.line()
 
+    for bridge in expr_port_bridges:
+        sensitivity = [bridge.name] if bridge.port.direction == "output" else collect_sensitivity(bridge.expr, ctx)
+        sensitivity = _expand_sensitivity_list(sensitivity, ctx)
+        if sensitivity:
+            writer.line(f"SC_METHOD({bridge.method_name});")
+            writer.line("sensitive" + "".join(f" << {name}" for name in sensitivity) + ";")
+        else:
+            writer.line(f"{bridge.method_name}();")
+        writer.line()
+
     for assembler in process_assemblers:
         writer.line(f"SC_METHOD({assembler.method_name});")
         sensitivities = "".join(f" << {shadow}" for shadow, _msb, _lsb in assembler.slots)
@@ -962,17 +1142,33 @@ def _emit_instance_bindings(
     writer: CodeWriter,
     instance_ref: str,
     instance: InstanceIR,
+    modules_by_name: dict[str, ModuleIR],
     signatures: dict[str, ModuleSignature],
     loop_var: str | None = None,
     bit_bridge_by_port: dict[str, str] | None = None,
     direct_bridge_by_port: dict[str, str] | None = None,
+    expr_bridge_by_port: dict[str, str] | None = None,
+    dummy_by_port: dict[str, str] | None = None,
     bind_power_sample_strobe: bool = False,
 ) -> None:
     """Emit ``inst.<port>(<value>);`` lines, resolving positional via signature."""
+    child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
     resolved_ports = _resolve_instance_ports(instance, signatures)
     for port_name, value in resolved_ports:
         if not port_name:
             writer.line(f"// Positional port binding not emitted for {instance.name}: {value}")
+            continue
+        dummy_name = (dummy_by_port or {}).get(port_name)
+        if dummy_name is not None:
+            writer.line(f"{instance_ref}.{_sanitize_identifier(port_name)}({dummy_name});")
+            continue
+        expr_bridge_name = (expr_bridge_by_port or {}).get(port_name)
+        if expr_bridge_name is not None:
+            writer.line(f"{instance_ref}.{_sanitize_identifier(port_name)}({expr_bridge_name});")
+            continue
+        child_port = child_ports.get(port_name)
+        if child_port is not None and child_port.unpacked_dims and _simple_instance_binding(value):
+            _emit_array_port_binding(writer, instance_ref, port_name, value, child_port)
             continue
         direct_bridge_name = (direct_bridge_by_port or {}).get(port_name)
         if direct_bridge_name is not None:
@@ -994,6 +1190,27 @@ def _resolve_instance_ports(
     instance: InstanceIR,
     signatures: dict[str, ModuleSignature],
 ) -> list[tuple[str, str]]:
+    return [(name, arg.value) for name, arg in _resolve_instance_arg_ports(instance, signatures)]
+
+
+def _emit_array_port_binding(
+    writer: CodeWriter,
+    instance_ref: str,
+    port_name: str,
+    value: str,
+    child_port: PortIR,
+) -> None:
+    base = _sanitize_identifier(value)
+    port = _sanitize_identifier(port_name)
+    dim_sizes = tuple(max(msb, lsb) - min(msb, lsb) + 1 for msb, lsb in child_port.unpacked_dims)
+    for suffix in _array_index_suffixes(dim_sizes):
+        writer.line(f"{instance_ref}.{port}{suffix}({base}{suffix});")
+
+
+def _resolve_instance_arg_ports(
+    instance: InstanceIR,
+    signatures: dict[str, ModuleSignature],
+) -> list[tuple[str, ArgIR]]:
     """Return [(port_name, arg_value), ...] for an instance.
 
     Named bindings keep their name as-is. Positional bindings (empty name)
@@ -1004,30 +1221,30 @@ def _resolve_instance_ports(
         return []
     has_positional = any(not port.name for port in instance.ports)
     if not has_positional:
-        return [(port.name, port.value) for port in instance.ports]
+        return [(port.name, port) for port in instance.ports]
 
     signature = signatures.get(instance.module)
     if signature is None or not signature.ports:
         # No signature available: keep the placeholder behavior (empty name).
-        return [(port.name, port.value) for port in instance.ports]
+        return [(port.name, port) for port in instance.ports]
 
-    resolved: list[tuple[str, str]] = []
+    resolved: list[tuple[str, ArgIR]] = []
     sig_ports = signature.ports
     for index, port in enumerate(instance.ports):
         if port.name:
-            resolved.append((port.name, port.value))
+            resolved.append((port.name, port))
             continue
         if index < len(sig_ports):
-            resolved.append((sig_ports[index].name, port.value))
+            resolved.append((sig_ports[index].name, port))
         else:
-            resolved.append(("", port.value))
+            resolved.append(("", port))
     return resolved
 
 
 def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[str]]]:
     specs: list[tuple[str, list[str]]] = []
     for index, assign in enumerate(module.continuous_assigns):
-        specs.append((f"assign_{index}", [_emit_continuous_assign(assign, ctx)]))
+        specs.append((f"assign_{index}", _emit_continuous_assign(assign, ctx)))
 
     comb_index = 0
     ff_index = 0
@@ -1102,6 +1319,19 @@ def _emit_direct_output_assembler(writer: CodeWriter, assembler: DirectOutputAss
         else:
             writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
     writer.line(f"{assembler.parent_name}.write(__tmp);")
+    writer.dedent()
+    writer.line("}")
+
+
+def _emit_expr_port_bridge_method(writer: CodeWriter, bridge: ExprPortBridge, ctx: ModuleContext) -> None:
+    writer.line(f"void {bridge.method_name}() {{")
+    writer.indent()
+    if bridge.port.direction == "output":
+        value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
+        writer.line(f"{render_lvalue(bridge.expr, ctx)}.write({value});")
+    else:
+        value = _cast_to_port_type(render_rvalue(bridge.expr, ctx), bridge.port)
+        writer.line(f"{bridge.name}.write({value});")
     writer.dedent()
     writer.line("}")
 
@@ -1218,6 +1448,98 @@ def _direct_bit_bridges(
     return bridges
 
 
+def _expr_port_bridges(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> list[ExprPortBridge]:
+    bridges: list[ExprPortBridge] = []
+    parent_ctx = build_module_context(module)
+    for instance in module.instances:
+        child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
+        if not child_ports:
+            continue
+        for port_name, arg in _resolve_instance_arg_ports(instance, signatures):
+            if not port_name or not arg.value:
+                continue
+            child_port = child_ports.get(port_name)
+            if child_port is None or child_port.direction not in {"input", "output"}:
+                continue
+            child_port = _specialize_child_port(instance, child_port, modules_by_name, signatures)
+            if not isinstance(arg.value_expr, dict):
+                continue
+            simple_binding = _simple_instance_binding(arg.value)
+            if simple_binding and not _port_binding_width_mismatch(
+                arg.value_expr,
+                child_port,
+                parent_ctx,
+            ):
+                continue
+            if _constant_bit_select_binding(arg.value) is not None:
+                continue
+            if (
+                child_port.direction == "output"
+                and not simple_binding
+                and not is_array_element_expr(arg.value_expr, parent_ctx)
+            ):
+                continue
+            base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port_name)}"
+            bridges.append(
+                ExprPortBridge(
+                    name=f"__bridge_{base}",
+                    method_name=f"__bridge_method_{base}",
+                    instance_name=instance.name,
+                    port_name=port_name,
+                    port=child_port,
+                    expr=arg.value_expr,
+                )
+            )
+    return bridges
+
+
+def _port_binding_width_mismatch(
+    expr: dict[str, object],
+    port: PortIR,
+    ctx: ModuleContext,
+) -> bool:
+    parent_width = max(1, infer_width(expr, ctx))
+    child_width = _constant_integer_expr(_width_expr(port.width))
+    return child_width is not None and parent_width != max(1, child_width)
+
+
+def _unconnected_port_signals(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> list[UnconnectedPortSignal]:
+    dummies: list[UnconnectedPortSignal] = []
+    for instance in module.instances:
+        child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
+        if not child_ports:
+            continue
+        for port_name, arg in _resolve_instance_arg_ports(instance, signatures):
+            if not port_name or arg.value:
+                continue
+            child_port = child_ports.get(port_name)
+            if child_port is None:
+                continue
+            child_port = _specialize_child_port(instance, child_port, modules_by_name, signatures)
+            base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port_name)}"
+            dummies.append(
+                UnconnectedPortSignal(
+                    name=f"__unused_{base}",
+                    instance_name=instance.name,
+                    port_name=port_name,
+                    port=child_port,
+                )
+            )
+    return dummies
+
+
+def _simple_instance_binding(expr: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", expr or "") is not None
+
+
 def _child_ports_lookup(
     module_name: str,
     modules_by_name: dict[str, ModuleIR],
@@ -1230,6 +1552,42 @@ def _child_ports_lookup(
     if signature is not None:
         return {port.name: port for port in signature.ports}
     return {}
+
+
+def _specialize_child_port(
+    instance: InstanceIR,
+    port: PortIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> PortIR:
+    child = modules_by_name.get(instance.module)
+    parameters = child.parameters if child is not None else signatures.get(instance.module, ModuleSignature(instance.module)).parameters
+    values = {parameter.name: parameter.value for parameter in parameters}
+    values.update({argument.name: argument.value for argument in instance.parameters})
+    if not values:
+        return port
+
+    def substitute(text: str) -> str:
+        result = text
+        for name, value in values.items():
+            result = re.sub(rf"\b{re.escape(name)}\b", f"({value})", result)
+        return result
+
+    width = port.width
+    specialized_width = (
+        WidthIR(msb=substitute(width.msb), lsb=substitute(width.lsb))
+        if width is not None
+        else None
+    )
+    specialized_dims = tuple(
+        (substitute(str(left)), substitute(str(right)))
+        for left, right in port.declared_unpacked_dims
+    )
+    return replace(
+        port,
+        width=specialized_width,
+        declared_unpacked_dims=specialized_dims,
+    )
 
 
 def _resolved_signal_names(
@@ -1308,7 +1666,7 @@ def _contains_xz_literal(expr: object) -> bool:
     ):
         if _contains_xz_literal(expr.get(key)):
             return True
-    for key in ("parts", "args"):
+    for key in ("parts", "args", "elements"):
         children = expr.get(key)
         if isinstance(children, list) and any(_contains_xz_literal(child) for child in children):
             return True
@@ -1350,13 +1708,46 @@ def _method_sensitivity(module: ModuleIR, method_name: str, ctx: ModuleContext) 
         index = int(method_name.removeprefix("always_ff_"))
         ff_processes = [process for process in module.processes if process.kind == "always_ff"]
         process = ff_processes[index]
-        return [
-            f"{_sanitize_identifier(item.signal)}.{_systemc_edge(item.edge)}()"
-            for item in process.sensitivity
-            if item.edge in {"posedge", "negedge"}
-        ]
+        sensitivity: list[str] = []
+        for item in process.sensitivity:
+            if item.edge in {"posedge", "negedge"}:
+                sensitivity.append(f"{_sanitize_identifier(item.signal)}.{_systemc_edge(item.edge)}()")
+            elif item.signal and item.signal != "*":
+                sensitivity.append(_sanitize_identifier(item.signal))
+        return sensitivity
 
     return []
+
+
+def _expand_sensitivity_list(names: list[str], ctx: ModuleContext) -> list[str]:
+    expanded: list[str] = []
+    for name in names:
+        if "." in name or "[" in name:
+            expanded.append(name)
+            continue
+        raw_name = name
+        if raw_name not in ctx.array_dimensions:
+            expanded.append(name)
+            continue
+        for suffix in _array_index_suffixes(ctx.array_dimensions[raw_name]):
+            expanded.append(f"{_sanitize_identifier(raw_name)}{suffix}")
+    return _dedupe_preserve(expanded)
+
+
+def _array_index_suffixes(dim_sizes: tuple[int, ...]) -> list[str]:
+    if not dim_sizes:
+        return [""]
+    suffixes: list[str] = []
+
+    def walk(prefix: list[int], rest: tuple[int, ...]) -> None:
+        if not rest:
+            suffixes.append("".join(f"[{index}]" for index in prefix))
+            return
+        for index in range(rest[0]):
+            walk(prefix + [index], rest[1:])
+
+    walk([], tuple(max(0, size) for size in dim_sizes))
+    return suffixes
 
 
 def _collect_statement_rhs_sensitivity(statement: dict[str, object], ctx: ModuleContext) -> list[str]:
@@ -1440,10 +1831,18 @@ def _emit_subroutine(writer: CodeWriter, subroutine: SubroutineIR, ctx: ModuleCo
         formal_params.append(f"{param_type} {param_name}")
         local_names.add(param.name)
 
-    body_ctx = ctx.with_locals(frozenset(local_names))
+    for local in subroutine.local_signals:
+        local_names.add(local.name)
+
+    body_ctx = ctx.with_subroutine(subroutine)
     writer.line(f"{return_type} {func_name}({', '.join(formal_params)}) const {{")
     writer.indent()
     writer.line(f"{return_type} {func_name};")
+    for local in subroutine.local_signals:
+        writer.line(
+            f"{_sc_type(local.width, local.signed)} {_sanitize_identifier(local.name)}"
+            f"{_unpacked_suffix(local.declared_unpacked_dims or local.unpacked_dims)};"
+        )
     for statement in subroutine.body_statements:
         for body_line in _emit_structured_statement(
             statement, indent_level=0, ctx=body_ctx, staged_names=frozenset()
@@ -1851,55 +2250,181 @@ def _emit_tree_assignment(
         # sc_signal, so emit ``mem[idx].write(val);`` directly. The
         # surrounding process doesn't stage these — SystemC's delta-cycle
         # semantics already give nonblocking behavior per cell.
-        if left_expr.get("kind") == "bitselect":
-            target = left_expr.get("target")
-            if (
-                isinstance(target, dict)
-                and target.get("kind") == "identifier"
-                and str(target.get("name", "")) in ctx.array_signal_names
-            ):
-                target_name = sanitize_identifier(str(target["name"]))
-                idx = render_rvalue(left_expr.get("index"), ctx, staged_names=staged_names)
-                return f"{target_name}[{idx}].write({rhs});"
+        if is_array_element_expr(left_expr, ctx):
+            value = _cast_for_signed_lvalue(rhs, left_expr, ctx)
+            return f"{render_lvalue(left_expr, ctx)}.write({value});"
         base = lvalue_base_name(left_expr)
         if base in staged_names:
             lhs = render_lvalue(left_expr, ctx, staged_names=staged_names)
-            return f"{lhs} = {rhs};"
+            return f"{lhs} = {_cast_for_signed_lvalue(rhs, left_expr, ctx)};"
         if base in ctx.local_names:
             lhs = render_lvalue(left_expr, ctx)
-            return f"{lhs} = {rhs};"
+            return f"{lhs} = {_cast_for_signed_lvalue(rhs, left_expr, ctx)};"
         if left_expr.get("kind") == "identifier":
-            return f"{render_lvalue(left_expr, ctx)}.write({rhs});"
+            value = _cast_for_signed_lvalue(rhs, left_expr, ctx)
+            return f"{render_lvalue(left_expr, ctx)}.write({value});"
         return f"// unsupported lvalue without staging: {statement.get('left', '')}"
 
     return _emit_legacy_assignment(str(statement.get("left", "")), rhs, rhs_already_cpp=True)
 
 
-def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> str:
+def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> list[str]:
+    if assign.left_expr is not None and assign.left_expr.get("kind") == "identifier":
+        base = lvalue_base_name(assign.left_expr)
+        if base in ctx.array_dimensions and assign.right_expr is not None:
+            aggregate_lines = _emit_unpacked_array_assignment(base, assign.right_expr, ctx)
+            if aggregate_lines is not None:
+                return aggregate_lines
     if assign.right_expr is not None:
         rhs = render_rvalue(assign.right_expr, ctx)
     else:
         rhs = _cpp_rvalue(assign.right)
+    if assign.left_expr is not None and assign.left_expr.get("kind") == "concat":
+        return _emit_concat_lvalue_assignment(assign.left_expr, rhs, ctx)
     if assign.left_expr is not None and assign.left_expr.get("kind") == "identifier":
         base = lvalue_base_name(assign.left_expr)
         if base in ctx.resolved_names:
             width = max(1, ctx.signal_widths.get(base, 1))
-            return (
+            return [(
                 f"{render_lvalue(assign.left_expr, ctx)}"
                 f".write({_render_resolved_drive(assign.right_expr, ctx, width, fallback=rhs)});"
-            )
-        return f"{render_lvalue(assign.left_expr, ctx)}.write({rhs});"
+            )]
+        value = _cast_for_signed_lvalue(rhs, assign.left_expr, ctx)
+        return [f"{render_lvalue(assign.left_expr, ctx)}.write({value});"]
     if assign.left_expr is not None and assign.left_expr.get("kind") in {"bitselect", "partselect"}:
         base = lvalue_base_name(assign.left_expr)
+        if is_array_element_expr(assign.left_expr, ctx):
+            value = _cast_for_signed_lvalue(rhs, assign.left_expr, ctx)
+            return [f"{render_lvalue(assign.left_expr, ctx)}.write({value});"]
         if base:
             sanitized = _sanitize_identifier(base)
             lhs_target = render_lvalue(assign.left_expr, ctx, staged_names=frozenset({base}))
-            return (
+            return [(
                 f"{{ auto __tmp_{sanitized} = {sanitized}.read(); "
                 f"{lhs_target.replace(f'__next_{sanitized}', f'__tmp_{sanitized}')} = {rhs}; "
                 f"{sanitized}.write(__tmp_{sanitized}); }}"
+            )]
+    return [_emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)]
+
+
+def _emit_unpacked_array_assignment(
+    base: str,
+    expr: dict[str, object],
+    ctx: ModuleContext,
+) -> list[str] | None:
+    """Expand a constant unpacked-array assignment into per-cell writes."""
+    bounds = ctx.array_bounds.get(base)
+    if not bounds:
+        return None
+    lines: list[str] = []
+    sanitized = _sanitize_identifier(base)
+
+    def children(node: dict[str, object]) -> list[dict[str, object]] | None:
+        kind = node.get("kind")
+        key = "elements" if kind == "assignment_pattern" else "parts" if kind == "concat" else ""
+        values = node.get(key) if key else None
+        if not isinstance(values, list) or not all(isinstance(value, dict) for value in values):
+            return None
+        return values
+
+    def indices_for(bound: tuple[int, int]) -> list[int]:
+        left, right = bound
+        step = 1 if right >= left else -1
+        return list(range(left, right + step, step))
+
+    def walk(node: dict[str, object], depth: int, indices: tuple[int, ...]) -> bool:
+        if depth == len(bounds):
+            suffix = "".join(f"[{index}]" for index in indices)
+            lines.append(f"{sanitized}{suffix}.write({render_rvalue(node, ctx)});")
+            return True
+        values = children(node)
+        dimension_indices = indices_for(bounds[depth])
+        if values is None or len(values) != len(dimension_indices):
+            return False
+        return all(
+            walk(value, depth + 1, (*indices, index))
+            for index, value in zip(dimension_indices, values)
+        )
+
+    return lines if walk(expr, 0, ()) else None
+
+
+def _emit_concat_lvalue_assignment(
+    left_expr: dict[str, object],
+    rhs: str,
+    ctx: ModuleContext,
+) -> list[str]:
+    parts = [part for part in left_expr.get("parts", []) if isinstance(part, dict)]
+    if not parts:
+        return ["// unsupported empty concat lvalue"]
+    widths = [max(1, infer_width(part, ctx)) for part in parts]
+    total_width = max(1, sum(widths))
+    rhs_tmp = "__concat_rhs"
+    lines = [f"auto {rhs_tmp} = {systemc_int_type(total_width)}({rhs});"]
+    lsb = total_width
+    for part, width in zip(parts, widths):
+        lsb -= width
+        if width == 1:
+            slice_expr = f"{rhs_tmp}[{lsb}]"
+        else:
+            slice_expr = f"{rhs_tmp}.range({lsb + width - 1}, {lsb})"
+        lines.append(_emit_lvalue_write(part, _cast_to_lvalue_type(slice_expr, part, ctx), ctx))
+    return lines
+
+
+def _emit_lvalue_write(left_expr: dict[str, object], value: str, ctx: ModuleContext) -> str:
+    if is_array_element_expr(left_expr, ctx) or left_expr.get("kind") == "identifier":
+        return f"{render_lvalue(left_expr, ctx)}.write({value});"
+    if left_expr.get("kind") in {"bitselect", "partselect"}:
+        target = left_expr.get("target")
+        if isinstance(target, dict) and is_array_element_expr(target, ctx):
+            element = render_lvalue(target, ctx)
+            return (
+                f"{{ auto __tmp_array = {element}.read(); "
+                f"{render_lvalue(left_expr, ctx).replace(element, '__tmp_array')} = {value}; "
+                f"{element}.write(__tmp_array); }}"
             )
-    return _emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)
+        base = lvalue_base_name(left_expr)
+        if base:
+            sanitized = _sanitize_identifier(base)
+            lhs_target = render_lvalue(left_expr, ctx, staged_names=frozenset({base}))
+            return (
+                f"{{ auto __tmp_{sanitized} = {sanitized}.read(); "
+                f"{lhs_target.replace(f'__next_{sanitized}', f'__tmp_{sanitized}')} = {value}; "
+                f"{sanitized}.write(__tmp_{sanitized}); }}"
+            )
+    return f"// unsupported concat lvalue part: {render_lvalue(left_expr, ctx)}"
+
+
+def _cast_to_port_type(value: str, port: PortIR) -> str:
+    width_expr = _width_expr(port.width)
+    if width_expr == "1" and not port.signed:
+        return value
+    return f"{_sc_type(port.width, port.signed)}({value})"
+
+
+def _cast_to_lvalue_type(value: str, left_expr: dict[str, object], ctx: ModuleContext) -> str:
+    width = max(1, infer_width(left_expr, ctx))
+    signed = _lvalue_signed(left_expr, ctx)
+    if width == 1 and not signed:
+        return value
+    return f"{systemc_int_type(width, signed=signed)}({value})"
+
+
+def _cast_for_signed_lvalue(value: str, left_expr: dict[str, object], ctx: ModuleContext) -> str:
+    if not _lvalue_signed(left_expr, ctx):
+        return value
+    width = max(1, infer_width(left_expr, ctx))
+    return f"{systemc_int_type(width, signed=True)}({value})"
+
+
+def _lvalue_signed(left_expr: dict[str, object], ctx: ModuleContext) -> bool:
+    base = lvalue_base_name(left_expr)
+    if left_expr.get("kind") == "identifier" and base:
+        return bool(ctx.signal_signedness.get(base, False))
+    if is_array_element_expr(left_expr, ctx) and base:
+        return bool(ctx.signal_signedness.get(base, False))
+    return infer_signed(left_expr, ctx)
 
 
 def _render_resolved_drive(
@@ -2092,13 +2617,54 @@ def _signal_type(signal: SignalIR, *, resolved: bool = False) -> str:
     return f"sc_signal<{_sc_type(signal.width, signal.signed)}>"
 
 
+def _unpacked_suffix(dims: tuple[tuple[int | str, int | str], ...]) -> str:
+    rendered: list[str] = []
+    for left, right in dims:
+        if isinstance(left, int) and isinstance(right, int):
+            size = str(abs(left - right) + 1)
+        else:
+            left_cpp = _cpp_expr(str(left))
+            right_cpp = _cpp_expr(str(right))
+            size = (
+                f"((({left_cpp}) >= ({right_cpp})) ? "
+                f"(({left_cpp}) - ({right_cpp}) + 1) : "
+                f"(({right_cpp}) - ({left_cpp}) + 1))"
+            )
+        rendered.append(f"[{size}]")
+    return "".join(rendered)
+
+
+def _emit_integer_type_aliases(writer: CodeWriter) -> None:
+    """Emit parameter-width integer aliases shared by generated headers."""
+    writer.line("#ifndef PRISM_V2SC_INTEGER_TYPES")
+    writer.line("#define PRISM_V2SC_INTEGER_TYPES")
+    writer.line(
+        "template <int Width> using prism_v2sc_uint_t = "
+        "typename std::conditional<(Width == 1), bool, "
+        "typename std::conditional<(Width <= 64), sc_uint<Width>, "
+        "sc_biguint<Width>>::type>::type;"
+    )
+    writer.line(
+        "template <int Width> using prism_v2sc_int_t = "
+        "typename std::conditional<(Width <= 64), sc_int<Width>, "
+        "sc_bigint<Width>>::type;"
+    )
+    writer.line(
+        "constexpr int prism_v2sc_clog2(int value) { "
+        "int result = 0; for (int current = value - 1; current > 0; current >>= 1) ++result; "
+        "return result; }"
+    )
+    writer.line("#endif")
+
+
 def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
     if width_expr == "1" and not signed:
         return "bool"
-    if width_expr.isdecimal():
-        return systemc_int_type(int(width_expr), signed=signed)
-    return f"sc_{'int' if signed else 'uint'}<{width_expr}>"
+    concrete_width = _constant_integer_expr(width_expr)
+    if concrete_width is not None:
+        return systemc_int_type(concrete_width, signed=signed)
+    return f"prism_v2sc_{'int' if signed else 'uint'}_t<{width_expr}>"
 
 
 def _template_parameter_list(module: ModuleIR) -> str:
@@ -2127,17 +2693,101 @@ def _width_expr(width: WidthIR | None) -> str:
         return "1"
     msb = _cpp_expr(width.msb)
     lsb = _cpp_expr(width.lsb)
-    if msb.isdecimal() and lsb.isdecimal():
-        return str(abs(int(msb) - int(lsb)) + 1)
-    return f"(({msb}) - ({lsb}) + 1)"
+    concrete_msb = _constant_integer_expr(msb)
+    concrete_lsb = _constant_integer_expr(lsb)
+    if concrete_msb is not None and concrete_lsb is not None:
+        return str(abs(concrete_msb - concrete_lsb) + 1)
+    return (
+        f"((({msb}) >= ({lsb})) ? "
+        f"(({msb}) - ({lsb}) + 1) : "
+        f"(({lsb}) - ({msb}) + 1))"
+    )
 
 
-def _instance_type(instance: InstanceIR) -> str:
+def _constant_integer_expr(expr: str) -> int | None:
+    """Evaluate a name-free C++ integer expression without using eval()."""
+    try:
+        node = ast.parse(expr, mode="eval").body
+    except (SyntaxError, ValueError):
+        return None
+
+    def evaluate(current: ast.AST) -> int:
+        if isinstance(current, ast.Constant) and isinstance(current.value, int):
+            return current.value
+        if isinstance(current, ast.UnaryOp):
+            operand = evaluate(current.operand)
+            if isinstance(current.op, ast.UAdd):
+                return operand
+            if isinstance(current.op, ast.USub):
+                return -operand
+            if isinstance(current.op, ast.Invert):
+                return ~operand
+            raise ValueError
+        if isinstance(current, ast.BinOp):
+            left = evaluate(current.left)
+            right = evaluate(current.right)
+            if isinstance(current.op, ast.Add):
+                return left + right
+            if isinstance(current.op, ast.Sub):
+                return left - right
+            if isinstance(current.op, ast.Mult):
+                return left * right
+            if isinstance(current.op, ast.Div):
+                if right == 0:
+                    raise ValueError
+                quotient = abs(left) // abs(right)
+                return -quotient if (left < 0) != (right < 0) else quotient
+            if isinstance(current.op, ast.Mod):
+                if right == 0:
+                    raise ValueError
+                quotient = abs(left) // abs(right)
+                quotient = -quotient if (left < 0) != (right < 0) else quotient
+                return left - quotient * right
+            if isinstance(current.op, ast.LShift):
+                return left << right
+            if isinstance(current.op, ast.RShift):
+                return left >> right
+            if isinstance(current.op, ast.BitAnd):
+                return left & right
+            if isinstance(current.op, ast.BitOr):
+                return left | right
+            if isinstance(current.op, ast.BitXor):
+                return left ^ right
+            raise ValueError
+        raise ValueError
+
+    try:
+        return evaluate(node)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _instance_type(
+    instance: InstanceIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> str:
     base = _sanitize_identifier(instance.module)
     if not instance.parameters:
+        if _child_parameter_count(instance.module, modules_by_name, signatures) > 0:
+            return f"{base}<>"
         return base
     args = ", ".join(_cpp_expr(arg.value) for arg in instance.parameters)
     return f"{base}<{args}>"
+
+
+def _child_parameter_count(
+    module_name: str,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+) -> int:
+    child_module = modules_by_name.get(module_name)
+    if child_module is not None:
+        return len(child_module.parameters)
+    signature = signatures.get(module_name)
+    if signature is not None:
+        return len(signature.parameters)
+    return 0
 
 
 def _generate_for_count_expr(generate_for: GenerateForIR) -> str:
@@ -2193,7 +2843,8 @@ def _cpp_rvalue(expr: str) -> str:
 
 
 def _cpp_expr(expr: str) -> str:
-    return _convert_verilog_constants(expr)
+    rendered = _convert_verilog_constants(expr)
+    return re.sub(r"\$clog2\s*\(", "prism_v2sc_clog2(", rendered)
 
 
 def _cpp_string_literal(value: str) -> str:
@@ -2284,7 +2935,13 @@ def _identifiers(expr: str) -> list[str]:
         [
             token
             for token in tokens
-            if token not in {"sc_uint", "sc_int", "sc_biguint", "sc_bigint"}
+            if token not in {
+                "sc_uint",
+                "sc_int",
+                "sc_biguint",
+                "sc_bigint",
+                "prism_v2sc_clog2",
+            }
         ]
     )
 
@@ -2297,6 +2954,16 @@ def _dedupe(items: list[str]) -> list[str]:
         if clean not in seen:
             seen.add(clean)
             result.append(clean)
+    return result
+
+
+def _dedupe_preserve(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
     return result
 
 

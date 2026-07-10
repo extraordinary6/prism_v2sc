@@ -15,7 +15,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="156 tests" src="https://img.shields.io/badge/tests-156%20collected-0EA5E9">
+  <img alt="185 tests" src="https://img.shields.io/badge/tests-185%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
@@ -239,13 +239,15 @@ The report contains ranked hotspots, per-probe metrics (`total_bit_toggles`, `to
 python -m pytest -q
 ```
 
-The suite currently collects 156 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, static power analysis, probe planning, instrumentation shape, recursive power dump generation, profile parsing, scoring, deep profiling, workload comparison, and power report stability.
+The suite currently collects 185 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, static power analysis, probe planning, instrumentation shape, recursive power dump generation, profile parsing, scoring, deep profiling, workload comparison, and power report stability.
 
 ## Equivalence CI
 
 `.github/workflows/equivalence.yml` runs on Linux. It co-simulates RTL fixtures with Icarus Verilog and generated SystemC with `libsystemc-dev`, then diffs per-cycle traces. The CI also runs Linux-only power checks that compile and run instrumented SystemC, parse `prism_power_dump` output, and compare instrumented and uninstrumented traces.
 
 Local trace-equivalence and dynamic power smoke runs require SystemC headers and libraries. On machines without `<systemc>`, run the Python unit suite locally and rely on Linux CI for final SystemC compile/run checks.
+
+Additional exploratory and real-design checks live under `verification/`, including external MHSA, OFDM FFT/IFFT, interface-based ICB-to-APB bridge, and 4x4/8x8 tinyNPU accelerator conversion/consistency gates.
 
 ## Further Reading
 
@@ -258,3 +260,4 @@ Local trace-equivalence and dynamic power smoke runs require SystemC headers and
 - `docs/pyslang_migration.md`: pyverilog to pyslang migration record.
 - `docs/plan.md`: converter phase status.
 - `docs/plan2.md`: completed power diagnostics implementation checklist.
+- `verification/README.md`: deeper verification workspace and real-design checks.

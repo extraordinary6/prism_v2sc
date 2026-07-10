@@ -24,6 +24,7 @@ Codegen:
 - **Bottom-up streaming emission** (post-order DFS): a parent's header lands on disk only after every child header is already written.
 - Per-output `__next_<signal>` staging pattern keeps bit-select / part-select LHS and case-default branches correct under `SC_METHOD` semantics.
 - Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` casts.
+- Indexed part-selects (`base +: width` / `base -: width`), concat-LHS assignments, expression port bindings, unconnected output ports, and array-element port bridges emit explicit helper logic instead of relying on unsupported C++ binding forms.
 
 Supported RTL surface (with equivalence CI):
 
@@ -32,9 +33,12 @@ Supported RTL surface (with equivalence CI):
 - `if`/`else`, ordinary `case`, ternary, full binary/unary operators
 - bit-select / part-select reads and writes
 - concatenation, replication, reduction operators
+- implicit real-to-integral constant conversions for LUT-style assignments
 - positional and named instance bindings (positional resolved via cached child signature)
 - synthesizable SV `function`
+- constant-bound procedural `for` loops, including decrementing loops, non-zero starts, and nested loops
 - `generate for` (slang unrolls) and `generate if` (slang folds)
+- unpacked-array memories with per-cell `sc_signal` lowering
 - whole-vector `inout` ports and whole-vector hierarchical `inout` bindings
 - simple packed-signal `interface` + simple `modport` directions, flattened to ordinary `bus__field` ports/signals
 
@@ -42,9 +46,10 @@ Metrics & verification:
 
 - Phase 5 metrics (`metrics.json`): wall time, Python allocation peak, observed process RSS, slang parse & traversal elapsed time, module/source counts, optional `verilator --lint-only` capture.
 - Static checks on generated SystemC (TODO markers, missing `<systemc>`, missing `SC_MODULE`).
-- 164 unit/integration tests under `tests/` (`python -m pytest -q`).
+- 185 unit/integration tests under `tests/` (`python -m pytest -q`).
 - Differential CI co-simulates RTL via Icarus Verilog and generated SystemC via libsystemc-dev for **40 trace fixtures**, runs **5 conversion-only fixtures**, and asserts diagnostic codes plus `--fail-on-diagnostics` behavior for **14 rejection / approximation fixtures** under `tests/equivalence/fixtures/diagnostics/` (`.github/workflows/equivalence.yml`).
 - Dedicated pyslang wheel smoke job (`.github/workflows/pyslang_smoke.yml`) guarding against upstream wheel regressions on Linux + Windows / Python 3.11–3.12.
+- Manual real-design verification under `verification/` includes MHSA ICB, OFDM FFT/IFFT, and interface-based ICB-to-APB bridge conversion/compile/consistency gates.
 
 ## Phases Completed
 
@@ -63,7 +68,7 @@ Metrics & verification:
 | 10 – Streaming multi-file emission | Per-module `.hpp` files, mirrored directory layout, positional bindings. |
 | A/B/C – pyslang migration | pyverilog frontend deleted; slang is the only frontend (see `docs/pyslang_migration.md`). |
 
-## Up Next — Phase 11 (SV feature rollout + closing silent-risk gaps)
+## Phase 11 Status — SV feature rollout + closing silent-risk gaps
 
 The full supported / unsupported / queued breakdown lives in
 [`docs/syntax_coverage.md`](docs/syntax_coverage.md). Each step below
@@ -110,10 +115,14 @@ have already landed are struck through here for history.
     verifies hierarchical modport connections with producer/consumer
     directions in the CI conversion-only fixture path.
 
-Cross-cutting hardening that runs alongside the above:
+Cross-cutting hardening that landed alongside the above and the real-design gates:
 
-- tighten width inference for nested concat/repeat constructions
-- extend driver-conflict analysis to recognize concat-LHS targets
+- tightened width inference for nested concat/repeat and wide signed/unsigned expressions
+- concat-LHS target splitting plus slice-aware conflict analysis
+- loop-local procedural `for` declarations and `++` / `--` step handling
+- multidimensional unpacked arrays and array-element port bridges for generated PE-grid style designs
+- expression input port bridges, dummy unconnected output bindings, and parameterized child default emission as `child<>`
+- level-sensitive event controls on `always_ff`-kind processes still emit the corresponding SystemC sensitivity entry
 
 ## Risks
 

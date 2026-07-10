@@ -6,9 +6,9 @@ applied, generate-if has been folded, generate-for has been unrolled, and
 port widths are concrete integers.
 
 This is the **synthesizable** SystemVerilog lowering. Dynamic SV constructs
-(classes, randomization, programs, runtime assertions/properties) are out
-of scope; they surface as diagnostics rather than getting partially
-lowered.
+(classes, randomization, programs) are out of scope and surface as
+diagnostics rather than getting partially lowered. Verification-only
+assertions, properties, and sequences are intentionally ignored.
 
 generate-for is fully unrolled by slang and therefore materialized as
 concrete ``InstanceIR`` entries inside the parent module rather than as a
@@ -17,6 +17,7 @@ separate ``GenerateForIR``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,17 @@ _BASE_MAP = {"b": 2, "o": 8, "d": 10, "h": 16}
 # wrapper for each ``expr.symbol`` access, so object identity is not stable.
 _genvar_subst_stack: list[dict[str, str]] = []
 
+# Generate blocks introduce lexical scopes, but the IR flattens their members
+# into the parent module. Keep a per-scope rename map so local declarations and
+# every expression that references them receive the same unique flattened name.
+_generate_scope_rename_stack: list[dict[str, str]] = []
+
+# Mapping for the module currently being lowered. slang can drop expression
+# syntax while unrolling procedural loops; the remaining hierarchical path
+# names the connected interface instance, which this map resolves back to the
+# module's interface port name used by flattened IR ports.
+_interface_instance_port_names: dict[str, str] = {}
+
 
 def _lookup_genvar_subst(symbol: Any) -> str | None:
     """Return the integer text bound to ``symbol`` by an enclosing block, if any."""
@@ -73,6 +85,18 @@ def _lookup_genvar_subst(symbol: Any) -> str | None:
     if not name:
         return None
     for frame in reversed(_genvar_subst_stack):
+        if name in frame:
+            return frame[name]
+    return None
+
+
+def _lookup_generate_scope_name(symbol: Any) -> str | None:
+    if symbol is None or not _generate_scope_rename_stack:
+        return None
+    name = getattr(symbol, "name", "")
+    if not name:
+        return None
+    for frame in reversed(_generate_scope_rename_stack):
         if name in frame:
             return frame[name]
     return None
@@ -155,6 +179,9 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
     diagnostics: list[DiagnosticIR] = []
     port_names: set[str] = set()
 
+    global _interface_instance_port_names
+    _interface_instance_port_names = _collect_interface_instance_port_names(body)
+
     for member in body:
         kind = type(member).__name__
         if kind == "ParameterSymbol":
@@ -188,14 +215,23 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             if member.name not in port_names:
                 signals.append(_lower_variable(member, source_manager))
         elif kind == "ContinuousAssignSymbol":
-            continuous_assigns.append(_lower_continuous_assign(member, source_manager))
+            continuous_assigns.append(
+                _lower_continuous_assign(
+                    member,
+                    source_manager,
+                    module_name=name,
+                    diagnostics=diagnostics,
+                )
+            )
         elif kind == "ProceduralBlockSymbol":
             process, process_diagnostics = _lower_procedural_block(member, name, source_manager)
-            processes.append(process)
+            if process is not None:
+                processes.append(process)
             diagnostics.extend(process_diagnostics)
         elif kind == "InstanceSymbol":
             if getattr(member, "isInterface", False):
                 signals.extend(_lower_interface_instance_signals(member))
+                continuous_assigns.extend(_lower_interface_instance_connections(member, source_manager))
             else:
                 instances.append(_lower_instance(member))
         elif kind == "InstanceArraySymbol":
@@ -252,9 +288,10 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
                        "EmptyMemberSymbol", "AttributeSymbol", "DefParamSymbol",
                        "DefinitionSymbol", "PackageSymbol", "ProgramSymbol"}:
             # Synthesizable typedefs and helpers slang already resolved are
-            # consumed silently; non-synthesizable symbols emit a diagnostic.
-            if kind in {"ClassType", "GenericClassDefSymbol", "ProgramSymbol",
-                        "PropertySymbol", "SequenceSymbol", "AssertionPortSymbol"}:
+            # consumed silently. Assertion metadata is also intentionally
+            # ignored: this frontend models the synthesizable design view,
+            # not verification-only runtime behavior.
+            if kind in {"ClassType", "GenericClassDefSymbol", "ProgramSymbol"}:
                 diagnostics.append(
                     _diagnostic(
                         name,
@@ -607,6 +644,12 @@ def _parameter_initializer_text(parameter: Any) -> str:
     width / bit patterns the codegen relies on. The initializer's
     ``syntax`` node, by contrast, points back at the user-written form.
     """
+    # An override such as ``.WIDTH(PASS_W)`` can reference a name that only
+    # exists in the parent scope. The generated child template cannot use that
+    # name as its own default or width-analysis value, so keep slang's concrete
+    # elaborated value for overridden parameters.
+    if getattr(parameter, "isOverridden", False):
+        return _constant_value_text(getattr(parameter, "value", None))
     initializer = getattr(parameter, "initializer", None)
     if initializer is not None:
         text = _render_expression(initializer)
@@ -619,13 +662,16 @@ def _parameter_initializer_text(parameter: Any) -> str:
 def _lower_port(port: Any, source_manager: Any = None) -> PortIR:
     direction = _port_direction_text(port.direction)
     internal_kind = _net_or_variable_kind(getattr(port, "internalSymbol", None))
+    cell_type, unpacked_dims = _peel_unpacked_dims(port.type)
     loc = _extract_source_loc(port, source_manager) if source_manager else None
     return PortIR(
         name=port.name,
         direction=direction,
         kind=internal_kind,
-        width=_width_from_type(port.type),
-        signed=bool(getattr(port.type, "isSigned", False)),
+        width=_declared_packed_width(port) or _width_from_type(cell_type),
+        signed=bool(getattr(cell_type, "isSigned", False)),
+        unpacked_dims=unpacked_dims,
+        declared_unpacked_dims=_declared_unpacked_dims(port),
         loc=loc,
     )
 
@@ -662,9 +708,46 @@ def _lower_interface_instance_signals(instance: Any) -> list[SignalIR]:
                 width=signal.width,
                 signed=signal.signed,
                 unpacked_dims=signal.unpacked_dims,
+                declared_unpacked_dims=signal.declared_unpacked_dims,
             )
         )
     return signals
+
+
+def _lower_interface_instance_connections(
+    instance: Any,
+    source_manager: Any = None,
+) -> list[ContinuousAssignIR]:
+    assignments: list[ContinuousAssignIR] = []
+    for connection in getattr(instance, "portConnections", ()) or ():
+        port = getattr(connection, "port", None)
+        port_name = getattr(port, "name", "")
+        expr = _port_connection_expression(connection)
+        if not port_name or expr is None:
+            continue
+        interface_expr = {
+            "kind": "identifier",
+            "name": _interface_flat_name(instance.name, port_name),
+        }
+        external_expr = _lower_expression(expr)
+        direction = _port_direction_text(getattr(port, "direction", None))
+        if direction == "output":
+            left_expr, right_expr = external_expr, interface_expr
+            left, right = _render_expression(expr), _interface_flat_name(instance.name, port_name)
+        else:
+            left_expr, right_expr = interface_expr, external_expr
+            left, right = _interface_flat_name(instance.name, port_name), _render_expression(expr)
+        loc = _extract_source_loc(connection, source_manager) if source_manager else None
+        assignments.append(
+            ContinuousAssignIR(
+                left=left,
+                right=right,
+                left_expr=left_expr,
+                right_expr=right_expr,
+                loc=loc,
+            )
+        )
+    return assignments
 
 
 def _interface_port_specs(port: Any) -> list[dict[str, Any]]:
@@ -732,12 +815,15 @@ def _interface_flat_name(interface_name: str, member_name: str) -> str:
 
 
 def _lower_net(net: Any, source_manager: Any = None) -> SignalIR:
+    cell_type, unpacked_dims = _peel_unpacked_dims(net.type)
     loc = _extract_source_loc(net, source_manager) if source_manager else None
     return SignalIR(
         name=net.name,
         kind="wire",
-        width=_width_from_type(net.type),
-        signed=bool(getattr(net.type, "isSigned", False)),
+        width=_declared_packed_width(net) or _width_from_type(cell_type),
+        signed=bool(getattr(cell_type, "isSigned", False)),
+        unpacked_dims=unpacked_dims,
+        declared_unpacked_dims=_declared_unpacked_dims(net),
         loc=loc,
     )
 
@@ -754,9 +840,10 @@ def _lower_variable(variable: Any, source_manager: Any = None) -> SignalIR:
     return SignalIR(
         name=variable.name,
         kind=kind,
-        width=_width_from_type(cell_type),
+        width=_declared_packed_width(variable) or _width_from_type(cell_type),
         signed=bool(getattr(cell_type, "isSigned", False)),
         unpacked_dims=unpacked_dims,
+        declared_unpacked_dims=_declared_unpacked_dims(variable),
         loc=loc,
     )
 
@@ -779,11 +866,97 @@ def _peel_unpacked_dims(slang_type: Any) -> tuple[Any, tuple[tuple[int, int], ..
     return current, tuple(dims)
 
 
-def _lower_continuous_assign(assign: Any, source_manager: Any = None) -> ContinuousAssignIR:
+def _declared_packed_width(symbol: Any) -> WidthIR | None:
+    data_type = _declared_data_type_syntax(symbol)
+    dimensions = tuple(getattr(data_type, "dimensions", ()) or ()) if data_type is not None else ()
+    if len(dimensions) != 1:
+        return None
+    bounds = _syntax_dimension_bounds(dimensions[0])
+    if bounds is None:
+        return None
+    left, right = bounds
+    if not _bounds_reference_identifier(left, right):
+        return None
+    return WidthIR(msb=str(left), lsb=str(right))
+
+
+def _declared_unpacked_dims(symbol: Any) -> tuple[tuple[int | str, int | str], ...]:
+    syntax = getattr(symbol, "syntax", None)
+    result: list[tuple[int | str, int | str]] = []
+    symbolic = False
+    for dimension in getattr(syntax, "dimensions", ()) or ():
+        bounds = _syntax_dimension_bounds(dimension)
+        if bounds is None:
+            return ()
+        symbolic = symbolic or _bounds_reference_identifier(*bounds)
+        result.append(bounds)
+    return tuple(result) if symbolic else ()
+
+
+def _declared_data_type_syntax(symbol: Any) -> Any | None:
+    syntax = getattr(symbol, "syntax", None)
+    parent = getattr(syntax, "parent", None)
+    if parent is None:
+        return None
+    header = getattr(parent, "header", None)
+    data_type = getattr(header, "dataType", None) if header is not None else None
+    return data_type if data_type is not None else getattr(parent, "type", None)
+
+
+def _syntax_dimension_bounds(dimension: Any) -> tuple[int | str, int | str] | None:
+    specifier = getattr(dimension, "specifier", None)
+    selector = getattr(specifier, "selector", None)
+    left = getattr(selector, "left", None)
+    right = getattr(selector, "right", None)
+    if left is None or right is None:
+        return None
+    return _syntax_bound(left), _syntax_bound(right)
+
+
+def _syntax_bound(node: Any) -> int | str:
+    text = str(node).strip()
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _bounds_reference_identifier(left: int | str, right: int | str) -> bool:
+    text = f"{left} {right}"
+    return re.search(r"\b[A-Za-z_][A-Za-z0-9_$]*\b", text) is not None
+
+
+def _lower_continuous_assign(
+    assign: Any,
+    source_manager: Any = None,
+    *,
+    module_name: str = "",
+    diagnostics: list[DiagnosticIR] | None = None,
+) -> ContinuousAssignIR:
     expr = assign.assignment
-    left = expr.left
-    right = expr.right
     loc = _extract_source_loc(assign, source_manager) if source_manager else None
+    kind_name = str(getattr(expr, "kind", "")).rsplit(".", 1)[-1]
+    left = getattr(expr, "left", None)
+    right = getattr(expr, "right", None)
+    if kind_name != "Assignment" or left is None or right is None:
+        if diagnostics is not None:
+            diagnostics.append(
+                _diagnostic(
+                    module_name,
+                    "invalid_continuous_assignment",
+                    "continuous assignment could not be elaborated and was not converted",
+                    kind_name or type(expr).__name__,
+                )
+            )
+        syntax = getattr(expr, "syntax", None)
+        text = str(syntax).strip() if syntax is not None else ""
+        return ContinuousAssignIR(
+            left="",
+            right=text,
+            left_expr={"kind": "raw", "text": ""},
+            right_expr={"kind": "raw", "text": text},
+            loc=loc,
+        )
     return ContinuousAssignIR(
         left=_render_expression(left),
         right=_render_expression(right),
@@ -793,7 +966,11 @@ def _lower_continuous_assign(assign: Any, source_manager: Any = None) -> Continu
     )
 
 
-def _lower_procedural_block(block: Any, module_name: str, source_manager: Any = None) -> tuple[ProcessIR, list[DiagnosticIR]]:
+def _lower_procedural_block(
+    block: Any,
+    module_name: str,
+    source_manager: Any = None,
+) -> tuple[ProcessIR | None, list[DiagnosticIR]]:
     kind_name = str(block.procedureKind).rsplit(".", 1)[-1]
     sensitivity, statement = _split_timing(block.body)
 
@@ -822,6 +999,9 @@ def _lower_procedural_block(block: Any, module_name: str, source_manager: Any = 
             )
         )
 
+    if process_kind != "initial" and not any(_statement_has_behavior(item) for item in structured):
+        return None, diagnostics
+
     loc = _extract_source_loc(block, source_manager) if source_manager else None
     return (
         ProcessIR(
@@ -833,6 +1013,18 @@ def _lower_procedural_block(block: Any, module_name: str, source_manager: Any = 
         ),
         diagnostics,
     )
+
+
+def _statement_has_behavior(statement: dict[str, Any]) -> bool:
+    if statement.get("type") == "noop":
+        return False
+    if statement.get("type") == "block":
+        return any(
+            _statement_has_behavior(child)
+            for child in statement.get("statements", ())
+            if isinstance(child, dict)
+        )
+    return True
 
 
 def _split_timing(statement: Any) -> tuple[list[SensitivityIR], Any]:
@@ -860,7 +1052,11 @@ def _lower_timing(timing: Any) -> list[SensitivityIR]:
 
 
 def _flatten_statements(statement: Any) -> tuple[Any, ...]:
+    if statement is None:
+        return ()
     kind = getattr(statement, "kind", None)
+    if kind is not None and str(kind).endswith("List"):
+        return tuple(getattr(statement, "list", ()) or ())
     if kind is not None and str(kind).endswith("Block"):
         body = getattr(statement, "body", None)
         if body is None:
@@ -871,8 +1067,6 @@ def _flatten_statements(statement: Any) -> tuple[Any, ...]:
         if body_kind.endswith("List"):
             return tuple(body.list)
         return (body,)
-    if statement is None:
-        return ()
     return (statement,)
 
 
@@ -893,6 +1087,8 @@ def _lower_statement(statement: Any, module_name: str, diagnostics: list[Diagnos
         if len(children) == 1:
             return children[0]
         return {"type": "block", "statements": children}
+    if kind_name in {"ConcurrentAssertion", "ImmediateAssertion"}:
+        return {"type": "noop", "node": kind_name}
     if kind_name in {"Empty", "VariableDeclaration"}:
         return {"type": "noop", "node": kind_name}
     diagnostics.append(
@@ -1011,7 +1207,8 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
     If bounds are not constant or the loop is unbounded, emit a diagnostic.
     """
     # Extract loop variable and bounds
-    if not statement.initializers or not statement.steps:
+    loop_vars = tuple(getattr(statement, "loopVars", ()) or ())
+    if (not statement.initializers and not loop_vars) or not statement.steps:
         diagnostics.append(
             _diagnostic(
                 module_name,
@@ -1022,7 +1219,6 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
         )
         return {"type": "unsupported", "node": "ForLoop"}
 
-    init_expr = statement.initializers[0]
     step_expr = statement.steps[0]
     stop_expr = statement.stopExpr
 
@@ -1032,10 +1228,20 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
     # step: i = i + <stride> or i = i - <stride>
     try:
         # Get loop variable name
-        loop_var = _render_expression(init_expr.left)
+        if statement.initializers:
+            if len(statement.initializers) != 1:
+                raise ValueError("expected exactly one loop initializer")
+            init_expr = statement.initializers[0]
+            loop_var = _render_expression(init_expr.left)
+            start_val = _try_eval_const_expr(init_expr.right)
+        else:
+            if len(loop_vars) != 1:
+                raise ValueError("expected exactly one loop variable declaration")
+            loop_symbol = loop_vars[0]
+            loop_var = getattr(loop_symbol, "name", "")
+            start_val = _try_eval_const_expr(getattr(loop_symbol, "initializer", None))
 
         # Get start value
-        start_val = _try_eval_const_expr(init_expr.right)
         if start_val is None:
             raise ValueError("non-constant start")
 
@@ -1080,21 +1286,8 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
         else:
             raise ValueError("loop variable not in stop condition")
 
-        # Get stride (assume i = i + 1 or i = i - 1 for now)
-        step_right_kind = str(step_expr.right.kind).rsplit(".", 1)[-1]
-        if step_right_kind == "BinaryOp":
-            step_op = str(step_expr.right.op).rsplit(".", 1)[-1]
-            if step_op == "Add":
-                stride_val = _try_eval_const_expr(step_expr.right.right)
-                if stride_val is None:
-                    raise ValueError("non-constant stride")
-            elif step_op == "Subtract":
-                stride_val = -_try_eval_const_expr(step_expr.right.right)
-                if stride_val is None:
-                    raise ValueError("non-constant stride")
-            else:
-                raise ValueError(f"unsupported step operator {step_op}")
-        else:
+        stride_val = _for_loop_stride(step_expr, loop_var)
+        if stride_val is None:
             raise ValueError("unsupported step expression")
 
         # Unroll the loop
@@ -1136,11 +1329,48 @@ def _lower_for_loop_statement(statement: Any, module_name: str, diagnostics: lis
         return {"type": "unsupported", "node": "ForLoop"}
 
 
+def _for_loop_stride(step_expr: Any, loop_var: str) -> int | None:
+    """Return the integer stride for common synthesizable for-loop steps."""
+    step_kind = str(getattr(step_expr, "kind", "")).rsplit(".", 1)[-1]
+    if step_kind == "UnaryOp":
+        operand = _render_expression(getattr(step_expr, "operand", None))
+        if operand != loop_var:
+            return None
+        step_op = str(getattr(step_expr, "op", "")).rsplit(".", 1)[-1]
+        if step_op in {"Preincrement", "Postincrement"}:
+            return 1
+        if step_op in {"Predecrement", "Postdecrement"}:
+            return -1
+        return None
+
+    if step_kind != "Assignment":
+        return None
+    if _render_expression(getattr(step_expr, "left", None)) != loop_var:
+        return None
+    right = getattr(step_expr, "right", None)
+    step_right_kind = str(getattr(right, "kind", "")).rsplit(".", 1)[-1]
+    if step_right_kind != "BinaryOp":
+        return None
+    if _render_expression(getattr(right, "left", None)) != loop_var:
+        return None
+    stride_val = _try_eval_const_expr(getattr(right, "right", None))
+    if stride_val is None:
+        return None
+    step_op = str(getattr(right, "op", "")).rsplit(".", 1)[-1]
+    if step_op == "Add":
+        return stride_val
+    if step_op == "Subtract":
+        return -stride_val
+    return None
+
+
 def _try_eval_const_expr(expr: Any) -> int | None:
     """Try to evaluate a slang expression to a constant integer.
 
     Returns None if the expression is not a compile-time constant.
     """
+    if expr is None:
+        return None
     # First check if the expression itself has a constant attribute
     if hasattr(expr, "constant"):
         const_val = expr.constant
@@ -1161,6 +1391,8 @@ def _try_eval_const_expr(expr: Any) -> int | None:
                 return const_val
 
     kind = str(expr.kind).rsplit(".", 1)[-1]
+    if kind == "IntegerLiteral":
+        return int(_lower_integer_literal(expr).get("value", 0))
     if kind == "NamedValue":
         # Could be a parameter; check the symbol's value
         symbol = getattr(expr, "symbol", None)
@@ -1294,6 +1526,15 @@ def _lower_subroutine(symbol: Any, module_name: str) -> tuple[SubroutineIR | Non
             )
         )
 
+    param_names = {param.name for param in params}
+    local_signals = tuple(
+        _lower_variable(member)
+        for member in symbol
+        if type(member).__name__ == "VariableSymbol"
+        and member.name != symbol.name
+        and member.name not in param_names
+    )
+
     body_diagnostics: list[DiagnosticIR] = []
     body_statements = tuple(
         _lower_statement(child, module_name, body_diagnostics)
@@ -1311,6 +1552,7 @@ def _lower_subroutine(symbol: Any, module_name: str) -> tuple[SubroutineIR | Non
             return_width=return_width,
             return_signed=return_signed,
             params=tuple(params),
+            local_signals=local_signals,
             body_statements=body_statements,
         ),
         body_diagnostics,
@@ -1339,8 +1581,10 @@ def _lower_instance(instance: Any, *, name_prefix: str = "") -> InstanceIR:
         if type(port).__name__ == "InterfacePortSymbol":
             ports.extend(_lower_interface_connection(connection))
             continue
-        value = _render_port_connection(connection)
-        ports.append(ArgIR(name=port_name, value=value))
+        expr = _port_connection_expression(connection)
+        value = _render_expression(expr) if expr is not None else ""
+        value_expr = _lower_expression(expr) if expr is not None else None
+        ports.append(ArgIR(name=port_name, value=value, value_expr=value_expr))
     instance_name = f"{name_prefix}_{instance.name}" if name_prefix else instance.name
     return InstanceIR(
         module=instance.definition.name,
@@ -1364,6 +1608,7 @@ def _lower_interface_connection(connection: Any) -> list[ArgIR]:
         iface_name = value.split(".", maxsplit=1)[0].strip()
     if not iface_name:
         return []
+    iface_name = _interface_instance_port_names.get(iface_name, iface_name)
 
     bindings: list[ArgIR] = []
     for spec in _interface_port_specs(port):
@@ -1410,6 +1655,15 @@ def _render_port_connection(connection: Any) -> str:
     return _render_expression(expr)
 
 
+def _port_connection_expression(connection: Any) -> Any:
+    expr = getattr(connection, "expression", None)
+    if expr is None:
+        return None
+    if str(getattr(expr, "kind", "")).endswith("Assignment"):
+        return expr.left
+    return expr
+
+
 def _walk_generate_block(
     block: Any,
     module_name: str,
@@ -1432,51 +1686,77 @@ def _walk_generate_block(
     label (e.g. ``g_0_u``) so unrolled iterations don't collide on C++
     identifiers.
     """
-    for member in block:
-        kind = type(member).__name__
-        if kind == "NetSymbol" and member.name not in port_names:
-            signals.append(_lower_net(member, source_manager))
-        elif kind == "VariableSymbol" and member.name not in port_names:
-            signals.append(_lower_variable(member, source_manager))
-        elif kind == "ContinuousAssignSymbol":
-            continuous_assigns.append(_lower_continuous_assign(member, source_manager))
-        elif kind == "ProceduralBlockSymbol":
-            process, process_diagnostics = _lower_procedural_block(member, module_name, source_manager)
-            processes.append(process)
-            diagnostics.extend(process_diagnostics)
-        elif kind == "InstanceSymbol":
-            if getattr(member, "isInterface", False):
-                signals.extend(_lower_interface_instance_signals(member))
-            else:
-                instances.append(_lower_instance(member, name_prefix=name_prefix))
-        elif kind == "InstanceArraySymbol":
-            instances.extend(_lower_instance_array(member, name_prefix=name_prefix))
-        elif kind == "GenerateBlockSymbol":
-            if getattr(member, "isUninstantiated", False):
-                continue  # generate-if dead branch
-            inner_name = getattr(member, "name", "") or ""
-            inner_prefix = f"{name_prefix}_{inner_name}" if name_prefix and inner_name else (name_prefix or inner_name)
-            _walk_generate_block(
-                member, module_name, signals, continuous_assigns, processes, instances,
-                diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
-            )
-        elif kind == "GenerateBlockArraySymbol":
-            array_name = getattr(member, "name", "") or ""
-            for sub in member.entries:
-                if getattr(sub, "isUninstantiated", False):
-                    continue
-                array_index = getattr(sub, "arrayIndex", 0)
-                segment = f"{array_name}_{array_index}" if array_name else f"_{array_index}"
-                inner_prefix = f"{name_prefix}_{segment}" if name_prefix else segment
-                subst = _collect_genvar_substitutions(sub)
-                _genvar_subst_stack.append(subst)
-                try:
-                    _walk_generate_block(
-                        sub, module_name, signals, continuous_assigns, processes, instances,
-                        diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
+    local_names = {
+        member.name: f"{name_prefix}_{member.name}"
+        for member in block
+        if type(member).__name__ in {"NetSymbol", "VariableSymbol"}
+        and getattr(member, "name", "")
+        and name_prefix
+    }
+    _generate_scope_rename_stack.append(local_names)
+    try:
+        for member in block:
+            kind = type(member).__name__
+            if kind == "NetSymbol" and member.name not in port_names:
+                signal = _lower_net(member, source_manager)
+                signals.append(replace(signal, name=local_names.get(signal.name, signal.name)))
+            elif kind == "VariableSymbol" and member.name not in port_names:
+                signal = _lower_variable(member, source_manager)
+                signals.append(replace(signal, name=local_names.get(signal.name, signal.name)))
+            elif kind == "ContinuousAssignSymbol":
+                continuous_assigns.append(
+                    _lower_continuous_assign(
+                        member,
+                        source_manager,
+                        module_name=module_name,
+                        diagnostics=diagnostics,
                     )
-                finally:
-                    _genvar_subst_stack.pop()
+                )
+            elif kind == "ProceduralBlockSymbol":
+                process, process_diagnostics = _lower_procedural_block(member, module_name, source_manager)
+                if process is not None:
+                    processes.append(process)
+                diagnostics.extend(process_diagnostics)
+            elif kind == "InstanceSymbol":
+                if getattr(member, "isInterface", False):
+                    signals.extend(_lower_interface_instance_signals(member))
+                    continuous_assigns.extend(_lower_interface_instance_connections(member, source_manager))
+                else:
+                    instances.append(_lower_instance(member, name_prefix=name_prefix))
+            elif kind == "InstanceArraySymbol":
+                instances.extend(_lower_instance_array(member, name_prefix=name_prefix))
+            elif kind == "GenerateBlockSymbol":
+                if getattr(member, "isUninstantiated", False):
+                    continue  # generate-if dead branch
+                inner_name = getattr(member, "name", "") or ""
+                inner_prefix = (
+                    f"{name_prefix}_{inner_name}"
+                    if name_prefix and inner_name
+                    else (name_prefix or inner_name)
+                )
+                _walk_generate_block(
+                    member, module_name, signals, continuous_assigns, processes, instances,
+                    diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
+                )
+            elif kind == "GenerateBlockArraySymbol":
+                array_name = getattr(member, "name", "") or ""
+                for sub in member.entries:
+                    if getattr(sub, "isUninstantiated", False):
+                        continue
+                    array_index = getattr(sub, "arrayIndex", 0)
+                    segment = f"{array_name}_{array_index}" if array_name else f"_{array_index}"
+                    inner_prefix = f"{name_prefix}_{segment}" if name_prefix else segment
+                    subst = _collect_genvar_substitutions(sub)
+                    _genvar_subst_stack.append(subst)
+                    try:
+                        _walk_generate_block(
+                            sub, module_name, signals, continuous_assigns, processes, instances,
+                            diagnostics, port_names, name_prefix=inner_prefix, source_manager=source_manager,
+                        )
+                    finally:
+                        _genvar_subst_stack.pop()
+    finally:
+        _generate_scope_rename_stack.pop()
 
 
 def _child_instances(instance: Any) -> list[Any]:
@@ -1563,6 +1843,9 @@ def _render_expression(expr: Any) -> str:
         subst = _lookup_genvar_subst(symbol)
         if subst is not None:
             return subst
+        scoped_name = _lookup_generate_scope_name(symbol)
+        if scoped_name is not None:
+            return scoped_name
         enum_const = _enum_intconst(symbol, getattr(expr, "type", None))
         if enum_const is not None:
             return str(enum_const["raw"])
@@ -1590,7 +1873,9 @@ def _render_expression(expr: Any) -> str:
     if kind_name == "ElementSelect":
         return f"{_render_expression(expr.value)}[{_render_expression(expr.selector)}]"
     if kind_name == "RangeSelect":
-        return f"{_render_expression(expr.value)}[{_render_expression(expr.left)}:{_render_expression(expr.right)}]"
+        selection = str(getattr(expr, "selectionKind", "")).rsplit(".", 1)[-1]
+        separator = "+:" if selection == "IndexedUp" else "-:" if selection == "IndexedDown" else ":"
+        return f"{_render_expression(expr.value)}[{_render_expression(expr.left)}{separator}{_render_expression(expr.right)}]"
     if kind_name == "MemberAccess":
         member = getattr(expr, "member", None)
         return f"{_render_expression(getattr(expr, 'value', None))}.{getattr(member, 'name', '')}"
@@ -1633,6 +1918,9 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
                 "has_xz": False,
                 "digits": subst,
             }
+        scoped_name = _lookup_generate_scope_name(symbol)
+        if scoped_name is not None:
+            return {"kind": "identifier", "name": scoped_name}
         enum_const = _enum_intconst(symbol, getattr(expr, "type", None))
         if enum_const is not None:
             return enum_const
@@ -1653,7 +1941,11 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         }
     if kind_name == "UnaryOp":
         op = _UNARY_OP_TEXT.get(_unary_operator_name(expr), "?")
-        return {"kind": "unop", "op": op, "operand": _lower_expression(expr.operand)}
+        operand = _lower_expression(expr.operand)
+        folded = _fold_signed_literal_unary(op, operand)
+        if folded is not None:
+            return folded
+        return {"kind": "unop", "op": op, "operand": operand}
     if kind_name == "ConditionalOp":
         cond = expr.conditions[0].expr if expr.conditions else None
         return {
@@ -1664,6 +1956,11 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         }
     if kind_name == "Concatenation":
         return {"kind": "concat", "parts": [_lower_expression(op) for op in expr.operands]}
+    if kind_name == "SimpleAssignmentPattern":
+        return {
+            "kind": "assignment_pattern",
+            "elements": [_lower_expression(element) for element in expr.elements],
+        }
     if kind_name == "Replication":
         return {
             "kind": "repeat",
@@ -1674,15 +1971,10 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         return {
             "kind": "bitselect",
             "target": _lower_expression(expr.value),
-            "index": _lower_expression(expr.selector),
+            "index": _map_packed_index(expr.value, _lower_expression(expr.selector)),
         }
     if kind_name == "RangeSelect":
-        return {
-            "kind": "partselect",
-            "target": _lower_expression(expr.value),
-            "msb": _lower_expression(expr.left),
-            "lsb": _lower_expression(expr.right),
-        }
+        return _lower_range_select(expr)
     if kind_name == "MemberAccess":
         lowered = _lower_packed_member_access(expr)
         if lowered is not None:
@@ -1700,6 +1992,9 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
                 "width": _bit_width_from_type(target_type),
                 "operand": _lower_expression(expr.operand),
             }
+        folded_real = _lower_implicit_real_integral_conversion(expr)
+        if folded_real is not None:
+            return folded_real
         return _lower_expression(expr.operand)
     if kind_name == "Assignment":
         return _lower_expression(expr.right)
@@ -1711,6 +2006,163 @@ def _lower_expression(expr: Any) -> dict[str, Any]:
         return {"kind": "funcall", "name": callee, "args": args}
     syntax = getattr(expr, "syntax", None)
     return {"kind": "raw", "text": str(syntax).strip() if syntax is not None else ""}
+
+
+def _fold_signed_literal_unary(op: str, operand: dict[str, Any]) -> dict[str, Any] | None:
+    """Preserve fixed-width SV semantics for unary minus on signed literals."""
+    if op != "-" or operand.get("kind") != "intconst" or not operand.get("signed"):
+        return None
+    width = operand.get("width")
+    value = operand.get("value")
+    if not isinstance(width, int) or width <= 0 or not isinstance(value, int):
+        return None
+    mask = (1 << width) - 1
+    bit_value = (-value) & mask
+    signed_value = _to_signed_value(bit_value, width)
+    return {
+        "kind": "intconst",
+        "raw": f"-({operand.get('raw', value)})",
+        "value": bit_value,
+        "signed_value": signed_value,
+        "width": width,
+        "base": 10,
+        "signed": True,
+        "has_xz": bool(operand.get("has_xz")),
+        "digits": str(signed_value),
+    }
+
+
+def _lower_implicit_real_integral_conversion(expr: Any) -> dict[str, Any] | None:
+    """Fold slang's implicit real-to-integral conversion into an int literal.
+
+    Real constants are not synthesizable storage, but real-valued constant
+    expressions are common in LUT initialization RTL. slang already evaluates
+    and converts those expressions for the target integral type; preserving
+    that value is more accurate than emitting a raw-expression fallback.
+    """
+    operand = getattr(expr, "operand", None)
+    operand_type = str(getattr(operand, "type", "")).lower()
+    if operand_type not in {"real", "shortreal"}:
+        return None
+    target_type = getattr(expr, "type", None)
+    width = _bit_width_from_type(target_type)
+    if width is None:
+        return None
+    const = getattr(expr, "constant", None)
+    value = getattr(const, "value", None)
+    if type(value).__name__ != "SVInt":
+        return None
+    return _intconst_from_svint_text(
+        str(value),
+        width=width,
+        signed=bool(getattr(target_type, "isSigned", False)),
+    )
+
+
+def _intconst_from_svint_text(text: str, *, width: int, signed: bool) -> dict[str, Any] | None:
+    sized = _SIZED_LITERAL.match(text)
+    base = 10
+    digits = text.replace("_", "")
+    if sized:
+        base = _BASE_MAP[sized.group("base").lower()]
+        digits = sized.group("digits").replace("_", "")
+    elif "'" in text:
+        return None
+    has_xz = bool(re.search(r"[xXzZ?]", digits))
+    if base == 10 and digits.startswith("-"):
+        try:
+            int_value = int(digits, 10)
+        except ValueError:
+            return None
+    else:
+        int_value = _digits_to_int(digits, base)
+    if width > 0:
+        int_value &= (1 << width) - 1
+    return {
+        "kind": "intconst",
+        "raw": text,
+        "value": int_value,
+        "signed_value": _to_signed_value(int_value, width) if signed else int_value,
+        "width": width,
+        "base": base,
+        "signed": signed,
+        "has_xz": has_xz,
+        "digits": digits,
+    }
+
+
+def _lower_range_select(expr: Any) -> dict[str, Any]:
+    target = _lower_expression(expr.value)
+    left = _lower_expression(expr.left)
+    right = _lower_expression(expr.right)
+    width = _bit_width_from_type(getattr(expr, "type", None))
+    selection = str(getattr(expr, "selectionKind", "")).rsplit(".", 1)[-1]
+    packed_range = _packed_range_bounds(getattr(expr.value, "type", None))
+    if selection == "IndexedUp":
+        source_end = _binop_ir("-", _binop_ir("+", left, right), _intconst_ir(1))
+        if packed_range is not None and packed_range[0] < packed_range[1]:
+            mapped_msb = _map_packed_index(expr.value, left)
+            mapped_lsb = _map_packed_index(expr.value, source_end)
+        else:
+            mapped_msb = _map_packed_index(expr.value, source_end)
+            mapped_lsb = _map_packed_index(expr.value, left)
+        return {
+            "kind": "partselect",
+            "target": target,
+            "msb": mapped_msb,
+            "lsb": mapped_lsb,
+            "width": width,
+        }
+    if selection == "IndexedDown":
+        source_end = _binop_ir("+", _binop_ir("-", left, right), _intconst_ir(1))
+        if packed_range is not None and packed_range[0] < packed_range[1]:
+            mapped_msb = _map_packed_index(expr.value, source_end)
+            mapped_lsb = _map_packed_index(expr.value, left)
+        else:
+            mapped_msb = _map_packed_index(expr.value, left)
+            mapped_lsb = _map_packed_index(expr.value, source_end)
+        return {
+            "kind": "partselect",
+            "target": target,
+            "msb": mapped_msb,
+            "lsb": mapped_lsb,
+            "width": width,
+        }
+    return {
+        "kind": "partselect",
+        "target": target,
+        "msb": _map_packed_index(expr.value, left),
+        "lsb": _map_packed_index(expr.value, right),
+        "width": width,
+    }
+
+
+def _map_packed_index(value_expr: Any, index: dict[str, Any]) -> dict[str, Any]:
+    packed_range = _packed_range_bounds(getattr(value_expr, "type", None))
+    if packed_range is None:
+        return index
+    left, right = packed_range
+    if left < right:
+        return _binop_ir("-", _intconst_ir(right), index)
+    if right != 0:
+        return _binop_ir("-", index, _intconst_ir(right))
+    return index
+
+
+def _packed_range_bounds(slang_type: Any) -> tuple[int, int] | None:
+    if slang_type is None or not getattr(slang_type, "isPackedArray", False):
+        return None
+    slang_range = getattr(slang_type, "range", None)
+    if slang_range is None:
+        return None
+    try:
+        return int(slang_range.left), int(slang_range.right)
+    except Exception:
+        return None
+
+
+def _binop_ir(op: str, left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "binop", "op": op, "left": left, "right": right}
 
 
 def _lower_packed_member_access(expr: Any) -> dict[str, Any] | None:
@@ -1736,18 +2188,34 @@ def _lower_packed_member_access(expr: Any) -> dict[str, Any] | None:
         "target": base_expr,
         "msb": _intconst_ir(offset + field_width - 1),
         "lsb": _intconst_ir(offset),
+        "width": field_width,
     }
 
 
 def _flatten_interface_hierarchical_value(expr: Any) -> str | None:
     symbol = getattr(expr, "symbol", None)
-    if type(symbol).__name__ != "ModportPortSymbol":
+    symbol_kind = type(symbol).__name__
+    if symbol_kind not in {"ModportPortSymbol", "VariableSymbol"}:
+        return None
+    definition = getattr(symbol, "declaringDefinition", None)
+    definition_kind = str(getattr(definition, "definitionKind", "")).rsplit(".", 1)[-1]
+    if definition_kind != "Interface":
         return None
     syntax = getattr(expr, "syntax", None)
     text = str(syntax).strip() if syntax is not None else ""
-    if "." not in text:
-        return None
-    interface_name = text.split(".", maxsplit=1)[0].strip()
+    if "." in text:
+        interface_name = text.split(".", maxsplit=1)[0].strip()
+    else:
+        hierarchical_path = str(getattr(symbol, "hierarchicalPath", "") or "")
+        interface_name = ""
+        for segment in hierarchical_path.split("."):
+            if segment in _interface_instance_port_names:
+                interface_name = _interface_instance_port_names[segment]
+                break
+        lexical_path = str(getattr(symbol, "lexicalPath", "") or "")
+        if not interface_name:
+            lexical_name = lexical_path.split(".", maxsplit=1)[0].strip()
+            interface_name = _interface_instance_port_names.get(lexical_name, lexical_name)
     if not interface_name:
         return None
     internal = getattr(symbol, "internalSymbol", None)
@@ -1755,6 +2223,18 @@ def _flatten_interface_hierarchical_value(expr: Any) -> str | None:
     if not member_name:
         return None
     return _interface_flat_name(interface_name, member_name)
+
+
+def _collect_interface_instance_port_names(body: Any) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for member in body:
+        if type(member).__name__ != "InterfacePortSymbol":
+            continue
+        connected = _interface_port_connected_instance(member)
+        instance_name = getattr(connected, "name", "")
+        if instance_name:
+            names[instance_name] = member.name
+    return names
 
 
 def _packed_access_base_and_offset(expr: Any) -> tuple[dict[str, Any], int] | tuple[None, None]:

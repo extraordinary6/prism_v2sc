@@ -114,6 +114,43 @@ endmodule
     assert "overlapping_procedural_writes" not in codes
 
 
+def test_lower_design_folds_non_overlapping_indexed_slice_writers(tmp_path: Path) -> None:
+    rtl = tmp_path / "indexed_non_overlap.sv"
+    rtl.write_text(
+        """
+module indexed_non_overlap(input logic clk, input logic [1:0] a, b, output logic [3:0] q);
+  always_ff @(posedge clk) q[(0 * 2) +: 2] <= a;
+  always_ff @(posedge clk) q[(1 * 2) +: 2] <= b;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "indexed_non_overlap")
+    codes = {diagnostic.code for diagnostic in design.diagnostics}
+
+    assert "overlapping_procedural_writes" not in codes
+
+
+def test_lower_design_folds_non_overlapping_array_indices(tmp_path: Path) -> None:
+    rtl = tmp_path / "array_non_overlap.sv"
+    rtl.write_text(
+        """
+module array_non_overlap(input logic clk, input logic [7:0] a, b);
+  logic [7:0] mem [0:1];
+  always_ff @(posedge clk) mem[0] <= a;
+  always_ff @(posedge clk) mem[(0 + 1)] <= b;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "array_non_overlap")
+    codes = {diagnostic.code for diagnostic in design.diagnostics}
+
+    assert "overlapping_procedural_writes" not in codes
+
+
 def test_lower_design_keeps_only_top_reachable_modules(tmp_path: Path) -> None:
     rtl = tmp_path / "hier.v"
     rtl.write_text(

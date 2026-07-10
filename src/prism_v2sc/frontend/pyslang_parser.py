@@ -7,8 +7,9 @@ the lowerer in :mod:`prism_v2sc.frontend.lower_sv` walks to produce
 ``ModuleIR``.
 
 Only synthesizable SystemVerilog is in scope. Dynamic SV constructs
-(classes, randomization, programs, assertions/properties as runtime checkers)
-are not supported and will be surfaced as diagnostics during lowering.
+(classes, randomization, programs) are not supported and surface as
+diagnostics during lowering. Verification-only assertions, properties, and
+sequences are ignored by the synthesizable design view.
 """
 
 from __future__ import annotations

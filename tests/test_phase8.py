@@ -201,6 +201,102 @@ endmodule
     assert "sensitive << __shadow_q_0 << __shadow_q_1;" in header
 
 
+def test_arithmetic_indexed_part_writes_share_one_writer(tmp_path: Path) -> None:
+    """Elaborated generate indices may remain constant expression trees.
+
+    The slice-writer aggregation must fold those trees instead of limiting
+    itself to literal ``intconst`` nodes, otherwise each generated process
+    becomes a separate SystemC writer for the full parent signal.
+    """
+    rtl = tmp_path / "arithmetic_slices.sv"
+    rtl.write_text(
+        """
+module arithmetic_slices(
+  input  logic        clk,
+  input  logic [23:0] d,
+  output logic [23:0] q
+);
+  genvar i;
+  generate
+    for (i = 0; i < 4; i = i + 1) begin : g
+      always_ff @(posedge clk) begin
+        q[(i * 6) +: 6] <= d[(i * 6) +: 6];
+      end
+    end
+  endgenerate
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "arithmetic_slices")
+    header = generate_systemc_header(design)
+
+    for msb, lsb in ((5, 0), (11, 6), (17, 12), (23, 18)):
+        shadow = f"__shadow_q_{msb}_{lsb}"
+        assert f"sc_signal<sc_uint<6>> {shadow};" in header
+        assert f"{shadow}.write(__next_{shadow});" in header
+        assert f"__tmp.range({msb}, {lsb}) = {shadow}.read();" in header
+
+    assert header.count("q.write(__tmp);") == 1
+    assert "q.write(__next_q);" not in header
+
+
+def test_arithmetic_indexed_continuous_writes_share_one_writer(tmp_path: Path) -> None:
+    rtl = tmp_path / "continuous_arithmetic_slices.sv"
+    rtl.write_text(
+        """
+module continuous_arithmetic_slices(
+  input  wire [23:0] d,
+  output wire [23:0] q
+);
+  genvar i;
+  generate
+    for (i = 0; i < 4; i = i + 1) begin : g
+      assign q[(i * 6) +: 6] = d[(i * 6) +: 6];
+    end
+  endgenerate
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "continuous_arithmetic_slices")
+    header = generate_systemc_header(design)
+
+    for msb, lsb in ((5, 0), (11, 6), (17, 12), (23, 18)):
+        shadow = f"__shadow_q_{msb}_{lsb}"
+        assert f"sc_signal<sc_uint<6>> {shadow};" in header
+        assert f"{shadow}.write(" in header
+        assert f"__tmp.range({msb}, {lsb}) = {shadow}.read();" in header
+
+    assert header.count("q.write(__tmp);") == 1
+    assert "auto __tmp_q = q.read();" not in header
+
+
+def test_simple_input_binding_width_mismatch_uses_bridge(tmp_path: Path) -> None:
+    rtl = tmp_path / "port_width_bridge.sv"
+    rtl.write_text(
+        """
+module narrow_child(input wire [7:0] data_i, output wire [7:0] data_o);
+  assign data_o = data_i;
+endmodule
+
+module port_width_bridge(input wire [15:0] wide, output wire [15:0] result);
+  narrow_child u(.data_i(wide), .data_o(result));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "port_width_bridge")
+    header = generate_systemc_header(design)
+
+    assert "sc_signal<sc_uint<8>> __bridge_u_data_i;" in header
+    assert "__bridge_u_data_i.write(sc_uint<8>(wide.read()));" in header
+    assert "u.data_i(__bridge_u_data_i);" in header
+    assert "sc_signal<sc_uint<8>> __bridge_u_data_o;" in header
+    assert "result.write(sc_uint<16>(__bridge_u_data_o.read()));" in header
+    assert "u.data_o(__bridge_u_data_o);" in header
+
+
 def test_casez_lowers_to_mask_match_if_chain(tmp_path: Path) -> None:
     """casez/casex must lower to a mask+match if/elif chain rather than a
     plain ``switch``. A naive switch silently drops wildcard semantics,

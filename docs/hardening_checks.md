@@ -1,6 +1,6 @@
 # Hardening Checks
 
-Reproducible local checks you can run while developing. Everything here is intentionally cheap: nothing here builds SystemC or runs Icarus Verilog — for that see `tests/equivalence/README.md`.
+Reproducible local checks you can run while developing. The default pytest suite is the fast local guardrail; Linux hosts with SystemC available may also exercise the power instrumentation smoke tests. Full RTL/SystemC trace equivalence still lives in `tests/equivalence/README.md`.
 
 ## Unit Suite
 
@@ -8,7 +8,7 @@ Reproducible local checks you can run while developing. Everything here is inten
 D:\anaconda\envs\pytorch\python.exe -m pytest -q
 ```
 
-Covers IR lowering, codegen text, multi-file output layout, CLI behavior, expression coverage, hardening edges, diagnostics policy, and the pyslang helper. 59 tests at time of writing.
+Covers IR lowering, codegen text, multi-file output layout, CLI behavior, expression coverage, hardening edges, diagnostics policy, subroutines, static power analysis, probe planning, instrumentation, power profile/report scoring, and real SystemC smoke paths when available. 185 tests are collected at time of writing.
 
 For a hermetic temporary build directory:
 

@@ -17,17 +17,21 @@
 
 ## Expression Lowering
 
-- Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` / `sc_biguint<W>` operand casts. Widths are inferred from declared port/signal widths and from sized literals; if a width cannot be inferred it falls back to 1.
+- Concatenation `{a, b}` and replication `{N{x}}` lower to explicit shift-OR chains with `sc_uint<W>` / `sc_biguint<W>` operand casts. Widths are inferred from declared port/signal widths, sized literals, and slang's select result widths; if a width cannot be inferred it falls back to 1.
 - Reduction operators `&x`, `|x`, `^x` (and their inverted forms) lower to `sc_uint`'s `and_reduce()` / `or_reduce()` / `xor_reduce()` methods.
 - X/Z values inside non-`inout` literals are approximated as zero in generated C++ expressions and emit `x_z_literal_approximated` diagnostics; `xz_logic_rejected` pins that this is a warning contract, not a trace-equivalent claim. The IR records `has_xz=true` so downstream tooling can still see the original intent.
-- Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>` for widths up to 64 bits and `sc_bigint<W>` / `sc_biguint<W>` beyond that. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Full SystemVerilog mixed signed/unsigned context sizing is still not exhaustively modeled.
+- Real-valued constant expressions are supported only when slang inserts an implicit conversion to an integral target; codegen preserves slang's converted integer value. Runtime `real` / `shortreal` storage and datapaths remain outside the supported subset.
+- Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>` for widths up to 64 bits and `sc_bigint<W>` / `sc_biguint<W>` beyond that. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Mixed signed/unsigned equality and relational comparisons normalize both operands to a common unsigned bit width; full context sizing for every arithmetic/nested expression is still not exhaustively modeled.
 
 ## Selects and Bindings
 
 - Bit-select reads (`sig[i]`) lower to `sig.read()[i]`. Part-select reads (`sig[msb:lsb]`) lower to `range(msb, lsb)`.
+- Indexed part-select reads such as `sig[base +: width]` and `sig[base -: width]` lower to explicit `range(...)` bounds and preserve slang's result width for concat/repeat contexts. The implementation is verified by unit coverage, the MHSA `scale_core` keypoint gate, and the OFDM FFT/IFFT trace gate.
 - Bit-select / part-select **LHS** in sequential blocks use the staged ``__next_*`` pattern.
+- Concatenation LHS assignments split into assignments to the constituent targets.
 - `generate` bit-select bindings (`vector[i]` in port maps under a generate-for) use generated scalar bridge signals.
 - Direct instance bit-select bindings (`vector[constant]` / `vector[index]` in port maps) also use scalar bridge signals.
+- Non-net expression input bindings, array-element port bindings, and simple parent/child bindings with different packed widths use generated bridge signals. Width bridges apply the child input or parent output assignment width explicitly, matching RTL truncation/extension while keeping SystemC port types bindable. Unconnected child outputs use dummy signals.
 - Positional port bindings (e.g. ``mod u(a, b, c);``) are resolved against the child's cached signature, recovering port names by position. Named bindings remain the recommended style.
 
 ## Resolution and Elaboration
@@ -45,9 +49,9 @@
 
 - The supported surface is bounded by slang (IEEE 1800-2023 synthesizable subset) and by lowering coverage in this project.
 - Synthesizable `function` is supported.
-- Dynamic SV (classes, randomization, programs, runtime assertions/properties) is out of scope and surfaces as diagnostics rather than partial lowering.
+- Dynamic SV (classes, randomization, programs) is out of scope and surfaces as diagnostics rather than partial lowering. Verification-only assertion/property/sequence metadata and assertion statements are ignored in the synthesizable design view; UVM/testbench sources should not be included in the RTL source set.
 - Tasks and system-task expression statements are out of scope; `task_system_task_rejected` pins both the task diagnostic and the unsupported expression-statement diagnostic.
-- The supported SV surface now includes typedefs/enums, packed structs/unions, packages/imports, unpacked-array memories, whole-vector `inout`, and a simple packed-signal `interface`/`modport` flattening subset. More complex SV constructs remain queued; see `plan.md`.
+- The supported SV surface now includes typedefs/enums, packed structs/unions, packages/imports, procedural `for`, unpacked-array memories, multidimensional unpacked-array cases used by the MHSA real design, whole-vector `inout`, and a simple packed-signal `interface`/`modport` flattening subset. More complex SV constructs remain queued; see `plan.md`.
 
 ## Policy
 

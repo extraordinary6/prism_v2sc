@@ -99,6 +99,44 @@ def test_procedural_for_loop_with_parameter_bound(tmp_path: Path) -> None:
     assert len(unrolled["statements"]) == 8, "Expected 8 iterations for WIDTH=8"
 
 
+def test_procedural_for_loop_accepts_local_int_postincrement(tmp_path: Path) -> None:
+    """Loop-local declarations and i++ steps are common synthesizable SV."""
+    rtl = tmp_path / "local_postincrement_for.sv"
+    rtl.write_text(
+        dedent(
+            """\
+            module local_postincrement_for (
+              input  logic       clk,
+              input  logic [7:0] din,
+              output logic [7:0] out
+            );
+              always_ff @(posedge clk) begin
+                for (int i = 0; i < 8; i++) begin
+                  out[i] <= din[i];
+                end
+              end
+            endmodule
+            """
+        )
+    )
+
+    design = lower_via_pyslang([rtl], "local_postincrement_for")
+    assert len(design.diagnostics) == 0
+
+    proc = design.modules[0].processes[0]
+    block = proc.structured_statements[0]
+    assert block["type"] == "block"
+    assert block["statements"][0]["type"] == "noop"
+    unrolled = block["statements"][1]
+    assert unrolled["type"] == "block"
+    assert len(unrolled["statements"]) == 8
+
+    header = generate_systemc_header(design)
+    assert "Unsupported statement: ForLoop" not in header
+    assert "__next_out[0]" in header
+    assert "__next_out[7]" in header
+
+
 def test_decrement_for_loop_unrolls_and_keeps_block_sensitivity(tmp_path: Path) -> None:
     """Decrementing loops unroll, and RHS signals inside the unrolled block
     contribute to always-comb sensitivity.

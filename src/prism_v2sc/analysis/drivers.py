@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 import re
 from collections import defaultdict
@@ -224,19 +225,84 @@ def _constant_bit_range(target: str) -> tuple[int, int] | None:
     select = match.group("select")
     if not select:
         return None
+    indexed = re.fullmatch(r"(?P<base>.+?)\s*(?P<op>\+:|-:)\s*(?P<width>.+)", select)
+    if indexed is not None:
+        base = _constant_integer_expr(indexed.group("base"))
+        width = _constant_integer_expr(indexed.group("width"))
+        if base is None or width is None or width <= 0:
+            return None
+        if indexed.group("op") == "+:":
+            return (base + width - 1, base)
+        return (base, base - width + 1)
     if ":" not in select:
-        try:
-            bit = int(select.strip(), 0)
-        except ValueError:
+        bit = _constant_integer_expr(select)
+        if bit is None:
             return None
         return (bit, bit)
     msb_text, lsb_text = select.split(":", maxsplit=1)
-    try:
-        msb = int(msb_text.strip(), 0)
-        lsb = int(lsb_text.strip(), 0)
-    except ValueError:
+    msb = _constant_integer_expr(msb_text)
+    lsb = _constant_integer_expr(lsb_text)
+    if msb is None or lsb is None:
         return None
     return (max(msb, lsb), min(msb, lsb))
+
+
+def _constant_integer_expr(expr: str) -> int | None:
+    """Fold the name-free arithmetic used in elaborated select indices."""
+    try:
+        root = ast.parse(expr.strip(), mode="eval").body
+    except (SyntaxError, ValueError):
+        return None
+
+    def evaluate(node: ast.AST) -> int:
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.UnaryOp):
+            value = evaluate(node.operand)
+            if isinstance(node.op, ast.UAdd):
+                return value
+            if isinstance(node.op, ast.USub):
+                return -value
+            if isinstance(node.op, ast.Invert):
+                return ~value
+            raise ValueError
+        if isinstance(node, ast.BinOp):
+            left = evaluate(node.left)
+            right = evaluate(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                if right == 0:
+                    raise ValueError
+                quotient = abs(left) // abs(right)
+                return -quotient if (left < 0) != (right < 0) else quotient
+            if isinstance(node.op, ast.Mod):
+                if right == 0:
+                    raise ValueError
+                quotient = abs(left) // abs(right)
+                quotient = -quotient if (left < 0) != (right < 0) else quotient
+                return left - quotient * right
+            if isinstance(node.op, ast.LShift):
+                return left << right
+            if isinstance(node.op, ast.RShift):
+                return left >> right
+            if isinstance(node.op, ast.BitAnd):
+                return left & right
+            if isinstance(node.op, ast.BitOr):
+                return left | right
+            if isinstance(node.op, ast.BitXor):
+                return left ^ right
+            raise ValueError
+        raise ValueError
+
+    try:
+        return evaluate(root)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ranges_overlap(left: tuple[int, int] | None, right: tuple[int, int] | None) -> bool:

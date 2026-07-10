@@ -58,6 +58,63 @@ endmodule
     assert "y.write(__tmp);" in header
 
 
+def test_input_expression_binding_uses_bridge_and_empty_output_uses_dummy(tmp_path: Path) -> None:
+    rtl = tmp_path / "expr_bridge.sv"
+    rtl.write_text(
+        """
+module child(input wire [31:0] acc_done, output wire [7:0] unused, output wire seen);
+  assign unused = acc_done[7:0];
+  assign seen = acc_done[0];
+endmodule
+
+module top(input wire done, output wire seen);
+  child u(.acc_done({31'b0, done}), .unused(), .seen(seen));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "top")
+    header = generate_systemc_header(design)
+
+    assert "sc_signal<sc_uint<32>> __bridge_u_acc_done;" in header
+    assert "sc_signal<sc_uint<8>> __unused_u_unused;" in header
+    assert "u.acc_done(__bridge_u_acc_done);" in header
+    assert "u.unused(__unused_u_unused);" in header
+    assert "__bridge_u_acc_done.write(" in header
+    assert "done.read()" in header
+    assert "SC_METHOD(__bridge_method_u_acc_done);" in header
+    assert "sensitive << done;" in header
+
+
+def test_array_element_port_bridge_casts_between_parent_and_child_types(tmp_path: Path) -> None:
+    rtl = tmp_path / "array_expr_bridge.sv"
+    rtl.write_text(
+        """
+module child(input wire signed [7:0] a, output wire signed [15:0] y);
+  assign y = a;
+endmodule
+
+module top(input wire [7:0] din, output wire [15:0] dout);
+  wire [7:0] grid [0:0][0:0];
+  wire [15:0] result [0:0][0:0];
+  assign grid[0][0] = din;
+  assign dout = result[0][0];
+  child u(.a(grid[0][0]), .y(result[0][0]));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "top")
+    header = generate_systemc_header(design)
+
+    assert "sc_signal<sc_int<8>> __bridge_u_a;" in header
+    assert "sc_signal<sc_int<16>> __bridge_u_y;" in header
+    assert "__bridge_u_a.write(sc_int<8>(grid[0][0].read()));" in header
+    assert "result[0][0].write(sc_uint<16>(__bridge_u_y.read()));" in header
+
+
 def test_inout_ports_use_resolved_systemc_and_hierarchical_binding(tmp_path: Path) -> None:
     rtl = tmp_path / "inout_bus.sv"
     rtl.write_text(
@@ -158,7 +215,11 @@ endmodule
     assert "u_src.bus__req(bus__req);" in header
     assert "u_sink.bus__rsp(bus__rsp);" in header
     assert "bus__req.write((bus__valid.read() ? (a.read() ^ 0x3c) : 0x00));" not in header
-    assert "bus__rsp.write((bus__valid.read() ? (bus__req.read() + bias.read()) : (bias.read() ^ 0x55)));" in header
+    assert (
+        "bus__rsp.write((bus__valid.read() ? "
+        "sc_uint<8>((bus__req.read() + bias.read())) : "
+        "sc_uint<8>((bias.read() ^ 0x55))));"
+    ) in header
 
 
 def test_static_generated_systemc_checks_detect_fallbacks(tmp_path: Path) -> None:

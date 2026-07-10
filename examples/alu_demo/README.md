@@ -19,7 +19,7 @@ The ALU is intentionally compact but exercises most of the non-trivial Verilog c
 examples/alu_demo/
 ├── alu.v                  # 38-line ALU RTL
 ├── expected/
-│   ├── ir.json            # Phase 1 JSON IR
+│   ├── ir.json            # JSON IR
 │   └── alu.hpp            # Generated SystemC header
 └── README.md              # This file
 ```
@@ -83,7 +83,7 @@ D:/anaconda/envs/pytorch/python.exe -m prism_v2sc `
 
 Two files are written:
 
-- `expected/ir.json` — the Phase 1 JSON IR.
+- `expected/ir.json` — the JSON IR.
 - `expected/alu.hpp` — the per-module SystemC header below.
 
 Single-module design ⇒ flat output, no subdirectory. Re-running the command should produce a byte-identical header — codegen is deterministic.
@@ -167,7 +167,7 @@ It is informational — every output is driven by exactly one block, so there is
 
 ## Functional equivalence
 
-The same ALU is registered as the `alu` fixture in `tests/equivalence/run_equivalence.py`. On Linux with `iverilog` + `libsystemc-dev` (or simply by pushing — the `equivalence` workflow runs it on every push):
+The same ALU is registered as the `alu` fixture in `tests/equivalence/run_equivalence.py`. On Linux with `iverilog` + `libsystemc-dev` (or by using a branch/PR covered by the `equivalence` workflow):
 
 ```bash
 python tests/equivalence/run_equivalence.py --fixtures alu

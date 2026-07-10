@@ -80,6 +80,164 @@ endmodule
     assert 'u_child("u_child")' in header
 
 
+def test_parameterized_expression_bridge_uses_instance_width(tmp_path: Path) -> None:
+    rtl = tmp_path / "param_bridge.sv"
+    rtl.write_text(
+        """
+module child #(parameter WIDTH = 4) (
+  input logic [WIDTH-1:0] data
+);
+endmodule
+
+module top(input logic [15:0] data);
+  child #(.WIDTH(8)) u_child(.data(data[7:0]));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "top")
+    header = generate_systemc_header(design)
+
+    bridge_declaration = next(
+        line for line in header.splitlines() if "__bridge_u_child_data;" in line
+    )
+    assert "sc_signal<sc_uint<" in bridge_declaration
+    assert "8" in bridge_declaration
+    assert "WIDTH" not in bridge_declaration
+
+
+def test_parameterized_wide_ports_select_big_integer_types(tmp_path: Path) -> None:
+    rtl = tmp_path / "wide_param.sv"
+    rtl.write_text(
+        """
+module wide_param #(
+  parameter ELEM_W = 32,
+  parameter ELEM_N = 32
+) (
+  input  logic signed [ELEM_W*ELEM_N-1:0] signed_data,
+  output logic        [ELEM_W*ELEM_N-1:0] unsigned_data
+);
+  assign unsigned_data = signed_data;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "wide_param")
+    header = generate_systemc_header(design)
+
+    assert "#include <type_traits>" in header
+    assert "using prism_v2sc_uint_t" in header
+    assert "using prism_v2sc_int_t" in header
+    assert "sc_in<prism_v2sc_int_t<" in header
+    assert "sc_out<prism_v2sc_uint_t<" in header
+    assert "sc_in<sc_int<" not in header
+    assert "sc_out<sc_uint<" not in header
+
+
+def test_parameterized_ascending_range_uses_positive_width(tmp_path: Path) -> None:
+    rtl = tmp_path / "ascending_param.sv"
+    rtl.write_text(
+        """
+module ascending_param #(parameter WIDTH = 8) (
+  input  logic [0:WIDTH-1] data,
+  output logic [0:WIDTH-1] same
+);
+  assign same = data;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "ascending_param")
+    header = generate_systemc_header(design)
+
+    port_lines = [
+        line
+        for line in header.splitlines()
+        if line.strip().startswith(("sc_in<", "sc_out<"))
+    ]
+    assert len(port_lines) == 2
+    assert all("prism_v2sc_uint_t<" in line for line in port_lines)
+    assert all("?" in line and ":" in line for line in port_lines)
+
+
+def test_parameterized_clog2_localparam_keeps_derived_default(tmp_path: Path) -> None:
+    rtl = tmp_path / "clog2_param.sv"
+    rtl.write_text(
+        """
+module clog2_param #(parameter DEPTH = 64) (
+  input logic [$clog2(DEPTH)-1:0] addr
+);
+  localparam AW = $clog2(DEPTH);
+  logic [AW-1:0] saved;
+  assign saved = addr;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "clog2_param")
+    header = generate_systemc_header(design)
+
+    assert "constexpr int prism_v2sc_clog2" in header
+    assert "int AW = prism_v2sc_clog2(DEPTH)" in header
+    assert "int AW = 1" not in header
+
+
+def test_parameterized_child_with_default_args_uses_template_empty_args(tmp_path: Path) -> None:
+    rtl = tmp_path / "param_default.v"
+    rtl.write_text(
+        """
+module child #(parameter WIDTH = 4) (
+  input wire [WIDTH-1:0] a,
+  output wire [WIDTH-1:0] y
+);
+  assign y = a;
+endmodule
+
+module top (
+  input wire [3:0] a,
+  output wire [3:0] y
+);
+  child u_child(.a(a), .y(y));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "top")
+    header = generate_systemc_header(design)
+
+    assert "child<> u_child;" in header
+    assert "u_child.a(a);" in header
+
+
+def test_continuous_assign_concat_lvalue_splits_targets(tmp_path: Path) -> None:
+    rtl = tmp_path / "concat_lvalue.sv"
+    rtl.write_text(
+        """
+module split_bus(
+  input  wire [15:0] bus,
+  output wire [7:0] hi,
+  output wire [7:0] lo
+);
+  assign {hi, lo} = bus;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "split_bus")
+    header = generate_systemc_header(design)
+
+    assert "_hi__lo_" not in header
+    assert "auto __concat_rhs = sc_uint<16>(bus.read());" in header
+    assert "hi.write(sc_uint<8>(__concat_rhs.range(15, 8)));" in header
+    assert "lo.write(sc_uint<8>(__concat_rhs.range(7, 0)));" in header
+
+
 def test_template_defaults_do_not_reference_parent_localparams(tmp_path: Path) -> None:
     rtl = tmp_path / "param_scope.v"
     rtl.write_text(
@@ -187,6 +345,26 @@ endmodule
     assert "sensitive << clk.pos() << rst_n.neg();" in header
 
 
+def test_always_ff_with_level_clock_event_keeps_sensitivity(tmp_path: Path) -> None:
+    rtl = tmp_path / "level_clock_ff.sv"
+    rtl.write_text(
+        """
+module level_clock_ff(input logic clk, input logic d, output logic q);
+  always_ff @(clk) begin
+    q <= d;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "level_clock_ff")
+
+    header = generate_systemc_header(design)
+
+    assert "SC_METHOD(always_ff_0);" in header
+    assert "sensitive << clk;" in header
+
+
 def test_nonblocking_chain_reads_pre_edge_values(tmp_path: Path) -> None:
     rtl = tmp_path / "nba_chain.v"
     rtl.write_text(
@@ -228,7 +406,8 @@ endmodule
     header = generate_systemc_header(design)
 
     assert "__next_sum =" in header
-    assert "__next_result = (__next_sum[8] ? 0xff : __next_sum.range(7, 0));" in header
+    assert "__next_result = (__next_sum[8] ? sc_uint<8>(0xff)" in header
+    assert "sc_uint<8>(__next_sum.range(7, 0))" in header
     assert "sum.read()[8]" not in header
 
 
@@ -311,6 +490,6 @@ endmodule
     assert "sc_signal<sc_uint<8>> overlay;" in header
     assert "__next_state.range(7, 4) = a.read();" in header
     assert "__next_state.range(3, 0) = b.read();" in header
-    assert "hi.write(state.read().range(7, 4));" in header
-    assert "lo.write(overlay.read().range(3, 0));" in header
-    assert "mirror.write(overlay.read().range(7, 0));" in header
+    assert "hi.write(sc_uint<4>(state.read().range(7, 4)));" in header
+    assert "lo.write(sc_uint<4>(overlay.read().range(3, 0)));" in header
+    assert "mirror.write(sc_uint<8>(overlay.read().range(7, 0)));" in header

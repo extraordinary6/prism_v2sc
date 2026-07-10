@@ -1,6 +1,6 @@
 # prism_v2sc Power Diagnostics 实现计划
 
-最后更新：2026-06-08。
+最后更新：2026-07-09。
 
 本文把 `docs/power_diagnostics.md` 的方法学拆成可落地的 phase
 清单。它和 `plan.md` 分工不同：`plan.md` 记录转换器当前已实现状态；
@@ -36,20 +36,22 @@ Power diagnostics 是 RTL 设计期的相对诊断工具，目标是指出活动
   统一注册 `SC_METHOD`，并已有 `__next_*` staging 与 `__shadow_*`
   slice 多写者聚合机制。
 - 当前 equivalence harness 可导入 40 个 trace fixtures、5 个
-  conversion fixtures、14 个 diagnostic fixtures；`pytest` 当前报告 164 个
+  conversion fixtures、14 个 diagnostic fixtures；`pytest` 当前收集 185 个
   unit/integration tests。
 - `analysis/drivers.py` 已有真实分析 pass，可作为遍历结构化语句的风格参考；
-  `analysis/dependencies.py` / `analysis/sensitivity.py` 仍是 placeholder。
+  `analysis/dependencies.py` / `analysis/sensitivity.py` 已经是真实实现。
 
-主要缺口：
+计划启动时的主要缺口：
 
 - 除 `ModuleIR.source_path` 外，signals、processes、statements、expressions
   没有 `loc`，还不能稳定反标到 RTL 行号。
-- 没有依赖图、fanin/fanout、表达式深度、clock-domain 归属分析。
 - 没有 power 专用 CLI、report schema、workload schema、score model。
 - 没有可选 SystemC instrumentation，也没有计数器 dump API。
 - 没有把 codegen 合成名（`__next_*`、`__shadow_*`、bridge signals）过滤或
   归因回原始 RTL 信号的映射层。
+
+上面的缺口是计划启动时的基线；P1-P9 已经补齐 source location、依赖图、
+静态指标、power CLI、插桩、profile/report、合成名过滤和 guardrails。
 
 ## Phase P0 - 产品契约与测试样例
 
@@ -353,8 +355,9 @@ Power diagnostics 是 RTL 设计期的相对诊断工具，目标是指出活动
 
 清单：
 
-- [x] 按本轮约束只维护 `plan2.md`，未新增 `.md` 文档，也未修改其它
-  markdown；已在本文写清已实现行为、命令入口、限制与验证证据。
+- [x] 文档已覆盖已实现行为、命令入口、限制与验证证据；当前 README、
+  `docs/power_diagnostics.md`、`docs/plan.md`、`docs/correctness_strategy.md`
+  和 `verification/` 文档会随实现状态同步更新。
 - [x] 增加 CI 覆盖：
   - static analysis / scoring 单测；
   - instrumentation codegen conversion tests；
@@ -404,11 +407,12 @@ Power diagnostics 是 RTL 设计期的相对诊断工具，目标是指出活动
 验证命令：
 
 - `python -m py_compile src\prism_v2sc\analysis\dependencies.py src\prism_v2sc\analysis\sensitivity.py src\prism_v2sc\analysis\expression_metrics.py src\prism_v2sc\analysis\probe_planning.py src\prism_v2sc\codegen\instrumentation.py src\prism_v2sc\codegen\systemc.py src\prism_v2sc\power\runner.py src\prism_v2sc\power\scoring.py src\prism_v2sc\power\cli.py src\prism_v2sc\cli.py tests\test_power_p8_p9.py`
-- `python -m pytest tests\test_power_p8_p9.py`：7 passed, 1 skipped
-  (Linux SystemC smoke skipped on Windows).
-- `python -m pytest`：152 passed, 1 skipped.
+- `python -m pytest tests\test_power_p8_p9.py`：当前收集 10 个 P8/P9 测试；
+  Linux SystemC 相关用例会按宿主环境可用性运行或跳过。
+- `python -m pytest`：当前全仓收集 185 个测试；最新本机完整回归为
+  `185 passed`。
 
-## 建议首批 PR 顺序
+## 历史建议首批 PR 顺序
 
 1. P1：source location plumbing，小范围测试。
 2. P2：dependency graph 与 static metrics。

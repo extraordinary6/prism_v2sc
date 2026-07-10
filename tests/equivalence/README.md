@@ -154,4 +154,4 @@ For non-standard SystemC installs:
 
 ## CI
 
-`.github/workflows/equivalence.yml` runs the harness on `ubuntu-22.04` for every push and pull request to `main`, plus pushes to `feat/pyslang-migration`. On failure, the workflow uploads `build/equivalence/` as an artifact (`equivalence-artifacts`) for offline triage.
+`.github/workflows/equivalence.yml` runs the harness on `ubuntu-22.04` for pushes to `main` and `feat/**`, pull requests targeting `main`, and manual dispatch. On failure, the workflow uploads `build/equivalence/` as an artifact (`equivalence-artifacts`) for offline triage.

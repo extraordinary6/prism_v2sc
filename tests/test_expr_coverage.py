@@ -62,6 +62,27 @@ endmodule
     assert " h" not in " ".join(line for line in header.splitlines() if "sensitive" in line)
 
 
+def test_dynamic_indexed_part_select_width_in_concat(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module dyn_signext_concat_top #(
+  parameter W = 16
+) (
+  input  wire [63:0] data,
+  input  wire [1:0]  idx,
+  output wire signed [117:0] y
+);
+  assign y = {{103{data[idx * W + 15]}}, data[idx * W +: 15]};
+endmodule
+""",
+        "dyn_signext_concat_top",
+    )
+    header = generate_systemc_header(design)
+    assert "sc_biguint<118>(" in header
+    assert "sc_biguint<104>(" not in header
+
+
 def test_wide_vectors_use_sc_biguint(tmp_path: Path) -> None:
     design = _design(
         tmp_path,
@@ -254,9 +275,9 @@ endmodule
         "reducer",
     )
     header = generate_systemc_header(design)
-    assert "data.read().and_reduce()" in header
-    assert "data.read().or_reduce()" in header
-    assert "data.read().xor_reduce()" in header
+    assert "sc_uint<8>(data.read()).and_reduce()" in header
+    assert "sc_uint<8>(data.read()).or_reduce()" in header
+    assert "sc_uint<8>(data.read()).xor_reduce()" in header
 
 
 def test_sized_integer_literal_value_is_parsed_not_zero(tmp_path: Path) -> None:
@@ -300,6 +321,31 @@ endmodule
     assert rhs_values["8'h11"] == 0x11
     assert rhs_values["8'h22"] == 0x22
     assert rhs_values["8'hFF"] == 0xFF
+
+
+def test_implicit_real_constant_conversion_uses_slang_value(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module real_lut_top(
+  output wire [15:0] y
+);
+  wire [15:0] lut [0:1];
+  assign lut[0] = 1 * 256;
+  assign lut[1] = 0.9951847267 * 256;
+  assign y = lut[1];
+endmodule
+""",
+        "real_lut_top",
+    )
+
+    assign = design.modules[0].continuous_assigns[1]
+    assert assign.right_expr["kind"] == "intconst"
+    assert assign.right_expr["value"] == 255
+
+    header = generate_systemc_header(design)
+    assert "lut[1].write(255);" in header
+    assert "raw: 0.9951847267" not in header
 
 
 def test_unary_bitwise_not_on_one_bit_signal_uses_logical_not(tmp_path: Path) -> None:
@@ -452,6 +498,47 @@ endmodule
     assert "sel.read() ? sc_int<9>(a.read()) : sc_int<9>((b.read() + c.read()))" in header
 
 
+def test_unsized_zero_ternary_branch_casts_to_systemc_width(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module nested_zero_mux(
+  input  wire        sel,
+  input  wire [31:0] a,
+  input  wire [31:0] b,
+  output wire [31:0] y
+);
+  assign y = sel ? a : (sel ? (a | b) : 0);
+endmodule
+""",
+        "nested_zero_mux",
+    )
+
+    header = generate_systemc_header(design)
+    assert "sel.read() ? sc_uint<32>((a.read() | b.read())) : sc_uint<32>(0)" in header
+
+
+def test_indexed_part_select_uses_base_plus_width_semantics(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module indexed_selects(
+  input  wire [31:0] a,
+  output wire [7:0] up,
+  output wire [7:0] down
+);
+  assign up = a[8 +: 8];
+  assign down = a[15 -: 8];
+endmodule
+""",
+        "indexed_selects",
+    )
+
+    header = generate_systemc_header(design)
+    assert "up.write(sc_uint<8>(a.read().range(((8 + 8) - 1), 8)));" in header
+    assert "down.write(sc_uint<8>(a.read().range(15, ((15 - 8) + 1))));" in header
+
+
 def test_one_bit_signed_decl_does_not_collapse_to_bool(tmp_path: Path) -> None:
     design = _design(
         tmp_path,
@@ -491,7 +578,7 @@ endmodule
     assert expr["signed_value"] == -1
 
     header = generate_systemc_header(design)
-    assert "y.write(-1);" in header
+    assert "y.write(sc_int<8>(-1));" in header
     assert "y.write(0);" not in header
 
 
@@ -542,3 +629,53 @@ endmodule
     )
     header = generate_systemc_header(design)
     assert "sc_uint<8>(x.read())" in header
+
+
+def test_mixed_signed_sized_cast_comparison_uses_common_unsigned_bits(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module sized_cast_compare #(
+  parameter int W = 3,
+  parameter int TARGET = 7
+)(
+  input  wire [W-1:0] count,
+  output wire         hit
+);
+  assign hit = count == W'(TARGET);
+endmodule
+""",
+        "sized_cast_compare",
+    )
+    header = generate_systemc_header(design)
+
+    assert "sc_uint<3>(count.read()) == sc_uint<3>(sc_int<3>(TARGET))" in header
+    assert "count.read() == sc_int<3>(TARGET)" not in header
+
+
+def test_fixed_width_signed_unary_minus_folds_without_cpp_decrement(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module signed_minimum(
+  input  wire signed [63:0] x,
+  output wire signed [7:0]  minimum,
+  output wire               below
+);
+  assign minimum = -8'sd128;
+  assign below = x < -64'sd128;
+endmodule
+""",
+        "signed_minimum",
+    )
+
+    minimum_expr = design.modules[0].continuous_assigns[0].right_expr
+    compare_expr = design.modules[0].continuous_assigns[1].right_expr
+    assert minimum_expr["kind"] == "intconst"
+    assert minimum_expr["signed_value"] == -128
+    assert compare_expr["right"]["kind"] == "intconst"
+    assert compare_expr["right"]["signed_value"] == -128
+
+    header = generate_systemc_header(design)
+    assert "minimum.write(sc_int<8>(-128));" in header
+    assert "--128" not in header

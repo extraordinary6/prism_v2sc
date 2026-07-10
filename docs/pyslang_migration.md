@@ -1,8 +1,10 @@
 # pyslang Migration Plan
 
-Status: **Phase A + B + C landed on `feat/pyslang-migration`** (pyverilog fully removed). Last updated: 2026-05-19.
+Status: **Phase A + B + C landed** (pyverilog fully removed). Last updated: 2026-07-09.
 
 This document is the agreed-upon roadmap for replacing the pyverilog frontend with pyslang, so that prism_v2sc can ingest synthesizable SystemVerilog (interfaces, packages, typedefs, packed structs, enums, `always_comb/ff/latch`, packed/unpacked arrays). Dynamic SV (classes, randomization, programs) stays out of scope.
+
+The Phase A/B/C status blocks below are preserved as dated migration snapshots; their fixture and test counts are not the current project counts. For the current verification baseline, use `README.md`, `docs/plan.md`, and `docs/syntax_coverage.md`.
 
 ## 1. Why migrate
 
@@ -75,9 +77,9 @@ A dual frontend is only useful as a **migration scaffold** — to derisk the swa
 
 - 65/65 unit tests green on the local Windows workstation (55 pre-existing
   + 10 new `tests/test_frontend_equivalence.py`). Equivalence-on-CI for
-  pyslang is wired through the `frontend: [pyverilog, pyslang]` matrix in
-  `.github/workflows/equivalence.yml` but has not yet completed a Linux
-  CI run.
+  pyslang was wired through the `frontend: [pyverilog, pyslang]` matrix in
+  `.github/workflows/equivalence.yml`; the Linux CI result was still pending
+  at that snapshot.
 - 8 of 9 fixtures emit **byte-identical** SystemC under both frontends
   (mux2, adder, byteswap, counter, fsm_handshake, shift_register, alu,
   pipeline8).
@@ -195,18 +197,18 @@ Exit criteria status:
 - ✅ no ``pyverilog`` strings under ``src/``
 - ✅ ``pip install -e .`` no longer pulls pyverilog
 
-## 5. After migration — SV feature rollout
+## 5. Post-migration SV feature rollout status
 
-The migration plan above does **not** add new SV features beyond what pyverilog already covers. Once Phase C lands, we enable SV constructs incrementally, each with its own fixture and equivalence test:
+The migration plan above did **not** by itself add new SV features beyond what pyverilog already covered. After Phase C landed, SV constructs were enabled incrementally, each with its own trace, conversion, diagnostic, unit, or real-design verification evidence. The detailed current surface lives in `docs/syntax_coverage.md`; this section records the migration-era rollout status.
 
-1. `always_comb` / `always_ff` / `always_latch` keyword recognition (slang already parses these; lowering needs minor updates).
-2. `typedef` + `enum` flattened to bit-widths in `ModuleIR`.
-3. Packed `struct` (flatten to a single `sc_uint<N>` with width sum).
-4. `package` + `import` (resolved by slang; we just consume symbols).
-5. `interface` + `modport` (this one is large; IR needs an `InterfaceIR` concept — separate design doc).
-6. Unpacked arrays (require an array signal IR).
+1. `always_comb` / `always_ff` / `always_latch` keyword recognition is implemented and trace-covered.
+2. `typedef` + `enum` aliases are flattened into `ModuleIR.type_aliases`; enum member values lower to integer constants.
+3. Packed `struct` / `union` flatten to vectors with field/member accesses lowered through bit/part-selects.
+4. `package` + `import` support extracts parameters, typedefs, enum members, and functions across package boundaries.
+5. Simple packed-signal `interface` + simple `modport` directions flatten into ordinary `bus__field` ports/signals; complex interfaces remain outside the supported subset.
+6. Unpacked arrays, including memory-style per-cell lowering and multidimensional real-design cases, are supported within the documented synthesizable subset.
 
-None of these are migration concerns; they are post-migration features.
+None of these were migration mechanics; they are post-migration features built on top of the slang-only frontend.
 
 ## 6. Risk register
 
@@ -220,7 +222,7 @@ None of these are migration concerns; they are post-migration features.
 
 ## 7. Out of scope
 
-- Class-based dynamic SV, randomization, programs, assertions/properties as runtime checkers.
+- Class-based dynamic SV, randomization, and programs remain rejected. Assertions/properties/sequences used only as runtime verification checkers are ignored by the synthesizable design view.
 - A pure-Python install (slang is C++; we accept the native-wheel dependency).
 - Replacing Icarus Verilog as the RTL golden simulator. The equivalence CI loop is orthogonal to which Python frontend we use to lower.
 

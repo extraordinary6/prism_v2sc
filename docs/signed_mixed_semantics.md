@@ -12,10 +12,12 @@
 - `$signed(x)` / `$unsigned(x)` 和显式 SV cast `signed'(x)` / `unsigned'(x)` 会生成真实的 `sc_int<W>(...)` / `sc_uint<W>(...)` cast。
 - equivalence harness 已支持 signed 端口，并有 `signed_declared_arith` fixture 覆盖 signed 声明、signed 比较、算术右移和 signed literal。
 - `signed_mixed_context` fixture 覆盖推荐的 signed/unsigned 边界写法：先显式扩展或 cast 到同一宽度/符号，再做加减、比较、part-select 算术右移和三目选择。
+- codegen 会对已知 signed 的三目分支，以及目标宽度已知时的 unsized `0` 分支，生成显式 SystemC cast，避免 C++ conditional operator 类型歧义。
+- mixed signed/unsigned 的等值和关系比较会先按共同最大宽度转换为 unsigned bit pattern，再执行 C++ 比较；这覆盖了 sized cast 与 unsigned counter 比较等常见 RTL 写法，并由 tinyNPU 4x4/8x8 一致性门禁验证。
 
 ## 不完整支持的地方
 
-SystemVerilog 的表达式类型规则是上下文相关的。一个表达式的结果宽度和 signedness 可能由操作数、目标赋值类型、运算符种类、literal 种类共同决定。当前 `prism_v2sc` 还没有对所有中间表达式做完整的 SV signedness / width 传播，所以 mixed signed/unsigned 的隐式写法需要谨慎。
+SystemVerilog 的表达式类型规则是上下文相关的。一个表达式的结果宽度和 signedness 可能由操作数、目标赋值类型、运算符种类、literal 种类共同决定。当前 `prism_v2sc` 已处理 mixed 比较的共同无符号位型转换，但还没有对所有算术和嵌套中间表达式做完整的 SV signedness / width 传播，所以其他 mixed signed/unsigned 隐式写法仍需谨慎。
 
 推荐原则：**在 signed/unsigned 边界显式 cast，并把扩展位宽写清楚。**
 

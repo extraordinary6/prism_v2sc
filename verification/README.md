@@ -8,6 +8,39 @@
 
 - `systemc_corner_case_plan.md` - 在本地已有 SystemC 和 VCS 后，继续寻找
   RTL 到 SystemC 转换语义缺口的分阶段计划。
+- `cases/conversion/mhsa_icb_smoke.py` - 引用外部 `/home/MicroE/MHSA`
+  ICB MHSA 加速器，执行真实设计转换和生成 SystemC 顶层 C++14 编译 smoke。
+- `cases/conversion/ofdm_fft_smoke.py` - 引用外部
+  `/home/MicroE/ai_proj/Simulation-and-FFT-Implementation-of-OFDM-Communication-System/hardware/src`
+  OFDM FFT/IFFT RTL，执行真实设计转换、real 常量 LUT 检查和生成 SystemC
+  顶层 C++14 编译 smoke。
+- `cases/consistency/mhsa_keypoint_consistency.py` - 引用外部 `/home/MicroE/MHSA`
+  运行 RTL(VCS) vs generated SystemC 的关键节点一致性检查；默认覆盖
+  `icb_mhsa`、`pe` 和 `scale_core`，不做逐拍全 trace diff。
+- `cases/consistency/ofdm_fft_trace_consistency.py` - 引用外部 OFDM FFT/IFFT
+  RTL，运行 RTL(VCS) vs generated SystemC 的 sampled per-cycle trace diff；
+  默认驱动 9 个确定性 64 点 FFT/IFFT 输入 case，并比较 380 个周期的
+  `data_out_valid/re/im` trace。
+- `cases/consistency/icb_apb_bridge_consistency.py` - 引用外部带 SystemVerilog
+  `interface` 的 ICB-to-APB bridge，在临时目录构造可综合快照和平坦 wrapper，
+  保留 DES 功能并忽略 `CHECK`/bind 验证内容；比较 36 个 ICB/APB 事务事件。
+- `cases/consistency/tinynpu_consistency.py` - 引用外部
+  `/home/MicroE/ai_proj/tinyNPU`，在 4x4 和 8x8 两种阵列配置下运行
+  RTL(VCS)、generated SystemC 与独立 Python golden 三方一致性检查；覆盖
+  APB、SRAM loader、GEMM、K/N tiling、bias、ReLU、全局/逐通道重定量、
+  back-to-back job、OFM 写事件和非法维度错误路径。
+- `notes/mhsa_icb_real_design_eval.md` - 记录 MHSA ICB smoke/keypoint 结果、
+  已修复的真实设计问题、当前证明范围和后续建议。
+- `notes/ofdm_fft_real_design_eval.md` - 记录 OFDM FFT/IFFT smoke 结果、
+  real-valued twiddle LUT 修复、trace consistency 结果、当前证明范围和后续建议。
+- `notes/icb_apb_bridge_real_design_eval.md` - 记录 interface flatten、DES/FIFO/APB
+  一致性结果、修复项和当前证明边界。
+- `notes/tinynpu_real_design_eval.md` - 记录 tinyNPU 4x4/8x8 三方一致性结果、
+  真实设计暴露的转换器缺陷、warning 分类和当前证明边界。
+
+本目录按可综合设计视图工作：assertion/property/sequence、bind 和 UVM/testbench
+内容不属于转换目标。用例应只把 RTL design sources 交给 converter；若验证宏与
+设计源码共存，真实设计脚本会在临时快照中关闭验证宏，绝不修改外部 RTL。
 
 后续建议布局：
 

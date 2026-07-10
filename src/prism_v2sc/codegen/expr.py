@@ -15,6 +15,7 @@ JSON dump:
     {"kind": "unop", "op": "!", "operand": {...}}
     {"kind": "cond", "cond": {...}, "true": {...}, "false": {...}}
     {"kind": "concat", "parts": [{...}, ...]}
+    {"kind": "assignment_pattern", "elements": [{...}, ...]}
     {"kind": "repeat", "count": {...}, "value": {...}}
     {"kind": "bitselect", "target": {...}, "index": {...}}
     {"kind": "partselect", "target": {...}, "msb": {...}, "lsb": {...}}
@@ -35,7 +36,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from prism_v2sc.ir.model import ModuleIR, ParameterIR, PortIR, SignalIR, TypeAliasIR
+from prism_v2sc.ir.model import ModuleIR, ParameterIR, PortIR, SignalIR, SubroutineIR, TypeAliasIR
 
 
 _BINARY_REDUCTION_OPS = {"&", "|", "^", "~&", "~|", "^~", "~^"}
@@ -87,6 +88,8 @@ class ModuleContext:
     # ``sig[i].read()`` / ``sig[i].write(...)`` rather than the
     # ``sig.read()[i]`` bit-select form.
     array_signal_names: frozenset[str] = field(default_factory=frozenset)
+    array_dimensions: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    array_bounds: dict[str, tuple[tuple[int, int], ...]] = field(default_factory=dict)
     # Names emitted as SystemC resolved vectors (top-level ``inout`` ports
     # and internal nets connected to child ``inout`` ports). Reads from
     # these values are converted back to the converter's existing two-state
@@ -105,6 +108,8 @@ class ModuleContext:
             loop_vars=frozenset(self.loop_vars | {name}),
             local_names=self.local_names,
             array_signal_names=self.array_signal_names,
+            array_dimensions=self.array_dimensions,
+            array_bounds=self.array_bounds,
             resolved_names=self.resolved_names,
         )
 
@@ -127,6 +132,52 @@ class ModuleContext:
             loop_vars=self.loop_vars,
             local_names=frozenset(self.local_names | names),
             array_signal_names=self.array_signal_names,
+            array_dimensions=self.array_dimensions,
+            array_bounds=self.array_bounds,
+            resolved_names=self.resolved_names,
+        )
+
+    def with_subroutine(self, subroutine: SubroutineIR) -> "ModuleContext":
+        """Return a context containing function parameters and local variables."""
+        local_names = set(self.local_names)
+        signal_widths = dict(self.signal_widths)
+        signal_signedness = dict(self.signal_signedness)
+        array_signal_names = set(self.array_signal_names)
+        array_dimensions = dict(self.array_dimensions)
+        array_bounds = dict(self.array_bounds)
+
+        def add(name: str, width, signed: bool, unpacked_dims=()) -> None:
+            local_names.add(name)
+            signal_widths[name] = (
+                1
+                if width is None
+                else _width_from_pair(width.msb, width.lsb, self.parameter_values)
+            )
+            signal_signedness[name] = signed
+            if unpacked_dims:
+                array_signal_names.add(name)
+                array_dimensions[name] = _array_dim_sizes(unpacked_dims)
+                array_bounds[name] = unpacked_dims
+
+        add(subroutine.name, subroutine.return_width, subroutine.return_signed)
+        for param in subroutine.params:
+            add(param.name, param.width, param.signed)
+        for local in subroutine.local_signals:
+            add(local.name, local.width, local.signed, local.unpacked_dims)
+
+        return ModuleContext(
+            signal_names=self.signal_names,
+            parameter_names=self.parameter_names,
+            signal_widths=signal_widths,
+            signal_signedness=signal_signedness,
+            parameter_values=self.parameter_values,
+            enum_values=self.enum_values,
+            enum_widths=self.enum_widths,
+            loop_vars=self.loop_vars,
+            local_names=frozenset(local_names),
+            array_signal_names=frozenset(array_signal_names),
+            array_dimensions=array_dimensions,
+            array_bounds=array_bounds,
             resolved_names=self.resolved_names,
         )
 
@@ -151,17 +202,25 @@ def build_module_context(
 
     enum_values, enum_widths = _flatten_enum_values(module.type_aliases)
 
+    array_signal_names: set[str] = set()
+    array_dimensions: dict[str, tuple[int, ...]] = {}
+    array_bounds: dict[str, tuple[tuple[int, int], ...]] = {}
     for port in module.ports:
         signal_names.add(port.name)
         signal_widths[port.name] = _port_width(port, parameter_values)
         signal_signedness[port.name] = bool(port.signed)
-    array_signal_names: set[str] = set()
+        if getattr(port, "unpacked_dims", ()):
+            array_signal_names.add(port.name)
+            array_dimensions[port.name] = _array_dim_sizes(port.unpacked_dims)
+            array_bounds[port.name] = port.unpacked_dims
     for signal in module.signals:
         signal_names.add(signal.name)
         signal_widths[signal.name] = _signal_width(signal, parameter_values)
         signal_signedness[signal.name] = bool(signal.signed)
         if getattr(signal, "unpacked_dims", ()):
             array_signal_names.add(signal.name)
+            array_dimensions[signal.name] = _array_dim_sizes(signal.unpacked_dims)
+            array_bounds[signal.name] = signal.unpacked_dims
 
     return ModuleContext(
         signal_names=frozenset(signal_names),
@@ -172,6 +231,8 @@ def build_module_context(
         enum_values=enum_values,
         enum_widths=enum_widths,
         array_signal_names=frozenset(array_signal_names),
+        array_dimensions=array_dimensions,
+        array_bounds=array_bounds,
         resolved_names=resolved_names or frozenset(),
     )
 
@@ -198,6 +259,59 @@ def _type_alias_width(alias: TypeAliasIR) -> int | None:
     return abs(msb - lsb) + 1
 
 
+def _array_dim_sizes(dims: tuple[tuple[int, int], ...]) -> tuple[int, ...]:
+    return tuple(max(msb, lsb) - min(msb, lsb) + 1 for msb, lsb in dims)
+
+
+def _render_array_access(
+    expr: dict[str, Any],
+    ctx: ModuleContext,
+    *,
+    staged_names: frozenset[str] | None = None,
+    as_lvalue: bool,
+) -> str | None:
+    base, indices = _bitselect_chain(expr)
+    if not base or base not in ctx.array_dimensions:
+        return None
+    dim_count = len(ctx.array_dimensions[base])
+    if len(indices) < dim_count:
+        return None
+    rendered_indices = [render_rvalue(index, ctx, staged_names=staged_names) for index in indices]
+    sanitized = sanitize_identifier(base)
+    element = sanitized + "".join(f"[{index}]" for index in rendered_indices[:dim_count])
+    remaining = rendered_indices[dim_count:]
+    if as_lvalue:
+        return element + "".join(f"[{index}]" for index in remaining)
+    value = f"{element}.read()"
+    for index in remaining:
+        value = f"{value}[{index}]"
+    return value
+
+
+def _bitselect_chain(expr: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
+    indices: list[dict[str, Any]] = []
+    node: dict[str, Any] | None = expr
+    while isinstance(node, dict) and node.get("kind") == "bitselect":
+        index = node.get("index")
+        if not isinstance(index, dict):
+            return None, []
+        indices.append(index)
+        target = node.get("target")
+        node = target if isinstance(target, dict) else None
+    if isinstance(node, dict) and node.get("kind") == "identifier":
+        return str(node.get("name", "")), list(reversed(indices))
+    return None, []
+
+
+def is_array_element_expr(expr: dict[str, Any] | None, ctx: ModuleContext) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    base, indices = _bitselect_chain(expr)
+    if not base or base not in ctx.array_dimensions:
+        return False
+    return len(indices) == len(ctx.array_dimensions[base])
+
+
 def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     """Render a structured RHS expression as a C++ rvalue.
 
@@ -215,8 +329,18 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         return _format_intconst(expr)
     if kind == "binop":
         op = str(expr.get("op", ""))
-        left = render_rvalue(expr.get("left"), ctx, staged_names=staged_names)
-        right = render_rvalue(expr.get("right"), ctx, staged_names=staged_names)
+        left_node = expr.get("left")
+        right_node = expr.get("right")
+        left = render_rvalue(left_node, ctx, staged_names=staged_names)
+        right = render_rvalue(right_node, ctx, staged_names=staged_names)
+        if op in {"==", "!=", "===", "!==", "<", ">", "<=", ">="}:
+            left_signed = infer_signed(left_node, ctx)
+            right_signed = infer_signed(right_node, ctx)
+            if left_signed != right_signed:
+                common_width = max(1, infer_width(left_node, ctx), infer_width(right_node, ctx))
+                common_type = systemc_int_type(common_width, signed=False)
+                left = f"{common_type}({left})"
+                right = f"{common_type}({right})"
         cpp_op = _CPP_BINARY_OP_MAP.get(op, op)
         result = f"({left} {cpp_op} {right})"
         if op == "^~":
@@ -232,18 +356,23 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         false_node = expr.get("false")
         true_branch = render_rvalue(true_node, ctx, staged_names=staged_names)
         false_branch = render_rvalue(false_node, ctx, staged_names=staged_names)
-        if infer_signed(true_node, ctx) and infer_signed(false_node, ctx):
-            width = max(1, infer_width(expr, ctx))
-            if width > 1:
-                target_type = systemc_int_type(width, signed=True)
-                true_branch = f"{target_type}({true_branch})"
-                false_branch = f"{target_type}({false_branch})"
+        true_width = infer_width(true_node, ctx)
+        false_width = infer_width(false_node, ctx)
+        both_signed = infer_signed(true_node, ctx) and infer_signed(false_node, ctx)
+        width = max(1, true_width, false_width)
+        if width > 1:
+            target_type = systemc_int_type(width, signed=both_signed)
+            true_branch = f"{target_type}({true_branch})"
+            false_branch = f"{target_type}({false_branch})"
         return f"({cond} ? {true_branch} : {false_branch})"
     if kind == "concat":
         return _render_concat(expr.get("parts", []), ctx, staged_names=staged_names)
     if kind == "repeat":
         return _render_repeat(expr.get("count"), expr.get("value"), ctx, staged_names=staged_names)
     if kind == "bitselect":
+        array_access = _render_array_access(expr, ctx, staged_names=staged_names, as_lvalue=False)
+        if array_access is not None:
+            return array_access
         target = expr.get("target")
         if isinstance(target, dict) and target.get("kind") == "identifier":
             target_name = str(target.get("name", ""))
@@ -259,7 +388,8 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         target_str = _render_aggregate_rvalue(expr.get("target"), ctx, staged_names=staged_names)
         msb = render_rvalue(expr.get("msb"), ctx, staged_names=staged_names)
         lsb = render_rvalue(expr.get("lsb"), ctx, staged_names=staged_names)
-        return f"{target_str}.range({msb}, {lsb})"
+        width = max(1, infer_width(expr, ctx))
+        return f"{systemc_int_type(width)}({target_str}.range({msb}, {lsb}))"
     if kind == "cast":
         return _render_cast(expr, ctx, staged_names=staged_names)
     if kind == "syscall":
@@ -291,6 +421,9 @@ def render_lvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
             return f"__next_{sanitized}"
         return sanitized
     if kind == "bitselect":
+        array_access = _render_array_access(expr, ctx, staged_names=staged_names, as_lvalue=True)
+        if array_access is not None:
+            return array_access
         target = render_lvalue(expr.get("target"), ctx, staged_names=staged_names)
         idx = render_rvalue(expr.get("index"), ctx)
         return f"{target}[{idx}]"
@@ -345,7 +478,7 @@ def collect_sensitivity(expr: dict[str, Any] | None, ctx: ModuleContext) -> list
             return
         for key in ("target", "operand", "value", "cond", "true", "false", "left", "right", "msb", "lsb", "index", "count"):
             walk(node.get(key))
-        for key in ("parts", "args"):
+        for key in ("parts", "args", "elements"):
             children = node.get(key)
             if isinstance(children, list):
                 for child in children:
@@ -376,8 +509,14 @@ def infer_width(expr: dict[str, Any] | None, ctx: ModuleContext) -> int:
             return max(1, ctx.enum_widths.get(name, 1))
         return max(1, ctx.signal_widths.get(name, 1))
     if kind == "bitselect":
+        base, indices = _bitselect_chain(expr)
+        if base in ctx.array_dimensions and len(indices) == len(ctx.array_dimensions[base]):
+            return max(1, ctx.signal_widths.get(base, 1))
         return 1
     if kind == "partselect":
+        width = expr.get("width")
+        if isinstance(width, int) and width > 0:
+            return width
         msb = const_eval(expr.get("msb"), ctx)
         lsb = const_eval(expr.get("lsb"), ctx)
         if msb is not None and lsb is not None:
@@ -415,6 +554,21 @@ def systemc_int_type(width: int, signed: bool = False) -> str:
     if width > 64:
         return f"sc_{'bigint' if signed else 'biguint'}<{width}>"
     return f"sc_{'int' if signed else 'uint'}<{width}>"
+
+
+def _cond_branch_needs_unsized_cast(
+    true_node: dict[str, Any] | None,
+    false_node: dict[str, Any] | None,
+) -> bool:
+    """C++ needs help when one ternary branch is an unsized SV integer."""
+    return _is_unsized_intconst(true_node) != _is_unsized_intconst(false_node)
+
+
+def _is_unsized_intconst(expr: dict[str, Any] | None) -> bool:
+    if not isinstance(expr, dict) or expr.get("kind") != "intconst":
+        return False
+    raw = str(expr.get("raw", ""))
+    return "'" not in raw
 
 
 def infer_signed(expr: dict[str, Any] | None, ctx: ModuleContext) -> bool:
@@ -652,18 +806,20 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
         return f"(-{operand_text})"
     if op == "+":
         return f"(+{operand_text})"
+    reduction_width = max(1, infer_width(operand_node, ctx))
+    reduction_operand = f"{systemc_int_type(reduction_width)}({operand_text})"
     if op == "&":
-        return f"{operand_text}.and_reduce()"
+        return f"{reduction_operand}.and_reduce()"
     if op == "|":
-        return f"{operand_text}.or_reduce()"
+        return f"{reduction_operand}.or_reduce()"
     if op == "^":
-        return f"{operand_text}.xor_reduce()"
+        return f"{reduction_operand}.xor_reduce()"
     if op == "~&":
-        return f"(!({operand_text}.and_reduce()))"
+        return f"(!({reduction_operand}.and_reduce()))"
     if op == "~|":
-        return f"(!({operand_text}.or_reduce()))"
+        return f"(!({reduction_operand}.or_reduce()))"
     if op in {"^~", "~^"}:
-        return f"(!({operand_text}.xor_reduce()))"
+        return f"(!({reduction_operand}.xor_reduce()))"
     return f"({op}{operand_text})"
 
 
@@ -686,7 +842,7 @@ def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext, *, staged_na
             pieces.append(f"({target_type}({operand}) << {bits_remaining})")
         else:
             pieces.append(f"{target_type}({operand})")
-    return "(" + " | ".join(pieces) + ")"
+    return f"{target_type}((" + " | ".join(pieces) + "))"
 
 
 def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any] | None, ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
@@ -706,7 +862,7 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
             pieces.append(f"({target_type}({operand}) << {shift})")
         else:
             pieces.append(f"{target_type}({operand})")
-    return "(" + " | ".join(pieces) + ")"
+    return f"{target_type}((" + " | ".join(pieces) + "))"
 
 
 def _render_cast(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:

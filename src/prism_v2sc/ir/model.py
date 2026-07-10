@@ -41,6 +41,8 @@ class PortIR:
     kind: str = "wire"
     width: WidthIR | None = None
     signed: bool = False
+    unpacked_dims: tuple[tuple[int, int], ...] = ()
+    declared_unpacked_dims: tuple[tuple[int | str, int | str], ...] = ()
     loc: SourceLocIR | None = None
 
 
@@ -58,6 +60,7 @@ class SignalIR:
     # it is ``((0, 15),)``. Codegen treats signals with non-empty
     # ``unpacked_dims`` as ``sc_signal<inner> name[D0][D1]...;`` arrays.
     unpacked_dims: tuple[tuple[int, int], ...] = ()
+    declared_unpacked_dims: tuple[tuple[int | str, int | str], ...] = ()
     loc: SourceLocIR | None = None
 
 
@@ -127,6 +130,7 @@ class ArgIR:
 
     name: str
     value: str
+    value_expr: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +185,7 @@ class SubroutineIR:
     return_width: WidthIR | None = None
     return_signed: bool = False
     params: tuple[SubroutineParamIR, ...] = field(default_factory=tuple)
+    local_signals: tuple[SignalIR, ...] = field(default_factory=tuple)
     body_statements: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
