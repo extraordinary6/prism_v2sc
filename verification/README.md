@@ -1,4 +1,4 @@
-# Verification Plan Workspace
+# Verification Workspace
 
 这个目录用于放置比常规 pytest 更深入的正确性验证计划、探索性 RTL
 用例和失败分析记录。它刻意独立于 `tests/`，避免尚未稳定的 corner-case
@@ -6,8 +6,8 @@
 
 主要入口：
 
-- `systemc_corner_case_plan.md` - 在本地已有 SystemC 和 VCS 后，继续寻找
-  RTL 到 SystemC 转换语义缺口的分阶段计划。
+- `../docs/rtl_conversion_roadmap.md` - 四阶段能力建设路线、覆盖状态和证据要求。
+- `benchmarks.json` / `benchmark_baseline.json` - 真实设计 benchmark 清单和证据基线。
 - `cases/conversion/mhsa_icb_smoke.py` - 引用外部 `/home/MicroE/MHSA`
   ICB MHSA 加速器，执行真实设计转换和生成 SystemC 顶层 C++14 编译 smoke。
 - `cases/conversion/ofdm_fft_smoke.py` - 引用外部
@@ -29,6 +29,7 @@
   RTL(VCS)、generated SystemC 与独立 Python golden 三方一致性检查；覆盖
   APB、SRAM loader、GEMM、K/N tiling、bias、ReLU、全局/逐通道重定量、
   back-to-back job、OFM 写事件和非法维度错误路径。
+- `cases/consistency/dma_e203_consistency.py` - 转换 E203 ICB DMA，并比较配置、memory command/response 和 IRQ 的 45 周期 RTL/SystemC trace；同时输出 RTL 协议风险。
 - `cases/consistency/model_memory_provider_consistency.py` - 对内置 memory
   provider 运行 RTL(VCS) vs generated SystemC 契约级差分检查，覆盖同步单口
   memory 的 `read_first`、`write_first` 和 `no_change` 三种同地址写行为。

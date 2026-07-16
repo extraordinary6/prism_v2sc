@@ -15,13 +15,18 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="185 tests" src="https://img.shields.io/badge/tests-185%20collected-0EA5E9">
+  <img alt="214 tests" src="https://img.shields.io/badge/tests-214%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
 # prism_v2sc
 
 `prism_v2sc` converts a synthesizable Verilog / SystemVerilog RTL subset into hierarchical, approximate SystemC models. It emits one `.hpp` per reachable module and mirrors the RTL source directory layout.
+
+The converter accepts Verilog/SystemVerilog RTL only. It does not compile or
+convert Chisel, FIRRTL, Scala, or other RTL-generator sources. Designs such as
+XiangShan are in scope only after an external flow has produced a fixed `.v` or
+`.sv` RTL snapshot.
 
 The frontend uses [slang](https://sv-lang.com/) through [pyslang](https://pypi.org/project/pyslang/). slang parses and elaborates the whole design first, so parameter overrides, `generate if`, `generate for`, and concrete port widths are resolved before lowering.
 
@@ -243,7 +248,7 @@ The report contains ranked hotspots, per-probe metrics (`total_bit_toggles`, `to
 python -m pytest -q
 ```
 
-The suite currently collects 185 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, static power analysis, probe planning, instrumentation shape, recursive power dump generation, profile parsing, scoring, deep profiling, workload comparison, and power report stability.
+The suite currently collects 214 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, model providers, conversion audits, staged projects, static power analysis, instrumentation, profile parsing, scoring, and report stability.
 
 ## Equivalence CI
 
@@ -255,6 +260,7 @@ Additional exploratory and real-design checks live under `verification/`, includ
 
 ## Further Reading
 
+- `docs/README.md`: documentation index and recommended entry points.
 - `docs/correctness_strategy.md`: correctness strategy and golden loop.
 - `docs/syntax_coverage.md`: verified RTL surface and queued support.
 - `docs/known_differences.md`: known semantic differences from full Verilog/SV.
@@ -262,7 +268,5 @@ Additional exploratory and real-design checks live under `verification/`, includ
 - `docs/hardening_checks.md`: reproducible local checks.
 - `docs/power_diagnostics.md`: RTL power hotspot methodology.
 - `docs/model_providers.md`: external simulation-model manifest and provider framework.
-- `docs/pyslang_migration.md`: pyverilog to pyslang migration record.
-- `docs/plan.md`: converter phase status.
-- `docs/plan2.md`: completed power diagnostics implementation checklist.
+- `docs/rtl_conversion_roadmap.md`: current four-phase capability roadmap and evidence ledger.
 - `verification/README.md`: deeper verification workspace and real-design checks.

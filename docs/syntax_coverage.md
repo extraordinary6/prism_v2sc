@@ -2,6 +2,10 @@
 
 What `prism_v2sc` actually supports today, what it explicitly rejects, and where the silent risks are. Sourced from `frontend/lower.py` kind dispatch, `codegen/expr.py` operator map, the diagnostic table, and the `tests/equivalence/fixtures/` set. Update this doc whenever the lowerer's behavior changes.
 
+The input contract is Verilog/SystemVerilog RTL. Chisel, FIRRTL, Scala, and
+other generator languages are not parsed or converted; use a fixed generated
+`.v`/`.sv` snapshot as the input boundary.
+
 The classification is by **evidence strength**, not by syntactic category — the question "is this safe to feed in?" is really "do we have a CI-level proof?" CI gives that proof in three flavors:
 
 - **Trace-equivalence fixtures** (section A): co-simulate the RTL with `iverilog` and the generated SystemC with `libsystemc-dev`, diff sampled per-cycle outputs.
@@ -140,9 +144,12 @@ These are non-synthesizable or require runtime infrastructure SystemC's `SC_METH
 - string literals, runtime `real` / `shortreal` storage or datapaths. Real-valued constant expressions are supported only when slang inserts an implicit conversion to an integral target.
 - streaming `{<<{a,b}}` / `{>>{a,b}}`, `inside` expressions, queue/array methods
 
-## Phase 11 rollout history
+## Historical rollout note
 
-The roadmap below fed Phase 11 in `plan.md`. Each step landed as an isolated PR with its corresponding fixture or verification gate. Items that have moved into A/B/C/D since the last revision are struck through.
+The following list is retained only as compact historical context. Current
+feature status and evidence are maintained in the tables above and in
+`docs/rtl_coverage_registry.json`; project progress is tracked in
+`docs/rtl_conversion_roadmap.md`.
 
 1. ~~**Surface the silent risks first** — `casex` / `casez`.~~ Done: now in A with the mask/match if-else chain codegen.
 2. ~~**Pin the keyword variants** — `always_comb` / `always_ff` / `always_latch`.~~ Done: trace fixtures land them in A.
@@ -155,4 +162,4 @@ The roadmap below fed Phase 11 in `plan.md`. Each step landed as an isolated PR 
 9. ~~**`inout` ports.** Single-feature audit + fixture; needs to decide how to model bidirectional bus semantics under `SC_METHOD`.~~ Done: whole-vector `inout` ports use resolved SystemC vectors, high-Z RHS branches emit real `sc_lv` Z drives, and `inout_bus` verifies mutually exclusive external/DUT drivers across a hierarchical whole-bus binding.
 10. ~~**`interface` / `modport`.** Separate design doc first; large enough to warrant its own milestone.~~ Done for the simple packed-signal/modport subset: interface instances and ports flatten into ordinary `bus__field` signals/ports, verified by the `interface_modport` conversion fixture.
 
-Updated whenever a row in E / F / G moves into A, B, C, or D.
+This historical list is not a second progress tracker.

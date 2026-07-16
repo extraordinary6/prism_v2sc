@@ -4,7 +4,7 @@
 >
 > 说明：
 > - 该能力已经实现：`--power-static` 做静态嫌疑分析，`--power-instrument` 生成插桩 SystemC，`--power-profile-dump` / `--power-report` 生成 workload-scoped profile/report。
-> - 本文仍以方法学和诚实边界为主；命令入口示例见顶层 README 和 `examples/power_multimodule_demo/README.md`，实施记录见 `docs/plan2.md`。
+> - 本文聚焦功耗诊断方法和边界；命令入口见顶层 README 和 `examples/power_multimodule_demo/README.md`。项目总体进度见 `docs/rtl_conversion_roadmap.md`。
 > - 本文**不含新的实施计划 / 阶段排期**；方法学与计划分开维护。
 > - 阅读前置：`docs/correctness_strategy.md`（等价性如何建立）、`docs/known_differences.md`（生成 SystemC 的近似语义边界）。这两份文档直接决定了本方法学"能测什么、不能测什么"。
 

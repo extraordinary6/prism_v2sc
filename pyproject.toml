@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 prism-v2sc = "prism_v2sc.cli:main"
+prism-v2sc-project = "prism_v2sc.project:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

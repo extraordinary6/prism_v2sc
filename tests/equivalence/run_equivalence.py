@@ -1149,9 +1149,10 @@ def run_fixture(
     ld_flags = [flag for flag in os.environ.get("SC_LDFLAGS", "").split() if flag]
     libs = os.environ.get("SC_LIBS", "-lsystemc -lpthread").split()
     sc_include = sc_out_dir.resolve()
+    cxx_standard = os.environ.get("SC_CXX_STANDARD", "c++17")
     cxx_cmd = [
         cxx,
-        "-std=c++17",
+        f"-std={cxx_standard}",
         "-O0",
         "-g",
         f"-I{sc_include}",

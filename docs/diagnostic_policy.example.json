@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "fail_severities": ["error"],
+  "allow_codes": ["event_scheduler_approximated"],
+  "deny_codes": ["x_z_literal_approximated"]
+}

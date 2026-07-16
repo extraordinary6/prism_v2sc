@@ -15,13 +15,15 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="185 tests" src="https://img.shields.io/badge/tests-185%20collected-0EA5E9">
+  <img alt="214 tests" src="https://img.shields.io/badge/tests-214%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
 # prism_v2sc
 
 `prism_v2sc` 把可综合 Verilog / SystemVerilog RTL 子集转换成层级化、近似的 SystemC 模型。它会为每个从顶层可达的模块生成一个 `.hpp`，并镜像 RTL 源码目录结构。
+
+转换器只接收 Verilog/SystemVerilog RTL，不负责编译或转换 Chisel、FIRRTL、Scala 等 RTL 生成器源码。像香山这样的设计，只有在外部流程生成固定的 `.v`/`.sv` RTL 快照后，才属于本项目的输入范围。
 
 前端使用 [slang](https://sv-lang.com/) 和 [pyslang](https://pypi.org/project/pyslang/) 绑定。slang 会先对整个设计做解析和 elaboration，因此参数覆盖、`generate if`、`generate for` 和具体端口位宽都会在 lowering 之前解析完成。
 
@@ -255,6 +257,7 @@ python -m pytest -q
 
 ## 延伸阅读
 
+- `docs/README.md`：文档索引和推荐阅读入口。
 - `docs/correctness_strategy.md`：correctness 策略和 golden loop。
 - `docs/syntax_coverage.md`：已验证 RTL surface 和待支持内容。
 - `docs/known_differences.md`：相对完整 Verilog/SV 的已知语义差异。
@@ -262,7 +265,5 @@ python -m pytest -q
 - `docs/hardening_checks.md`：可复现的本地检查。
 - `docs/power_diagnostics.md`：RTL 功耗热点诊断方法学。
 - `docs/model_providers.md`：外部仿真模型 manifest 与 provider 框架。
-- `docs/pyslang_migration.md`：pyverilog 到 pyslang 的迁移记录。
-- `docs/plan.md`：converter phase 状态。
-- `docs/plan2.md`：power diagnostics 已完成实现清单。
+- `docs/rtl_conversion_roadmap.md`：当前四阶段能力建设路线和证据跟踪。
 - `verification/README.md`：更深入的 verification 工作区和真实设计检查。

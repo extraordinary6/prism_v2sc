@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "benchmarks": [
+    {
+      "name": "e203_cpu",
+      "domain": "cpu",
+      "source_root": "/home/MicroE/e203/e203_hbirdv2-master/rtl/e203",
+      "command": [".venv/bin/python", "verification/cases/consistency/e203_cpu_consistency.py"],
+      "contract": "architectural keypoints and DTCM results"
+    },
+    {
+      "name": "mhsa_accelerator",
+      "domain": "accelerator",
+      "source_root": "/home/MicroE/MHSA",
+      "command": [".venv/bin/python", "verification/cases/consistency/mhsa_keypoint_consistency.py"],
+      "contract": "transaction keypoints with approximate cycle timing"
+    },
+    {
+      "name": "ofdm_fft",
+      "domain": "dsp",
+      "source_root": "/home/MicroE/ai_proj/Simulation-and-FFT-Implementation-of-OFDM-Communication-System/hardware/src",
+      "command": [".venv/bin/python", "verification/cases/consistency/ofdm_fft_trace_consistency.py"],
+      "contract": "sampled FFT/IFFT output trace"
+    },
+    {
+      "name": "icb_apb_bridge",
+      "domain": "bus",
+      "source_root": "/home/MicroE/ai_proj/Design-and-Verification-of-ICB-to-APB-Bus-Bridge/uvm_project/my_design/rtl",
+      "command": [".venv/bin/python", "verification/cases/consistency/icb_apb_bridge_consistency.py"],
+      "contract": "protocol transaction event sequence"
+    },
+    {
+      "name": "tinynpu",
+      "domain": "accelerator",
+      "source_root": "/home/MicroE/ai_proj/TinyNPU",
+      "command": [".venv/bin/python", "verification/cases/consistency/tinynpu_consistency.py"],
+      "contract": "matrix result consistency"
+    },
+    {
+      "name": "memory_provider",
+      "domain": "model_provider",
+      "source_root": ".",
+      "command": [".venv/bin/python", "verification/cases/consistency/model_memory_provider_consistency.py"],
+      "contract": "read_first, write_first, and no_change behavior"
+    },
+    {
+      "name": "e203_icb_dma",
+      "domain": "dma",
+      "source_root": "/home/MicroE/ai_proj/DMA-Design-Based-on-E203-and-ICB-Bus/rtl",
+      "command": [".venv/bin/python", "verification/cases/consistency/dma_e203_consistency.py"],
+      "contract": "45-cycle configuration, ICB command, response, and IRQ trace"
+    }
+  ]
+}

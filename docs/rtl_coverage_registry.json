@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "evidence_policy": {
+    "supported": "requires a differential trace or a documented real-design gate",
+    "supported_with_warning": "requires a diagnostic fixture and documented limitation",
+    "modeled_by_provider": "requires an independent provider consistency test",
+    "rejected": "requires an error diagnostic fixture",
+    "not_tested": "must not be advertised as supported"
+  },
+  "features": [
+    {"id": "hierarchy", "status": "supported", "evidence": ["tests/equivalence/run_equivalence.py"]},
+    {"id": "filelists", "status": "supported", "evidence": ["tests/equivalence/fixtures/multi_file"]},
+    {"id": "always_ff_and_nba", "status": "supported", "evidence": ["tests/equivalence/fixtures/nba_chain.v", "tests/equivalence/fixtures/sv_always_ff.v"]},
+    {"id": "always_comb_and_latch", "status": "supported", "evidence": ["tests/equivalence/fixtures/latch_edges.v", "tests/equivalence/fixtures/blocking_comb_chain.v"]},
+    {"id": "packed_selects_and_concat", "status": "supported", "evidence": ["tests/equivalence/fixtures/part_select_assembly.v", "tests/equivalence/fixtures/slice_writers.v"]},
+    {"id": "signed_width_semantics", "status": "supported_with_warning", "evidence": ["tests/equivalence/fixtures/signed_mixed_context.sv", "docs/signed_mixed_semantics.md"]},
+    {"id": "simple_interfaces", "status": "supported", "evidence": ["tests/equivalence/fixtures/interface_modport.sv"]},
+    {"id": "memory_provider", "status": "modeled_by_provider", "evidence": ["verification/cases/consistency/model_memory_provider_consistency.py"]},
+    {"id": "assertions_and_verification_metadata", "status": "supported_with_warning", "evidence": ["tests/equivalence/fixtures/diagnostics/dynamic_sv_rejected.sv", "docs/known_differences.md"]},
+    {"id": "complex_interfaces", "status": "rejected", "evidence": ["tests/equivalence/fixtures/diagnostics/interface_complex_rejected.sv"]},
+    {"id": "real_runtime_datapath", "status": "not_tested", "evidence": []},
+    {"id": "vendor_timing_and_sdf", "status": "not_tested", "evidence": []}
+  ]
+}

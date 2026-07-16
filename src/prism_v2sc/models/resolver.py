@@ -55,7 +55,7 @@ def prepare_model_sources(
     decisions: list[SourceDecision] = []
     for source in sources:
         resolved = source.resolve()
-        category = _classify_source(resolved)
+        category = classify_source(resolved)
         matched = _matching_source_rule(resolved, manifest)
         action = matched.action if matched is not None else "include"
         reason = matched.reason if matched is not None else "automatic classification only"
@@ -210,7 +210,8 @@ def _matching_source_rule(path: Path, manifest: ModelManifest):
     return None
 
 
-def _classify_source(path: Path) -> str:
+def classify_source(path: Path) -> str:
+    """Conservatively classify a source without changing inclusion policy."""
     lowered_parts = {part.lower() for part in path.parts}
     lowered_name = path.name.lower()
     try:

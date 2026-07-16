@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "e203_cpu_example",
+  "output_root": "project_build",
+  "stages": [
+    {
+      "name": "cpu_core",
+      "top": "e203_cpu_top",
+      "filelists": ["sources.f"],
+      "model_manifest": "models.json"
+    }
+  ]
+}

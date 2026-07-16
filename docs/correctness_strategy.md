@@ -7,7 +7,7 @@
 | Layer | What it catches | Where |
 | --- | --- | --- |
 | Frontend diagnostics | Unknown modules, duplicate definitions, unsupported elaborated constructs. Sourced from slang itself plus the lowerer. | `DesignIR.diagnostics`; surfaced through the CLI summary; gate with `--fail-on-diagnostics`. |
-| Unit tests | IR lowering shape, codegen text, per-module file layout (mirror directory structure, post-order emission, positional binding resolution), expression coverage, hardening edges, subroutines, power analysis, instrumentation, and reporting. | `tests/`, run with `python -m pytest -q`. 185 tests at time of writing. |
+| Unit tests | IR lowering shape, codegen text, per-module file layout, expression coverage, diagnostics, model providers, staged projects, power analysis, instrumentation, and reporting. | `tests/`, run with `python -m pytest -q` (214 tests at the current baseline). |
 | Static generated-code checks | Obvious miscompile markers in the emitted SystemC (TODO comments, missing `<systemc>`, missing `SC_MODULE`). | `prism_v2sc.verify.static_checks.check_generated_systemc()`. |
 | Verilator lint integration | Cross-check against a second tool's frontend, capture its timing/memory. | Enable with `--compare-verilator`; output lands in `metrics.json`. |
 | **Differential RTL ↔ SystemC equivalence** | Sampled per-cycle output trace divergence between the original RTL (Icarus Verilog) and the generated SystemC (libsystemc-dev). | `.github/workflows/equivalence.yml` and `tests/equivalence/run_equivalence.py`. |

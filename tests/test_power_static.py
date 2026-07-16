@@ -236,7 +236,7 @@ endmodule
 
 
 def test_p0_examples(tmp_path: Path) -> None:
-    """Test the three P0 example modules from plan2.md."""
+    """Test the three baseline example modules used by static power analysis."""
     # Example 1: Wide register without enable
     wide_reg_rtl = tmp_path / "wide_reg_no_enable.v"
     wide_reg_rtl.write_text(

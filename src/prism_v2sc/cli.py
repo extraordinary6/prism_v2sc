@@ -18,6 +18,12 @@ from .power.cli import (
     run_power_report,
 )
 from .verify.harness import convert_with_metrics, write_report
+from .verify.conversion_audit import build_conversion_audit
+from .verify.diagnostic_policy import (
+    DiagnosticPolicy,
+    failing_diagnostics,
+    load_diagnostic_policy,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,6 +73,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-on-diagnostics",
         action="store_true",
         help="Exit non-zero when error-level unsupported construct diagnostics are found.",
+    )
+    parser.add_argument(
+        "--diagnostic-policy",
+        type=Path,
+        help="Version 1 JSON policy controlling allowed and fatal diagnostic codes.",
+    )
+    parser.add_argument(
+        "--conversion-audit",
+        type=Path,
+        help="Write a machine-readable conversion coverage and diagnostics audit report.",
     )
     parser.add_argument(
         "--model-manifest",
@@ -152,6 +168,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.model_audit:
         model_manifest = ModelManifest()
 
+    diagnostic_policy = DiagnosticPolicy()
+    if args.diagnostic_policy is not None:
+        try:
+            diagnostic_policy = load_diagnostic_policy(args.diagnostic_policy)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+
     if model_manifest is not None and (args.power_static or args.power_instrument is not None):
         parser.error(
             "--model-manifest/--model-audit is not yet supported with "
@@ -205,6 +228,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"wrote model resolution report: {model_report_path}")
 
+    policy_failures = failing_diagnostics(design.diagnostics, diagnostic_policy)
+    if args.conversion_audit is not None:
+        audit = build_conversion_audit(
+            design,
+            source_set.sources,
+            emitted_files=artifacts.emitted_files,
+            model_report=artifacts.model_report,
+            policy_path=diagnostic_policy.path,
+            policy_failures=policy_failures,
+        )
+        args.conversion_audit.parent.mkdir(parents=True, exist_ok=True)
+        args.conversion_audit.write_text(
+            json.dumps(audit.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"wrote conversion audit: {args.conversion_audit}")
+
     if args.metrics or args.compare_verilator:
         metrics_path = args.out / "metrics.json"
         write_report(artifacts.report, metrics_path)
@@ -214,6 +254,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         error_count = sum(1 for diagnostic in design.diagnostics if diagnostic.severity == "error")
         warning_count = len(design.diagnostics) - error_count
         print(f"diagnostics: {error_count} error(s), {warning_count} warning(s)")
+        if args.diagnostic_policy is not None and policy_failures:
+            return 2
         if args.fail_on_diagnostics and error_count:
             return 2
     return 0

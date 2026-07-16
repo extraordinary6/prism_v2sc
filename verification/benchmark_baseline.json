@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "evidence_type": "documented_regression_baseline",
+  "limitations": [
+    "A baseline entry records the last documented real-design gate; it is not a claim that every run has the same external checkout or EDA environment.",
+    "Cycle contracts are design-specific: CPU and accelerator entries use keypoints, while FFT and bus entries use sampled traces or protocol events."
+  ],
+  "benchmarks": [
+    {"name": "e203_cpu", "status": "passed", "evidence": "verification/notes/e203_cpu_real_design_eval.md", "scenarios": 6},
+    {"name": "mhsa_accelerator", "status": "passed", "evidence": "verification/notes/mhsa_icb_real_design_eval.md", "keypoint_groups": 3},
+    {"name": "ofdm_fft", "status": "passed", "evidence": "verification/notes/ofdm_fft_real_design_eval.md", "cases": 9},
+    {"name": "icb_apb_bridge", "status": "passed", "evidence": "verification/notes/icb_apb_bridge_real_design_eval.md", "events": 36},
+    {"name": "tinynpu", "status": "passed", "evidence": "verification/notes/tinynpu_real_design_eval.md", "array_sizes": [4, 8]},
+    {"name": "memory_provider", "status": "passed", "evidence": "verification/cases/consistency/model_memory_provider_consistency.py", "modes": 3},
+    {"name": "e203_icb_dma", "status": "passed", "evidence": "verification/notes/dma_e203_real_design_eval.md", "sampled_cycles": 45, "rtl_findings": 5}
+  ]
+}

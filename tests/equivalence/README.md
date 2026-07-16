@@ -145,6 +145,7 @@ For non-standard SystemC installs:
 | --- | --- | --- |
 | `CXX` | C++ compiler | `g++` |
 | `SC_CXXFLAGS` | extra compile flags (e.g. `-I/opt/systemc/include`) | empty |
+| `SC_CXX_STANDARD` | C++ language mode matching the installed SystemC ABI | `c++17` |
 | `SC_LDFLAGS` | extra link flags (e.g. `-L/opt/systemc/lib`) | empty |
 | `SC_LIBS` | link libraries | `-lsystemc -lpthread` |
 | `VCS` | VCS executable used by `--rtl-sim vcs` | `vcs` |

@@ -43,6 +43,16 @@ per reachable module under `generated/`. The model manifest replaces
 the parameterized `sirv_sim_ram` simulation model with the configured memory
 provider; the RTL source itself is unchanged.
 
+The same design is also available as a project-level staged conversion:
+
+```bash
+.venv/bin/python -m prism_v2sc.project examples/e203_cpu/project.json
+```
+
+This writes the generated stage, its `conversion_audit.json`, and a project
+summary to `examples/e203_cpu/project_build/`. The project manifest format is
+intended for larger repositories with multiple ordered subsystem stages.
+
 For a quick compile check with the project's SystemC installation:
 
 ```bash
