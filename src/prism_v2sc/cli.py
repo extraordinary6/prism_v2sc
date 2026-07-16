@@ -9,6 +9,7 @@ from typing import Sequence
 
 from .frontend.flow import compute_source_root
 from .frontend.preprocess import collect_sources
+from .models.manifest import ModelManifest, load_model_manifest
 from . import __version__
 from .power.cli import (
     add_power_arguments,
@@ -66,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-on-diagnostics",
         action="store_true",
         help="Exit non-zero when error-level unsupported construct diagnostics are found.",
+    )
+    parser.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="JSON/TOML external-model manifest for source filtering and provider replacement.",
+    )
+    parser.add_argument(
+        "--model-audit",
+        action="store_true",
+        help="Classify input sources and write model_report.json even without replacement rules.",
     )
     parser.add_argument(
         "--version",
@@ -132,6 +143,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
 
+    model_manifest: ModelManifest | None = None
+    if args.model_manifest is not None:
+        try:
+            model_manifest = load_model_manifest(args.model_manifest)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+    elif args.model_audit:
+        model_manifest = ModelManifest()
+
+    if model_manifest is not None and (args.power_static or args.power_instrument is not None):
+        parser.error(
+            "--model-manifest/--model-audit is not yet supported with "
+            "--power-static or --power-instrument"
+        )
+
     if not source_set.sources:
         parser.error("no Verilog source files resolved from positional inputs and filelists")
 
@@ -156,6 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         compare_verilator=args.compare_verilator,
         out_dir=args.out,
         source_root=source_root,
+        model_manifest=model_manifest,
     )
     design = artifacts.design
     payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)
@@ -169,6 +196,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"wrote Phase 1 IR: {ir_path}")
     for emitted in artifacts.emitted_files:
         print(f"wrote SystemC module: {emitted}")
+
+    if artifacts.model_report is not None:
+        model_report_path = args.out / "model_report.json"
+        model_report_path.write_text(
+            json.dumps(artifacts.model_report.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"wrote model resolution report: {model_report_path}")
 
     if args.metrics or args.compare_verilator:
         metrics_path = args.out / "metrics.json"

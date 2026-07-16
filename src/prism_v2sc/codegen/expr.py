@@ -82,6 +82,7 @@ class ModuleContext:
     enum_widths: dict[str, int] = field(default_factory=dict)
     loop_vars: frozenset[str] = field(default_factory=frozenset)
     local_names: frozenset[str] = field(default_factory=frozenset)
+    packed_vector_names: frozenset[str] = field(default_factory=frozenset)
     # Signals declared with one or more unpacked dimensions (e.g. memories
     # like ``reg [7:0] mem [0:15]``). Such signals are emitted as a C
     # array of ``sc_signal`` cells, so ``sig[i]`` reads/writes route to
@@ -107,6 +108,7 @@ class ModuleContext:
             enum_widths=self.enum_widths,
             loop_vars=frozenset(self.loop_vars | {name}),
             local_names=self.local_names,
+            packed_vector_names=self.packed_vector_names,
             array_signal_names=self.array_signal_names,
             array_dimensions=self.array_dimensions,
             array_bounds=self.array_bounds,
@@ -131,6 +133,7 @@ class ModuleContext:
             enum_widths=self.enum_widths,
             loop_vars=self.loop_vars,
             local_names=frozenset(self.local_names | names),
+            packed_vector_names=self.packed_vector_names,
             array_signal_names=self.array_signal_names,
             array_dimensions=self.array_dimensions,
             array_bounds=self.array_bounds,
@@ -175,6 +178,7 @@ class ModuleContext:
             enum_widths=self.enum_widths,
             loop_vars=self.loop_vars,
             local_names=frozenset(local_names),
+            packed_vector_names=self.packed_vector_names,
             array_signal_names=frozenset(array_signal_names),
             array_dimensions=array_dimensions,
             array_bounds=array_bounds,
@@ -196,19 +200,22 @@ def build_module_context(
 
     for parameter in module.parameters:
         parameter_names.add(parameter.name)
-        const = _parse_const_literal(parameter.value)
+        const = _eval_text(parameter.value, parameter_values)
         if const is not None:
             parameter_values[parameter.name] = const
 
     enum_values, enum_widths = _flatten_enum_values(module.type_aliases)
 
     array_signal_names: set[str] = set()
+    packed_vector_names: set[str] = set()
     array_dimensions: dict[str, tuple[int, ...]] = {}
     array_bounds: dict[str, tuple[tuple[int, int], ...]] = {}
     for port in module.ports:
         signal_names.add(port.name)
         signal_widths[port.name] = _port_width(port, parameter_values)
         signal_signedness[port.name] = bool(port.signed)
+        if port.width is not None:
+            packed_vector_names.add(port.name)
         if getattr(port, "unpacked_dims", ()):
             array_signal_names.add(port.name)
             array_dimensions[port.name] = _array_dim_sizes(port.unpacked_dims)
@@ -217,6 +224,8 @@ def build_module_context(
         signal_names.add(signal.name)
         signal_widths[signal.name] = _signal_width(signal, parameter_values)
         signal_signedness[signal.name] = bool(signal.signed)
+        if signal.width is not None:
+            packed_vector_names.add(signal.name)
         if getattr(signal, "unpacked_dims", ()):
             array_signal_names.add(signal.name)
             array_dimensions[signal.name] = _array_dim_sizes(signal.unpacked_dims)
@@ -230,6 +239,7 @@ def build_module_context(
         parameter_values=parameter_values,
         enum_values=enum_values,
         enum_widths=enum_widths,
+        packed_vector_names=frozenset(packed_vector_names),
         array_signal_names=frozenset(array_signal_names),
         array_dimensions=array_dimensions,
         array_bounds=array_bounds,
@@ -342,6 +352,13 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
                 left = f"{common_type}({left})"
                 right = f"{common_type}({right})"
         cpp_op = _CPP_BINARY_OP_MAP.get(op, op)
+        if op in {"/", "%"}:
+            # A network of continuous assignments can briefly expose a zero
+            # denominator in an intermediate SystemC delta cycle even when
+            # the settled RTL expression guards that case. Verilog produces
+            # an unknown result for a genuine divide-by-zero; the converter's
+            # two-state policy maps that transient/unknown value to zero.
+            return f"(({right} == 0) ? 0 : ({left} {cpp_op} {right}))"
         result = f"({left} {cpp_op} {right})"
         if op == "^~":
             result = f"(~{result})"
@@ -385,7 +402,11 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
         return f"{target_str}[{index_str}]"
     if kind == "partselect":
-        target_str = _render_aggregate_rvalue(expr.get("target"), ctx, staged_names=staged_names)
+        target_node = expr.get("target")
+        target_str = _render_aggregate_rvalue(target_node, ctx, staged_names=staged_names)
+        if isinstance(target_node, dict) and target_node.get("kind") == "intconst":
+            target_width = max(1, infer_width(target_node, ctx), infer_width(expr, ctx))
+            target_str = f"{systemc_int_type(target_width)}({target_str})"
         msb = render_rvalue(expr.get("msb"), ctx, staged_names=staged_names)
         lsb = render_rvalue(expr.get("lsb"), ctx, staged_names=staged_names)
         width = max(1, infer_width(expr, ctx))
@@ -801,6 +822,10 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
         # answer there would be ambiguous and we must keep ``~``.
         if _is_definitely_one_bit(operand_node, ctx):
             return f"(!{operand_text})"
+        width = infer_width(operand_node, ctx)
+        if width > 1:
+            value_type = systemc_int_type(width)
+            return f"{value_type}(~{value_type}({operand_text}))"
         return f"(~{operand_text})"
     if op == "-":
         return f"(-{operand_text})"
@@ -910,7 +935,8 @@ def _format_intconst(expr: dict[str, Any]) -> str:
             return f"0b{digits}"
         if base == 8:
             return f"0{digits}"
-        return digits
+        value = expr.get("value", 0)
+        return str(value) if isinstance(value, int) else "0"
     value = expr.get("value", 0)
     if not isinstance(value, int):
         return "0"

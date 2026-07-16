@@ -124,6 +124,15 @@ FIXTURES: tuple[Fixture, ...] = (
         cycles=64,
     ),
     Fixture(
+        name="net_decl_assign",
+        sources=("net_decl_assign.v",),
+        top="net_decl_assign",
+        inputs=(Port("a", 1), Port("b", 1), Port("data", 4)),
+        outputs=(Port("y", 4),),
+        sequential=False,
+        cycles=128,
+    ),
+    Fixture(
         name="alu",
         sources=("alu.v",),
         top="alu",

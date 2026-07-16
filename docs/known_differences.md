@@ -22,6 +22,9 @@
 - X/Z values inside non-`inout` literals are approximated as zero in generated C++ expressions and emit `x_z_literal_approximated` diagnostics; `xz_logic_rejected` pins that this is a warning contract, not a trace-equivalent claim. The IR records `has_xz=true` so downstream tooling can still see the original intent.
 - Real-valued constant expressions are supported only when slang inserts an implicit conversion to an integral target; codegen preserves slang's converted integer value. Runtime `real` / `shortreal` storage and datapaths remain outside the supported subset.
 - Signed declarations and explicit signedness casts lower to `sc_int<W>` / `sc_uint<W>` for widths up to 64 bits and `sc_bigint<W>` / `sc_biguint<W>` beyond that. The implementation preserves signed based literals such as `8'shFF` as a signed value for codegen while keeping the raw bit pattern in IR. Mixed signed/unsigned equality and relational comparisons normalize both operands to a common unsigned bit width; full context sizing for every arithmetic/nested expression is still not exhaustively modeled.
+- Verilog net declaration assignments such as `wire enable = a & b;` are lowered as implicit continuous assignments. Sized literals remain width-preserving even when slang reports their syntax with wrapping parentheses.
+- Division and modulo guard a zero denominator in generated C++ to avoid host `SIGFPE` during intermediate SystemC delta cycles. A genuine RTL divide-by-zero is four-state/unknown at the expression level; the generated two-state model maps that intermediate value to zero unless surrounding RTL logic selects an architecturally defined special-case result.
+- Bitwise complement on a known multi-bit operand is explicitly width-cast before and after `~`, avoiding C++ integral promotion and arithmetic-shift behavior for expressions such as `(~32'b0) >> n`.
 
 ## Selects and Bindings
 
@@ -31,6 +34,7 @@
 - Concatenation LHS assignments split into assignments to the constituent targets.
 - `generate` bit-select bindings (`vector[i]` in port maps under a generate-for) use generated scalar bridge signals.
 - Direct instance bit-select bindings (`vector[constant]` / `vector[index]` in port maps) also use scalar bridge signals.
+- Multiple child output bit/part-select bindings targeting disjoint slices of one parent vector are assembled by one `SC_METHOD`; SystemC otherwise treats each slice bridge as a separate driver of the whole `sc_signal`.
 - Non-net expression input bindings, array-element port bindings, and simple parent/child bindings with different packed widths use generated bridge signals. Width bridges apply the child input or parent output assignment width explicitly, matching RTL truncation/extension while keeping SystemC port types bindable. Unconnected child outputs use dummy signals.
 - Positional port bindings (e.g. ``mod u(a, b, c);``) are resolved against the child's cached signature, recovering port names by position. Named bindings remain the recommended style.
 
@@ -52,6 +56,13 @@
 - Dynamic SV (classes, randomization, programs) is out of scope and surfaces as diagnostics rather than partial lowering. Verification-only assertion/property/sequence metadata and assertion statements are ignored in the synthesizable design view; UVM/testbench sources should not be included in the RTL source set.
 - Tasks and system-task expression statements are out of scope; `task_system_task_rejected` pins both the task diagnostic and the unsupported expression-statement diagnostic.
 - The supported SV surface now includes typedefs/enums, packed structs/unions, packages/imports, procedural `for`, unpacked-array memories, multidimensional unpacked-array cases used by the MHSA real design, whole-vector `inout`, and a simple packed-signal `interface`/`modport` flattening subset. More complex SV constructs remain queued; see `plan.md`.
+
+## External Simulation Models
+
+- `--model-manifest` can explicitly ignore source files or replace reachable modules through registered providers. Automatic path/content classification is audit-only and never removes a source by itself.
+- The built-in memory provider models one-cycle synchronous single-port memories with `read_first`, `write_first`, or `no_change` behavior. It also supports the E203-style masked-write contract with parameterized depth, configurable lane width, registered read address, and `no_change` writes. A parameterized depth without that masked contract is rejected explicitly. Independent read/write ports, true dual-port collision policy, initialization files, and longer read pipelines remain rejected.
+- The blackbox provider is non-functional by definition. Strict manifests reject it unless the rule explicitly sets `config.allow=true`; allowed blackboxes still emit a warning.
+- Vendor timing models, UDPs, analog behavior, SDF/specify timing, force/release, and DPI/PLI behavior are not claimed equivalent. They require a dedicated provider or remain an error-level gap.
 
 ## Policy
 

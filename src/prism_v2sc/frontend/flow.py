@@ -27,7 +27,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -111,13 +112,20 @@ def lower_design_top_down(
     from .pyslang_parser import parse_sources
 
     index_start = time.perf_counter()
-    compilation = parse_sources(sources, include_dirs=include_dirs, defines=defines)
+    compilation = parse_sources(sources, include_dirs=include_dirs, defines=defines, top=top)
     source_index_elapsed = time.perf_counter() - index_start
 
     root = compilation.getRoot()
     top_instances = [ti for ti in root.topInstances if ti.definition.name == top]
     if not top_instances:
-        known = ", ".join(sorted({ti.definition.name for ti in root.topInstances})) or "<none>"
+        definitions = getattr(compilation, "getDefinitions", lambda: ())()
+        known_names = {
+            str(getattr(definition, "name", ""))
+            for definition in definitions
+            if getattr(definition, "name", "")
+        }
+        known_names.update(ti.definition.name for ti in root.topInstances)
+        known = ", ".join(sorted(known_names)) or "<none>"
         raise ValueError(f"top module '{top}' not found; known modules: {known}")
 
     traversal_start = time.perf_counter()
@@ -130,30 +138,59 @@ def lower_design_top_down(
     emitted: set[str] = set()
     diagnostics_extra: list[DiagnosticIR] = list(_collect_slang_diagnostics(compilation))
     source_manager = compilation.sourceManager
+    parameter_variants: dict[str, dict[str, tuple]] = {}
 
-    def visit(instance) -> None:
+    def collect_variants(instance) -> None:
+        signature = sv_extract_signature(instance)
+        parameter_variants.setdefault(instance.definition.name, {})[
+            _parameter_payload(signature.parameters)
+        ] = signature.parameters
+        for child in _pyslang_child_instances(instance):
+            collect_variants(child)
+
+    for top_instance in top_instances:
+        collect_variants(top_instance)
+    specialized_definitions = {
+        name for name, variants in parameter_variants.items() if len(variants) > 1
+    }
+
+    def visit(instance, *, is_root: bool = False) -> None:
         definition_name = instance.definition.name
-        if definition_name in visited:
+        lowered_module = sv_lower_module(instance, source_manager=source_manager)
+        specialization_name = (
+            definition_name
+            if is_root
+            else _specialized_module_name(
+                definition_name,
+                lowered_module.parameters,
+                specialized_definitions,
+            )
+        )
+        if specialization_name in visited:
             return
-        visited.add(definition_name)
+        visited.add(specialization_name)
         # Cache the signature *before* descending into children so a parent
         # whose port list references this child gets the binding info.
-        if definition_name not in signatures:
-            signatures[definition_name] = sv_extract_signature(instance)
-        if definition_name not in lowered:
-            lowered[definition_name] = sv_lower_module(instance, source_manager=source_manager)
-            discovery_order.append(definition_name)
+        signature = sv_extract_signature(instance)
+        signatures[specialization_name] = replace(signature, name=specialization_name)
+        lowered_module = _specialize_module_references(
+            replace(lowered_module, name=specialization_name),
+            specialized_definitions,
+            parameter_variants,
+        )
+        lowered[specialization_name] = lowered_module
+        discovery_order.append(specialization_name)
         for child in _pyslang_child_instances(instance):
             visit(child)
         # Bottom-up emit: parent's hpp lands only after every child is on disk.
-        if definition_name not in emitted:
-            emitted.add(definition_name)
+        if specialization_name not in emitted:
+            emitted.add(specialization_name)
             if emit_callback is not None:
-                emit_callback(lowered[definition_name], signatures)
-                emit_order.append(definition_name)
+                emit_callback(lowered[specialization_name], signatures)
+                emit_order.append(specialization_name)
 
     for top_instance in top_instances:
-        visit(top_instance)
+        visit(top_instance, is_root=True)
 
     traversal_elapsed = time.perf_counter() - traversal_start
 
@@ -179,6 +216,66 @@ def lower_design_top_down(
         traversal_elapsed_seconds=traversal_elapsed,
         signatures=signatures,
         emit_order=tuple(emit_order),
+    )
+
+
+def _parameter_payload(parameters) -> str:
+    return "\x1f".join(f"{parameter.name}={parameter.value}" for parameter in parameters)
+
+
+def _specialized_module_name(name: str, parameters, specialized_definitions: set[str]) -> str:
+    if name not in specialized_definitions:
+        return name
+    payload = _parameter_payload(parameters)
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
+    return f"{name}__prism_p_{digest}"
+
+
+def _specialize_module_references(
+    module: ModuleIR,
+    specialized_definitions: set[str],
+    parameter_variants: dict[str, dict[str, tuple]],
+) -> ModuleIR:
+    def specialize_instance(instance):
+        original_module = instance.module
+        parameters = instance.parameters
+        if instance.module in specialized_definitions:
+            explicit = {parameter.name: parameter.value for parameter in instance.parameters}
+            candidates = [
+                candidate
+                for candidate in parameter_variants.get(instance.module, {}).values()
+                if all(
+                    any(item.name == name and item.value == value for item in candidate)
+                    for name, value in explicit.items()
+                )
+            ]
+            if len(candidates) == 1:
+                parameters = candidates[0]
+        instance_name = instance.name
+        if instance_name == original_module:
+            instance_name = f"{instance_name}__inst"
+        return replace(
+            instance,
+            name=instance_name,
+            module=_specialized_module_name(
+                original_module,
+                parameters,
+                specialized_definitions,
+            ),
+        )
+
+    return replace(
+        module,
+        instances=tuple(specialize_instance(instance) for instance in module.instances),
+        generate_fors=tuple(
+            replace(
+                generate_for,
+                instances=tuple(
+                    specialize_instance(instance) for instance in generate_for.instances
+                ),
+            )
+            for generate_for in module.generate_fors
+        ),
     )
 
 

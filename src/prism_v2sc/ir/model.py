@@ -219,6 +219,7 @@ class ModuleIR:
     subroutines: tuple[SubroutineIR, ...] = field(default_factory=tuple)
     diagnostics: tuple[DiagnosticIR, ...] = field(default_factory=tuple)
     source_path: str = ""
+    model: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

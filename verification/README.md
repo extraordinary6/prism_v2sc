@@ -29,6 +29,14 @@
   RTL(VCS)、generated SystemC 与独立 Python golden 三方一致性检查；覆盖
   APB、SRAM loader、GEMM、K/N tiling、bias、ReLU、全局/逐通道重定量、
   back-to-back job、OFM 写事件和非法维度错误路径。
+- `cases/consistency/model_memory_provider_consistency.py` - 对内置 memory
+  provider 运行 RTL(VCS) vs generated SystemC 契约级差分检查，覆盖同步单口
+  memory 的 `read_first`、`write_first` 和 `no_change` 三种同地址写行为。
+- `cases/consistency/e203_cpu_consistency.py` - 引用外部
+  `/home/MicroE/e203/e203_hbirdv2-master/rtl/e203`，使用固定 filelist 和 model
+  manifest 转换 `e203_cpu_top`，一次编译后运行 6 个 RV32 程序场景；比较关键
+  PC 首次出现顺序和 10 个 DTCM 结果点，覆盖 ALU/分支、M 扩展、byte/halfword
+  访存、CSR 和 timer interrupt trap，不要求逐拍响应完全相同。
 - `notes/mhsa_icb_real_design_eval.md` - 记录 MHSA ICB smoke/keypoint 结果、
   已修复的真实设计问题、当前证明范围和后续建议。
 - `notes/ofdm_fft_real_design_eval.md` - 记录 OFDM FFT/IFFT smoke 结果、
@@ -37,6 +45,8 @@
   一致性结果、修复项和当前证明边界。
 - `notes/tinynpu_real_design_eval.md` - 记录 tinyNPU 4x4/8x8 三方一致性结果、
   真实设计暴露的转换器缺陷、warning 分类和当前证明边界。
+- `notes/e203_cpu_real_design_eval.md` - 记录 E203 大型层次转换、外部 memory
+  provider 契约、6 个 CPU 执行场景、修复项和当前证明边界。
 
 本目录按可综合设计视图工作：assertion/property/sequence、bind 和 UVM/testbench
 内容不属于转换目标。用例应只把 RTL design sources 交给 converter；若验证宏与

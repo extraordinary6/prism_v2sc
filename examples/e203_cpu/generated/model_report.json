@@ -1,0 +1,416 @@
+{
+  "available_providers": [
+    "blackbox",
+    "memory"
+  ],
+  "diagnostics": [
+    {
+      "code": "model_memory_applied",
+      "message": "module 'sirv_sim_ram__prism_p_b04ccb5636' replaced by canonical masked synchronous memory model depth=DP, lane_width=8, registered read address",
+      "module": "sirv_sim_ram__prism_p_b04ccb5636",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'sirv_sim_ram__prism_p_9bd6deb606' replaced by canonical masked synchronous memory model depth=DP, lane_width=8, registered read address",
+      "module": "sirv_sim_ram__prism_p_9bd6deb606",
+      "node": "memory",
+      "severity": "warning"
+    }
+  ],
+  "manifest_path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/models.json",
+  "manifest_version": 1,
+  "modules": [
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": 8,
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "sirv_sim_ram__prism_p_b04ccb5636",
+      "provider": "memory",
+      "reason": "replace the parameterized simulation SRAM with the configured two-state memory model",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": 8,
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "sirv_sim_ram__prism_p_9bd6deb606",
+      "provider": "memory",
+      "reason": "replace the parameterized simulation SRAM with the configured two-state memory model",
+      "status": "applied"
+    }
+  ],
+  "sources": [
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/config.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_biu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_clk_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_clkgate.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_core.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_cpu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_cpu_top.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_defines.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_dtcm_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_dtcm_ram.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_extend_csr.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_bjp.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_csrctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_dpath.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_lsuagu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_muldiv.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_alu_rglr.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_branchslv.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_commit.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "verification_candidate",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_csr.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_decode.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_disp.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_excp.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_longpwbck.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_nice.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_oitf.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_regfile.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_exu_wbck.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_ifu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_ifu_ifetch.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_ifu_ift2icb.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_ifu_litebpu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_ifu_minidec.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_irq_sync.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_itcm_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_itcm_ram.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_lsu.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_lsu_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_reset_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "memory_model_candidate",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/core/e203_srams.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "memory_model_candidate",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_1cyc_sram_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_gnrl_bufs.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_gnrl_dffs.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_gnrl_icbs.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_gnrl_ram.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_gnrl_xchecker.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_sim_ram.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "memory_model_candidate",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/general/sirv_sram_icb_ctrl.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e203_cpu/rtl/e203/subsys/e203_subsys_nice_core.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    }
+  ],
+  "strict": true
+}

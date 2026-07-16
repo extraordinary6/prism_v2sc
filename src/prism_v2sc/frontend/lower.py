@@ -134,7 +134,14 @@ def lower_design(compilation: Any, top: str) -> DesignIR:
     root = compilation.getRoot()
     top_instances = [ti for ti in root.topInstances if ti.definition.name == top]
     if not top_instances:
-        known = ", ".join(sorted({ti.definition.name for ti in root.topInstances})) or "<none>"
+        definitions = getattr(compilation, "getDefinitions", lambda: ())()
+        known_names = {
+            str(getattr(definition, "name", ""))
+            for definition in definitions
+            if getattr(definition, "name", "")
+        }
+        known_names.update(ti.definition.name for ti in root.topInstances)
+        known = ", ".join(sorted(known_names)) or "<none>"
         raise ValueError(f"top module '{top}' not found; top instances: {known}")
 
     source_manager = compilation.sourceManager
@@ -190,6 +197,10 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
             port = _lower_port(member, source_manager)
             ports.append(port)
             port_names.add(port.name)
+            if getattr(member, "isNetPort", False):
+                initializer_assign = _lower_net_initializer_assign(member, source_manager)
+                if initializer_assign is not None:
+                    continuous_assigns.append(initializer_assign)
         elif kind == "MultiPortSymbol":
             diagnostics.append(
                 _diagnostic(name, "unsupported_multiport", "multi-ports are not supported", "PortSymbol")
@@ -211,6 +222,9 @@ def lower_module(instance: Any, *, source_manager: Any = None, source_path: str 
         elif kind == "NetSymbol":
             if member.name not in port_names:
                 signals.append(_lower_net(member, source_manager))
+            initializer_assign = _lower_net_initializer_assign(member, source_manager)
+            if initializer_assign is not None:
+                continuous_assigns.append(initializer_assign)
         elif kind == "VariableSymbol":
             if member.name not in port_names:
                 signals.append(_lower_variable(member, source_manager))
@@ -966,6 +980,37 @@ def _lower_continuous_assign(
     )
 
 
+def _lower_net_initializer_assign(
+    net: Any,
+    source_manager: Any = None,
+    *,
+    target_name: str | None = None,
+) -> ContinuousAssignIR | None:
+    """Lower ``wire name = expr`` as its Verilog continuous assignment.
+
+    slang exposes a net declaration initializer on ``NetSymbol.initializer``
+    rather than as a ``ContinuousAssignSymbol``.  It is semantically an
+    implicit continuous assignment, so dropping it can disable clocks and
+    other control logic while leaving the generated model compilable.
+    """
+    initializer = getattr(net, "initializer", None)
+    if initializer is None:
+        return None
+    if str(getattr(initializer, "kind", "")).rsplit(".", 1)[-1] == "Invalid":
+        return None
+    name = target_name or str(getattr(net, "name", ""))
+    if not name:
+        return None
+    loc = _extract_source_loc(net, source_manager) if source_manager else None
+    return ContinuousAssignIR(
+        left=name,
+        right=_render_expression(initializer),
+        left_expr={"kind": "identifier", "name": name},
+        right_expr=_lower_expression(initializer),
+        loc=loc,
+    )
+
+
 def _lower_procedural_block(
     block: Any,
     module_name: str,
@@ -1699,7 +1744,15 @@ def _walk_generate_block(
             kind = type(member).__name__
             if kind == "NetSymbol" and member.name not in port_names:
                 signal = _lower_net(member, source_manager)
-                signals.append(replace(signal, name=local_names.get(signal.name, signal.name)))
+                target_name = local_names.get(signal.name, signal.name)
+                signals.append(replace(signal, name=target_name))
+                initializer_assign = _lower_net_initializer_assign(
+                    member,
+                    source_manager,
+                    target_name=target_name,
+                )
+                if initializer_assign is not None:
+                    continuous_assigns.append(initializer_assign)
             elif kind == "VariableSymbol" and member.name not in port_names:
                 signal = _lower_variable(member, source_manager)
                 signals.append(replace(signal, name=local_names.get(signal.name, signal.name)))
@@ -2299,14 +2352,38 @@ def _digits_to_int(digits: str, base: int) -> int:
         return 0
 
 
+def _strip_balanced_outer_parentheses(text: str) -> str:
+    """Remove parentheses that wrap an entire literal token."""
+    result = text.strip()
+    while result.startswith("(") and result.endswith(")"):
+        depth = 0
+        wraps_all = True
+        for index, char in enumerate(result):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(result) - 1:
+                    wraps_all = False
+                    break
+            if depth < 0:
+                wraps_all = False
+                break
+        if not wraps_all or depth != 0:
+            break
+        result = result[1:-1].strip()
+    return result
+
+
 def _lower_integer_literal(literal: Any) -> dict[str, Any]:
     syntax = getattr(literal, "syntax", None)
     text = str(syntax).strip() if syntax is not None else ""
-    sized = _SIZED_LITERAL.match(text)
-    unsized = _UNSIZED_LITERAL.match(text)
+    parse_text = _strip_balanced_outer_parentheses(text)
+    sized = _SIZED_LITERAL.match(parse_text)
+    unsized = _UNSIZED_LITERAL.match(parse_text)
     width = None
     base = 10
-    digits = text
+    digits = parse_text
     has_xz = False
     signed = False
     if sized:
@@ -2321,7 +2398,7 @@ def _lower_integer_literal(literal: Any) -> dict[str, Any]:
         digits = unsized.group("digits").replace("_", "")
         has_xz = bool(re.search(r"[xXzZ?]", digits))
     else:
-        digits = text.replace("_", "")
+        digits = parse_text.replace("_", "")
     value = getattr(literal, "value", None)
     if value is not None:
         bit_width = getattr(value, "bitWidth", None)

@@ -63,6 +63,8 @@ python -m prism_v2sc --top top_datapath `
 | `--metrics` | 写出包含耗时、内存和遍历计数的 `metrics.json`。 |
 | `--compare-verilator` | 对同一批输入运行 best-effort `verilator --lint-only` 并记录耗时。 |
 | `--fail-on-diagnostics` | 出现 error-level diagnostics 时返回退出码 `2`。 |
+| `--model-manifest <json/toml>` | 应用显式源码过滤和外部模型 provider，并写出 `model_report.json`。 |
+| `--model-audit` | 不替换模块，只分类模型/testbench 候选并写出 `model_report.json`。 |
 | `--version` | 打印包版本。 |
 
 filelist 支持：
@@ -107,6 +109,7 @@ rtl/top.v
 ```text
 build/systemc/
 |-- ir.json
+|-- model_report.json       # 可选的模型 manifest/audit 输出
 |-- <module>.hpp
 `-- <nested>/<module>.hpp
 ```
@@ -117,8 +120,9 @@ build/systemc/
 
 1. slang 一次性读取所有源文件并创建 elaborated `Compilation`。
 2. `prism_v2sc` 从 `--top` 指定的 instance tree 开始遍历，只把可达模块 lowering 成 `ModuleIR`。
-3. Codegen 按后序 DFS 写出每个模块的 `.hpp`，因此父模块引用子模块 header 时，子模块文件已经存在。
-4. slang 和 lowerer 产生的 diagnostics 会保存在 IR 中，并在运行结束时汇总。
+3. 启用 model manifest 时，显式 provider 会把匹配模块替换成规范化 `ModuleIR`，并把全部决策记录到 `model_report.json`。
+4. Codegen 按后序 DFS 写出每个模块的 `.hpp`，因此父模块引用子模块 header 时，子模块文件已经存在。
+5. slang、lowerer 和 model provider 产生的 diagnostics 会保存在 IR 中，并在运行结束时汇总。
 
 ## 示例
 
@@ -247,7 +251,7 @@ python -m pytest -q
 
 本地 trace-equivalence 和动态功耗 smoke 需要 SystemC headers 和 libraries。没有 `<systemc>` 的机器可以本地运行 Python unit suite，并依赖 Linux CI 做最终 SystemC compile/run 检查。
 
-更深入的探索性验证和真实设计检查放在 `verification/` 下，包括外部 MHSA、OFDM FFT/IFFT、带 interface 的 ICB-to-APB bridge，以及 4x4/8x8 tinyNPU 加速器转换和一致性 gate。
+更深入的探索性验证和真实设计检查放在 `verification/` 下，包括外部 MHSA、OFDM FFT/IFFT、带 interface 的 ICB-to-APB bridge、4x4/8x8 tinyNPU，以及 E203 CPU 转换和一致性 gate。E203 使用 model provider 替换 ITCM/DTCM 仿真模型，并按架构关键事件比较，不要求严格逐拍对齐。
 
 ## 延伸阅读
 
@@ -257,6 +261,7 @@ python -m pytest -q
 - `docs/signed_mixed_semantics.md`：signed/unsigned mixed-expression 说明。
 - `docs/hardening_checks.md`：可复现的本地检查。
 - `docs/power_diagnostics.md`：RTL 功耗热点诊断方法学。
+- `docs/model_providers.md`：外部仿真模型 manifest 与 provider 框架。
 - `docs/pyslang_migration.md`：pyverilog 到 pyslang 的迁移记录。
 - `docs/plan.md`：converter phase 状态。
 - `docs/plan2.md`：power diagnostics 已完成实现清单。

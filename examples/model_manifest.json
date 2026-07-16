@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "strict": true,
+  "source_rules": [
+    {
+      "glob": "*/tb/*",
+      "action": "ignore",
+      "reason": "exclude testbench sources from the synthesizable view"
+    }
+  ],
+  "module_rules": [
+    {
+      "module": "foundry_sram_1rw",
+      "provider": "memory",
+      "reason": "replace vendor SRAM simulation behavior",
+      "config": {
+        "clock": "clk",
+        "enable": "cen",
+        "write_enable": "wen",
+        "address": "addr",
+        "write_data": "din",
+        "read_data": "dout",
+        "depth": 1024,
+        "read_latency": 1,
+        "write_mode": "read_first"
+      }
+    }
+  ]
+}

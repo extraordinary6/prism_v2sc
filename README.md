@@ -63,6 +63,8 @@ Core options:
 | `--metrics` | Write `metrics.json` with timing, memory, and traversal counters. |
 | `--compare-verilator` | Run best-effort `verilator --lint-only` for the same inputs and record timing. |
 | `--fail-on-diagnostics` | Return exit code `2` when error-level diagnostics are present. |
+| `--model-manifest <json/toml>` | Apply explicit source filtering and external-model providers; writes `model_report.json`. |
+| `--model-audit` | Classify model/testbench candidates and write `model_report.json` without replacement rules. |
 | `--version` | Print the package version. |
 
 Filelists support:
@@ -107,6 +109,7 @@ Power options:
 ```text
 build/systemc/
 |-- ir.json
+|-- model_report.json       # optional model manifest/audit output
 |-- <module>.hpp
 `-- <nested>/<module>.hpp
 ```
@@ -117,8 +120,9 @@ Each generated module header includes the headers for the child modules it insta
 
 1. slang reads every source at once and creates an elaborated `Compilation`.
 2. `prism_v2sc` walks the instance tree rooted at `--top` and lowers only reachable modules into `ModuleIR`.
-3. Codegen writes one `.hpp` per module in post-order DFS, so child headers exist before parent headers reference them.
-4. Diagnostics from slang and from the lowerer are stored in the IR and summarized at the end of the run.
+3. When a model manifest is active, explicit providers replace matched modules with canonical `ModuleIR` and record every decision in `model_report.json`.
+4. Codegen writes one `.hpp` per module in post-order DFS, so child headers exist before parent headers reference them.
+5. Diagnostics from slang, lowering, and model providers are stored in the IR and summarized at the end of the run.
 
 ## Examples
 
@@ -247,7 +251,7 @@ The suite currently collects 185 tests covering IR lowering, codegen output shap
 
 Local trace-equivalence and dynamic power smoke runs require SystemC headers and libraries. On machines without `<systemc>`, run the Python unit suite locally and rely on Linux CI for final SystemC compile/run checks.
 
-Additional exploratory and real-design checks live under `verification/`, including external MHSA, OFDM FFT/IFFT, interface-based ICB-to-APB bridge, and 4x4/8x8 tinyNPU accelerator conversion/consistency gates.
+Additional exploratory and real-design checks live under `verification/`, including external MHSA, OFDM FFT/IFFT, interface-based ICB-to-APB bridge, 4x4/8x8 tinyNPU, and E203 CPU conversion/consistency gates. The E203 gate uses the model-provider framework for ITCM/DTCM and compares architectural key events rather than requiring exact cycle alignment.
 
 ## Further Reading
 
@@ -257,6 +261,7 @@ Additional exploratory and real-design checks live under `verification/`, includ
 - `docs/signed_mixed_semantics.md`: signed/unsigned mixed-expression notes.
 - `docs/hardening_checks.md`: reproducible local checks.
 - `docs/power_diagnostics.md`: RTL power hotspot methodology.
+- `docs/model_providers.md`: external simulation-model manifest and provider framework.
 - `docs/pyslang_migration.md`: pyverilog to pyslang migration record.
 - `docs/plan.md`: converter phase status.
 - `docs/plan2.md`: completed power diagnostics implementation checklist.

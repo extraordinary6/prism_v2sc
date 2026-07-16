@@ -7,6 +7,33 @@ from prism_v2sc.ir.model import WidthIR
 from _pyslang_helper import lower_via_pyslang
 
 
+def test_lower_design_preserves_net_declaration_assignments(tmp_path: Path) -> None:
+    rtl = tmp_path / "net_decl_assign.v"
+    rtl.write_text(
+        """
+module net_decl_assign(input wire a, input wire b, output wire y = a | b);
+  wire both = a & b;
+  wire selected = a ? both : ~b;
+  wire [3:0] all = (4'b1111);
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "net_decl_assign")
+    module = next(module for module in design.modules if module.name == "net_decl_assign")
+    assignments = {assign.left: assign.right for assign in module.continuous_assigns}
+
+    assert assignments == {
+        "y": "(a | b)",
+        "both": "(a & b)",
+        "selected": "(a ? both : (~b))",
+        "all": "(4'b1111)",
+    }
+    all_assign = next(assign for assign in module.continuous_assigns if assign.left == "all")
+    assert all_assign.right_expr["value"] == 15
+
+
 def test_lower_design_rejects_missing_top(tmp_path: Path) -> None:
     rtl = tmp_path / "top.v"
     rtl.write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")

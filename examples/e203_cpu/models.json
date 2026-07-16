@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "strict": true,
+  "source_rules": [],
+  "module_rules": [
+    {
+      "module": "sirv_sim_ram",
+      "provider": "memory",
+      "reason": "replace the parameterized simulation SRAM with the configured two-state memory model",
+      "config": {
+        "clock": "clk",
+        "enable": "cs",
+        "write_enable": "we",
+        "byte_enable": "wem",
+        "lane_width": 8,
+        "address": "addr",
+        "write_data": "din",
+        "read_data": "dout",
+        "depth": "DP",
+        "read_latency": 1,
+        "read_address_register": true,
+        "write_mode": "no_change"
+      }
+    }
+  ]
+}

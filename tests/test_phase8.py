@@ -158,6 +158,38 @@ endmodule
     )
 
 
+def test_part_select_outputs_to_same_parent_share_one_writer(tmp_path: Path) -> None:
+    """Disjoint child output slices are still one SystemC signal writer."""
+    rtl = tmp_path / "part_assemble.v"
+    rtl.write_text(
+        """
+module half(input wire [15:0] a, output wire [15:0] y);
+  assign y = a;
+endmodule
+
+module part_assemble (
+  input  wire [31:0] a,
+  output wire [31:0] y
+);
+  half hi(.a(a[31:16]), .y(y[31:16]));
+  half lo(.a(a[15:0]),  .y(y[15:0]));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "part_assemble")
+    header = generate_systemc_header(design)
+
+    assert header.count("__bridge_assemble_y") >= 2
+    assert header.count("y.write(__tmp);") == 1
+    assert "__bridge_method_hi_y" not in header
+    assert "__bridge_method_lo_y" not in header
+    assert "__tmp.range(31, 16) = sc_uint<16>(__bridge_hi_y.read());" in header
+    assert "__tmp.range(15, 0) = sc_uint<16>(__bridge_lo_y.read());" in header
+    assert "sensitive << __bridge_hi_y << __bridge_lo_y;" in header
+
+
 def test_procedural_bit_writes_to_same_parent_share_one_writer(tmp_path: Path) -> None:
     """Regression: when two procedural blocks each write a different bit of
     the same parent signal, the previous codegen produced two SC_METHODs

@@ -72,11 +72,12 @@ requantization. The complete gate also covers:
 Latest surrounding regressions after the tinyNPU fixes:
 
 ```text
-pytest:                         194 passed
-VCS equivalence harness:       59 / 59 passed
+pytest:                         205 passed
+VCS equivalence harness:       60 / 60 passed
 OFDM FFT/IFFT trace gate:       9 / 9 cases passed
 MHSA keypoint gate:             all selected samples passed
 ICB-to-APB consistency gate:    36 events passed
+E203 CPU key-event gate:        6 / 6 scenarios passed
 ```
 
 ## Converter Defects Found And Fixed

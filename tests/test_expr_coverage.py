@@ -105,6 +105,24 @@ endmodule
     assert "sc_uint<65>" not in header
 
 
+def test_division_and_modulo_guard_zero_denominators(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module safe_div(input wire [7:0] a, input wire [7:0] b,
+                output wire [7:0] q, output wire [7:0] r);
+  assign q = a / b;
+  assign r = a % b;
+endmodule
+""",
+        "safe_div",
+    )
+    header = generate_systemc_header(design)
+
+    assert "((b.read() == 0) ? 0 : (a.read() / b.read()))" in header
+    assert "((b.read() == 0) ? 0 : (a.read() % b.read()))" in header
+
+
 def test_part_select_and_bit_select_read(tmp_path: Path) -> None:
     design = _design(
         tmp_path,
@@ -383,16 +401,26 @@ endmodule
         "inv8",
     )
     header = generate_systemc_header(design)
-    assert "y.write((~a.read()));" in header
+    assert "y.write(sc_uint<8>(~sc_uint<8>(a.read())));" in header
 
 
-def test_unary_bitwise_not_on_unknown_width_keeps_tilde(tmp_path: Path) -> None:
-    """Regression for over-correction: the previous fix gated ``~`` → ``!``
-    on ``infer_width == 1``, but ``infer_width`` falls back to 1 for unknown
-    identifiers (notably function-local params), which silently turned every
-    ``~x`` inside a synthesizable Verilog ``function`` into a logical ``!``.
-    Unknown widths must stay as ``~`` — only *provably* 1-bit operands get
-    rewritten."""
+def test_sized_zero_complement_preserves_width_before_shift(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module inv_shift(output wire [31:0] y);
+  assign y = (~32'b0) >> 3;
+endmodule
+""",
+        "inv_shift",
+    )
+    header = generate_systemc_header(design)
+
+    assert "sc_uint<32>(~sc_uint<32>(0b0)) >> 3" in header
+
+
+def test_unary_bitwise_not_on_function_param_keeps_bitwise_width(tmp_path: Path) -> None:
+    """Function parameters must not be mistaken for scalar bool operands."""
     design = _design(
         tmp_path,
         """
@@ -411,9 +439,7 @@ endmodule
         "fn_inv",
     )
     header = generate_systemc_header(design)
-    # Inside the function, ``x`` is a parameter — its width is not visible
-    # to ``ctx.signal_widths``. We must NOT rewrite to ``!`` here.
-    assert "inv8 = (~x);" in header
+    assert "inv8 = sc_uint<8>(~sc_uint<8>(x));" in header
     assert "inv8 = (!x);" not in header
 
 

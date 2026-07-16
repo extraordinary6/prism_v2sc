@@ -85,6 +85,7 @@ class DirectBitBridge:
     instance_name: str
     port_name: str
     direction: str
+    vector: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,17 +111,18 @@ class UnconnectedPortSignal:
 
 
 @dataclass(frozen=True)
-class DirectOutputAssembler:
-    """One method per parent signal that gathers every output bit-bridge
-    targeting it. Multiple output ``DirectBitBridge`` instances pointing at
-    the same parent must share a single writer process — sc_signal allows
-    only one driver, so emitting per-bridge methods would abort at runtime
-    with ``SC_ID_MORE_THAN_ONE_SIGNAL_DRIVER_``.
+class ChildOutputAssembler:
+    """One method per parent signal that gathers sliced child outputs.
+
+    SystemC tracks writers per ``sc_signal``, not per bit.  Consequently,
+    direct bit bridges and expression bridges targeting disjoint slices of
+    one parent must still share a single writer process.
     """
 
     parent_name: str
     method_name: str
-    bridges: tuple[DirectBitBridge, ...]
+    direct_bridges: tuple[DirectBitBridge, ...]
+    expr_bridges: tuple[ExprPortBridge, ...]
 
 
 @dataclass(frozen=True)
@@ -144,23 +146,41 @@ class ProcessSliceAssembler:
     slots: tuple[tuple[str, int, int], ...]
 
 
-def _direct_output_assemblers(
+def _expr_output_part_parent(bridge: ExprPortBridge) -> str | None:
+    if bridge.port.direction != "output" or bridge.expr.get("kind") != "partselect":
+        return None
+    target = bridge.expr.get("target")
+    if not isinstance(target, dict) or target.get("kind") != "identifier":
+        return None
+    return _sanitize_identifier(str(target.get("name", "")))
+
+
+def _child_output_assemblers(
     direct_bit_bridges: list[DirectBitBridge],
-) -> list[DirectOutputAssembler]:
-    grouped: dict[str, list[DirectBitBridge]] = {}
+    expr_port_bridges: list[ExprPortBridge],
+) -> list[ChildOutputAssembler]:
+    grouped_direct: dict[str, list[DirectBitBridge]] = {}
+    grouped_expr: dict[str, list[ExprPortBridge]] = {}
     order: list[str] = []
     for bridge in direct_bit_bridges:
         if bridge.direction not in {"output", "inout"}:
             continue
-        if bridge.parent_name not in grouped:
-            grouped[bridge.parent_name] = []
+        if bridge.parent_name not in grouped_direct and bridge.parent_name not in grouped_expr:
             order.append(bridge.parent_name)
-        grouped[bridge.parent_name].append(bridge)
+        grouped_direct.setdefault(bridge.parent_name, []).append(bridge)
+    for bridge in expr_port_bridges:
+        parent = _expr_output_part_parent(bridge)
+        if parent is None:
+            continue
+        if parent not in grouped_direct and parent not in grouped_expr:
+            order.append(parent)
+        grouped_expr.setdefault(parent, []).append(bridge)
     return [
-        DirectOutputAssembler(
+        ChildOutputAssembler(
             parent_name=parent,
             method_name=f"__bridge_assemble_{parent}",
-            bridges=tuple(grouped[parent]),
+            direct_bridges=tuple(grouped_direct.get(parent, ())),
+            expr_bridges=tuple(grouped_expr.get(parent, ())),
         )
         for parent in order
     ]
@@ -499,6 +519,7 @@ def generate_systemc_header(
     writer.line(banner().rstrip())
     writer.line("#pragma once")
     writer.line()
+    writer.line("#include <array>")
     writer.line("#include <systemc>")
     writer.line("#include <string>")
     writer.line("#include <type_traits>")
@@ -586,6 +607,7 @@ def render_module_file(
     writer.line(banner().rstrip())
     writer.line("#pragma once")
     writer.line()
+    writer.line("#include <array>")
     writer.line("#include <systemc>")
     writer.line("#include <string>")
     writer.line("#include <type_traits>")
@@ -691,6 +713,9 @@ def _emit_module(
     include_children: bool,
     instrumentation_config: InstrumentationConfig | None = None,
 ) -> None:
+    if module.model.get("provider") == "memory":
+        _emit_provider_memory_module(writer, module)
+        return
     class_name = _sanitize_identifier(module.name)
     # Rewrite sliced continuous/procedural writes that share a parent signal
     # so the generated SystemC has exactly one writer per signal. Must run
@@ -703,6 +728,7 @@ def _emit_module(
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
     direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
     expr_port_bridges = _expr_port_bridges(module, modules_by_name, signatures)
+    child_output_assemblers = _child_output_assemblers(direct_bit_bridges, expr_port_bridges)
     unconnected_port_signals = _unconnected_port_signals(module, modules_by_name, signatures)
     module_instrumentation = _module_instrumentation_config(module, instrumentation_config)
     module_needs_power_sample_strobe = _module_subtree_needs_power_sample_strobe(
@@ -749,6 +775,8 @@ def _emit_module(
     for bridge in direct_bit_bridges:
         if bridge.direction == "inout":
             writer.line(f"sc_signal_rv<1> {bridge.name};")
+        elif bridge.vector:
+            writer.line(f"sc_signal<sc_uint<1>> {bridge.name};")
         else:
             writer.line(f"sc_signal<bool> {bridge.name};")
     for bridge in expr_port_bridges:
@@ -785,10 +813,12 @@ def _emit_module(
         if bridge.direction in {"input", "inout"}:
             _emit_direct_bridge_method(writer, bridge)
             writer.line()
-    for assembler in _direct_output_assemblers(direct_bit_bridges):
-        _emit_direct_output_assembler(writer, assembler)
+    for assembler in child_output_assemblers:
+        _emit_child_output_assembler(writer, assembler, ctx)
         writer.line()
     for bridge in expr_port_bridges:
+        if _expr_output_part_parent(bridge) is not None:
+            continue
         _emit_expr_port_bridge_method(writer, bridge, ctx)
         writer.line()
     for assembler in slice_assemblers:
@@ -826,6 +856,7 @@ def _emit_module(
         bit_bridges,
         direct_bit_bridges,
         expr_port_bridges,
+        child_output_assemblers,
         unconnected_port_signals,
         slice_assemblers,
         modules_by_name,
@@ -834,6 +865,81 @@ def _emit_module(
         module_instrumentation,
         power_sampling_processes,
     )
+    writer.dedent()
+    writer.line("};")
+
+
+def _emit_provider_memory_module(writer: CodeWriter, module: ModuleIR) -> None:
+    model = module.model
+    if model.get("implementation") != "masked_registered_address":
+        raise ValueError(f"unsupported memory provider implementation: {model.get('implementation')}")
+
+    ports = {port.name: port for port in module.ports}
+    clock = _sanitize_identifier(str(model["clock"]))
+    enable = _sanitize_identifier(str(model["enable"]))
+    write_enable = _sanitize_identifier(str(model["write_enable"]))
+    byte_enable = _sanitize_identifier(str(model["byte_enable"]))
+    address = _sanitize_identifier(str(model["address"]))
+    write_data = _sanitize_identifier(str(model["write_data"]))
+    read_data = _sanitize_identifier(str(model["read_data"]))
+    depth = _cpp_expr(str(model["depth"]))
+    lane_width = int(model["lane_width"])
+    data_port = ports[str(model["write_data"])]
+    address_port = ports[str(model["address"])]
+    data_type = _sc_type(data_port.width, data_port.signed)
+    address_type = _sc_type(address_port.width, address_port.signed)
+    data_width = _width_expr(data_port.width)
+    class_name = _sanitize_identifier(module.name)
+
+    if module.parameters:
+        writer.line(f"template <{_template_parameter_list(module)}>")
+    writer.line(f"SC_MODULE({class_name}) {{")
+    writer.indent()
+    for port in module.ports:
+        dims = port.declared_unpacked_dims or port.unpacked_dims
+        writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)}{_unpacked_suffix(dims)};")
+    writer.line()
+    writer.line(f"std::array<{data_type}, {depth}> __model_mem{{}};")
+    writer.line(f"sc_signal<{address_type}> __model_read_addr;")
+    writer.line()
+    writer.line("void __model_clocked() {")
+    writer.indent()
+    writer.line(f"if ({enable}.read()) {{")
+    writer.indent()
+    writer.line(f"if ({write_enable}.read()) {{")
+    writer.indent()
+    writer.line(f"auto __next = __model_mem[{address}.read().to_uint()];")
+    writer.line(f"for (int __bit = 0; __bit < {data_width}; ++__bit) {{")
+    writer.indent()
+    writer.line(f"if ({byte_enable}.read()[__bit / {lane_width}]) __next[__bit] = {write_data}.read()[__bit];")
+    writer.dedent()
+    writer.line("}")
+    writer.line(f"__model_mem[{address}.read().to_uint()] = __next;")
+    writer.dedent()
+    writer.line("} else {")
+    writer.indent()
+    writer.line(f"__model_read_addr.write({address}.read());")
+    writer.dedent()
+    writer.line("}")
+    writer.dedent()
+    writer.line("}")
+    writer.dedent()
+    writer.line("}")
+    writer.line()
+    writer.line("void __model_read() {")
+    writer.indent()
+    writer.line(f"{read_data}.write(__model_mem[__model_read_addr.read().to_uint()]);")
+    writer.dedent()
+    writer.line("}")
+    writer.line()
+    writer.line(f"SC_CTOR({class_name}) {{")
+    writer.indent()
+    writer.line("SC_METHOD(__model_clocked);")
+    writer.line(f"sensitive << {clock}.pos();")
+    writer.line("SC_METHOD(__model_read);")
+    writer.line("sensitive << __model_read_addr;")
+    writer.dedent()
+    writer.line("}")
     writer.dedent()
     writer.line("};")
 
@@ -970,6 +1076,7 @@ def _emit_constructor(
     bit_bridges: list[GenerateBitBridge],
     direct_bit_bridges: list[DirectBitBridge],
     expr_port_bridges: list[ExprPortBridge],
+    child_output_assemblers: list[ChildOutputAssembler],
     unconnected_port_signals: list[UnconnectedPortSignal],
     process_assemblers: list[ProcessSliceAssembler],
     modules_by_name: dict[str, ModuleIR],
@@ -1100,13 +1207,18 @@ def _emit_constructor(
         writer.line(f"sensitive << {bridge.parent_name};")
         writer.line()
 
-    for assembler in _direct_output_assemblers(direct_bit_bridges):
+    for assembler in child_output_assemblers:
         writer.line(f"SC_METHOD({assembler.method_name});")
-        sensitivities = "".join(f" << {bridge.name}" for bridge in assembler.bridges)
+        sensitivities = "".join(
+            f" << {bridge.name}"
+            for bridge in (*assembler.direct_bridges, *assembler.expr_bridges)
+        )
         writer.line(f"sensitive{sensitivities};")
         writer.line()
 
     for bridge in expr_port_bridges:
+        if _expr_output_part_parent(bridge) is not None:
+            continue
         sensitivity = [bridge.name] if bridge.port.direction == "output" else collect_sensitivity(bridge.expr, ctx)
         sensitivity = _expand_sensitivity_list(sensitivity, ctx)
         if sensitivity:
@@ -1296,28 +1408,42 @@ def _emit_direct_bridge_method(writer: CodeWriter, bridge: DirectBitBridge) -> N
     writer.line(f"void {bridge.method_name}() {{")
     writer.indent()
     if bridge.direction == "input":
-        writer.line(f"{bridge.name}.write({bridge.parent_name}.read()[{bridge.index_expr}]);")
+        value = f"{bridge.parent_name}.read()[{bridge.index_expr}]"
+        if bridge.vector:
+            value = f"sc_uint<1>({value})"
+        writer.line(f"{bridge.name}.write({value});")
     elif bridge.direction == "inout":
         writer.line(
             f"{bridge.name}.write(sc_lv<1>({bridge.parent_name}.read()[{bridge.index_expr}]));"
         )
     else:
         writer.line(f"auto __tmp = {bridge.parent_name}.read();")
-        writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
+        value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
+        writer.line(f"__tmp[{bridge.index_expr}] = {value};")
         writer.line(f"{bridge.parent_name}.write(__tmp);")
     writer.dedent()
     writer.line("}")
 
 
-def _emit_direct_output_assembler(writer: CodeWriter, assembler: DirectOutputAssembler) -> None:
+def _emit_child_output_assembler(
+    writer: CodeWriter,
+    assembler: ChildOutputAssembler,
+    ctx: ModuleContext,
+) -> None:
     writer.line(f"void {assembler.method_name}() {{")
     writer.indent()
     writer.line(f"auto __tmp = {assembler.parent_name}.read();")
-    for bridge in assembler.bridges:
+    for bridge in assembler.direct_bridges:
         if bridge.direction == "inout":
             writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read()[0];")
         else:
-            writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read();")
+            value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
+            writer.line(f"__tmp[{bridge.index_expr}] = {value};")
+    for bridge in assembler.expr_bridges:
+        value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
+        msb = render_rvalue(bridge.expr.get("msb"), ctx)
+        lsb = render_rvalue(bridge.expr.get("lsb"), ctx)
+        writer.line(f"__tmp.range({msb}, {lsb}) = {value};")
     writer.line(f"{assembler.parent_name}.write(__tmp);")
     writer.dedent()
     writer.line("}")
@@ -1328,7 +1454,19 @@ def _emit_expr_port_bridge_method(writer: CodeWriter, bridge: ExprPortBridge, ct
     writer.indent()
     if bridge.port.direction == "output":
         value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
-        writer.line(f"{render_lvalue(bridge.expr, ctx)}.write({value});")
+        if bridge.expr.get("kind") == "partselect":
+            target = bridge.expr.get("target")
+            if isinstance(target, dict) and target.get("kind") == "identifier":
+                parent = _sanitize_identifier(str(target.get("name", "")))
+                msb = render_rvalue(bridge.expr.get("msb"), ctx)
+                lsb = render_rvalue(bridge.expr.get("lsb"), ctx)
+                writer.line(f"auto __tmp = {parent}.read();")
+                writer.line(f"__tmp.range({msb}, {lsb}) = {value};")
+                writer.line(f"{parent}.write(__tmp);")
+            else:
+                writer.line("// unsupported aggregate output part-select binding")
+        else:
+            writer.line(f"{render_lvalue(bridge.expr, ctx)}.write({value});")
     else:
         value = _cast_to_port_type(render_rvalue(bridge.expr, ctx), bridge.port)
         writer.line(f"{bridge.name}.write({value});")
@@ -1421,6 +1559,7 @@ def _direct_bit_bridges(
     signatures: dict[str, ModuleSignature],
 ) -> list[DirectBitBridge]:
     bridges: list[DirectBitBridge] = []
+    parent_ctx = build_module_context(module)
     for instance in module.instances:
         child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
         if not child_ports:
@@ -1432,7 +1571,10 @@ def _direct_bit_bridges(
             child_port = child_ports.get(port.name)
             if child_port is None or child_port.direction not in {"input", "output", "inout"}:
                 continue
+            child_port = _specialize_child_port(instance, child_port, modules_by_name, signatures)
             parent_name, index_expr = match
+            if parent_name in parent_ctx.array_signal_names:
+                continue
             base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port.name)}"
             bridges.append(
                 DirectBitBridge(
@@ -1443,6 +1585,7 @@ def _direct_bit_bridges(
                     instance_name=instance.name,
                     port_name=port.name,
                     direction=child_port.direction,
+                    vector=child_port.width is not None,
                 )
             )
     return bridges
@@ -1469,18 +1612,22 @@ def _expr_port_bridges(
             if not isinstance(arg.value_expr, dict):
                 continue
             simple_binding = _simple_instance_binding(arg.value)
-            if simple_binding and not _port_binding_width_mismatch(
-                arg.value_expr,
-                child_port,
-                parent_ctx,
+            if (
+                simple_binding
+                and not _port_binding_width_mismatch(arg.value_expr, child_port, parent_ctx)
+                and not _port_binding_shape_mismatch(module, arg.value, child_port)
             ):
                 continue
-            if _constant_bit_select_binding(arg.value) is not None:
+            if (
+                _constant_bit_select_binding(arg.value) is not None
+                and not is_array_element_expr(arg.value_expr, parent_ctx)
+            ):
                 continue
             if (
                 child_port.direction == "output"
                 and not simple_binding
                 and not is_array_element_expr(arg.value_expr, parent_ctx)
+                and arg.value_expr.get("kind") != "partselect"
             ):
                 continue
             base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port_name)}"
@@ -1505,6 +1652,20 @@ def _port_binding_width_mismatch(
     parent_width = max(1, infer_width(expr, ctx))
     child_width = _constant_integer_expr(_width_expr(port.width))
     return child_width is not None and parent_width != max(1, child_width)
+
+
+def _port_binding_shape_mismatch(module: ModuleIR, parent_name: str, child_port: PortIR) -> bool:
+    parent = next(
+        (
+            item
+            for item in (*module.ports, *module.signals)
+            if item.name == parent_name
+        ),
+        None,
+    )
+    if parent is None:
+        return False
+    return (parent.width is None) != (child_port.width is None)
 
 
 def _unconnected_port_signals(
@@ -2406,7 +2567,8 @@ def _cast_to_port_type(value: str, port: PortIR) -> str:
 def _cast_to_lvalue_type(value: str, left_expr: dict[str, object], ctx: ModuleContext) -> str:
     width = max(1, infer_width(left_expr, ctx))
     signed = _lvalue_signed(left_expr, ctx)
-    if width == 1 and not signed:
+    base = lvalue_base_name(left_expr)
+    if width == 1 and not signed and base not in ctx.packed_vector_names:
         return value
     return f"{systemc_int_type(width, signed=signed)}({value})"
 
@@ -2640,9 +2802,8 @@ def _emit_integer_type_aliases(writer: CodeWriter) -> None:
     writer.line("#define PRISM_V2SC_INTEGER_TYPES")
     writer.line(
         "template <int Width> using prism_v2sc_uint_t = "
-        "typename std::conditional<(Width == 1), bool, "
         "typename std::conditional<(Width <= 64), sc_uint<Width>, "
-        "sc_biguint<Width>>::type>::type;"
+        "sc_biguint<Width>>::type;"
     )
     writer.line(
         "template <int Width> using prism_v2sc_int_t = "
@@ -2659,7 +2820,7 @@ def _emit_integer_type_aliases(writer: CodeWriter) -> None:
 
 def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
-    if width_expr == "1" and not signed:
+    if width is None and not signed:
         return "bool"
     concrete_width = _constant_integer_expr(width_expr)
     if concrete_width is not None:
@@ -2772,7 +2933,27 @@ def _instance_type(
         if _child_parameter_count(instance.module, modules_by_name, signatures) > 0:
             return f"{base}<>"
         return base
-    args = ", ".join(_cpp_expr(arg.value) for arg in instance.parameters)
+    child_module = modules_by_name.get(instance.module)
+    signature = signatures.get(instance.module)
+    formal_parameters = (
+        child_module.parameters
+        if child_module is not None
+        else signature.parameters if signature is not None else ()
+    )
+    named = {argument.name: argument.value for argument in instance.parameters if argument.name}
+    if named and formal_parameters:
+        last_override = max(
+            index
+            for index, parameter in enumerate(formal_parameters)
+            if parameter.name in named
+        )
+        ordered_values = [
+            named.get(parameter.name, parameter.value)
+            for parameter in formal_parameters[: last_override + 1]
+        ]
+        args = ", ".join(_cpp_expr(value) for value in ordered_values)
+    else:
+        args = ", ".join(_cpp_expr(arg.value) for arg in instance.parameters)
     return f"{base}<{args}>"
 
 

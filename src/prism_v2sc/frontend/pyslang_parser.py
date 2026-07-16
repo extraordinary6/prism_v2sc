@@ -33,6 +33,7 @@ def parse_sources(
     *,
     include_dirs: Sequence[Path] = (),
     defines: Sequence[str] = (),
+    top: str | None = None,
 ):
     """Parse Verilog/SystemVerilog sources and return a slang ``Compilation``.
 
@@ -48,6 +49,8 @@ def parse_sources(
     driver.addStandardArgs()
 
     argv: list[str] = ["prism-v2sc"]
+    if top:
+        argv.append(f"--top={top}")
     for include_dir in include_dirs:
         argv.append(f"+incdir+{Path(include_dir).as_posix()}")
     for define in defines:

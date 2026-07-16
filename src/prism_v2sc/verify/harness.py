@@ -18,6 +18,13 @@ from typing import Callable, Sequence, TypeVar
 
 from prism_v2sc.codegen.systemc import emit_systemc_files, generate_systemc_header
 from prism_v2sc.frontend.flow import compute_source_root, lower_design_top_down
+from prism_v2sc.models.manifest import ModelManifest
+from prism_v2sc.models.providers import ModelProviderRegistry
+from prism_v2sc.models.resolver import (
+    ModelResolutionReport,
+    prepare_model_sources,
+    resolve_design_models,
+)
 from prism_v2sc.ir.model import DesignIR
 
 T = TypeVar("T")
@@ -92,6 +99,7 @@ class ConversionArtifacts:
     header: str
     report: ConversionReport
     emitted_files: tuple[Path, ...] = field(default_factory=tuple)
+    model_report: ModelResolutionReport | None = None
 
 
 def smoke_result() -> str:
@@ -108,6 +116,8 @@ def convert_with_metrics(
     compare_verilator: bool = False,
     out_dir: Path | None = None,
     source_root: Path | None = None,
+    model_manifest: ModelManifest | None = None,
+    model_registry: ModelProviderRegistry | None = None,
 ) -> ConversionArtifacts:
     """Parse, lower, emit SystemC, and measure time and peak Python allocation.
 
@@ -115,18 +125,32 @@ def convert_with_metrics(
     under it with directory mirroring rooted at ``source_root`` (defaulting
     to the common parent of the inputs).
     """
-    normalized_sources = tuple(str(source) for source in sources)
+    model_report: ModelResolutionReport | None = None
+    source_decisions = ()
+    resolved_sources = tuple(Path(source) for source in sources)
+    if model_manifest is not None:
+        resolved_sources, source_decisions = prepare_model_sources(resolved_sources, model_manifest)
+        if not resolved_sources:
+            raise ValueError("model source rules ignored every input source")
+    normalized_sources = tuple(str(source) for source in resolved_sources)
     total_start = time.perf_counter()
 
     parse_lower_measurement, flow = _measure(
         lambda: lower_design_top_down(
-            sources,
+            resolved_sources,
             top,
             include_dirs=include_dirs,
             defines=defines,
         )
     )
     design = flow.design
+    if model_manifest is not None:
+        design, model_report = resolve_design_models(
+            design,
+            model_manifest,
+            source_decisions=source_decisions,
+            registry=model_registry,
+        )
     source_index_measurement = Measurement(
         elapsed_seconds=flow.source_index_elapsed_seconds,
         peak_python_bytes=0,
@@ -136,7 +160,7 @@ def convert_with_metrics(
         peak_python_bytes=0,
     )
 
-    resolved_root = source_root if source_root is not None else compute_source_root(sources)
+    resolved_root = source_root if source_root is not None else compute_source_root(resolved_sources)
     emitted_files: tuple[Path, ...] = ()
     if out_dir is not None:
         codegen_measurement, written = _measure(
@@ -150,7 +174,7 @@ def convert_with_metrics(
 
     verilator_command = _find_verilator_command()
     verilator = _measure_verilator_lint(
-        sources,
+        resolved_sources,
         top,
         verilator_command,
         include_dirs=include_dirs,
@@ -178,7 +202,7 @@ def convert_with_metrics(
             parse_lower_measurement.observed_process_bytes,
             codegen_measurement.observed_process_bytes,
         ),
-        source_count=len(sources),
+        source_count=len(resolved_sources),
         source_parse_count=flow.traversal.source_parse_count,
         module_parse_count=flow.traversal.module_parse_count,
         module_lower_count=flow.traversal.module_lower_count,
@@ -194,7 +218,13 @@ def convert_with_metrics(
         diagnostic_count=len(design.diagnostics),
         verilator_lint=verilator,
     )
-    return ConversionArtifacts(design=design, header=header_text, report=report, emitted_files=emitted_files)
+    return ConversionArtifacts(
+        design=design,
+        header=header_text,
+        report=report,
+        emitted_files=emitted_files,
+        model_report=model_report,
+    )
 
 
 def write_report(report: ConversionReport, path: Path) -> None:
