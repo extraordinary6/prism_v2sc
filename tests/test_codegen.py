@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from prism_v2sc.codegen.systemc import generate_systemc_header
+from prism_v2sc.frontend.flow import lower_design_top_down
 from prism_v2sc.ir.model import WidthIR
 
 from _pyslang_helper import lower_via_pyslang
@@ -47,6 +48,71 @@ endmodule
     assert "u_child.y(y);" in header
 
 
+def test_large_continuous_assign_sets_are_grouped(tmp_path: Path) -> None:
+    rtl = tmp_path / "large_assigns.sv"
+    signal_count = 300
+    declarations = "\n".join(
+        f"  logic [7:0] stage_{index};" for index in range(signal_count)
+    )
+    assignments = ["  assign stage_0 = a;"]
+    assignments.extend(
+        f"  assign stage_{index} = stage_{index - 1};"
+        for index in range(1, signal_count)
+    )
+    assignments.append(f"  assign y = stage_{signal_count - 1};")
+    rtl.write_text(
+        "\n".join(
+            [
+                "module large_assigns(input logic [7:0] a, output logic [7:0] y);",
+                declarations,
+                *assignments,
+                "endmodule",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "large_assigns")
+    header = generate_systemc_header(design)
+
+    assert "void assign_group_0_63()" in header
+    assert "void assign_group_64_127()" in header
+    assert "void assign_group_256_300()" in header
+    assert "SC_METHOD(assign_group_0_63);" in header
+    assert "SC_METHOD(assign_group_256_300);" in header
+    assert "void assign_0()" not in header
+
+
+def test_large_direct_bit_bridge_sets_are_grouped(tmp_path: Path) -> None:
+    rtl = tmp_path / "large_bridges.sv"
+    instances = "\n".join(
+        f"  bit_leaf u_{index}(.d(a[{index}]), .q(y[{index}]));"
+        for index in range(300)
+    )
+    rtl.write_text(
+        "\n".join(
+            [
+                "module bit_leaf(input logic d, output logic q);",
+                "  assign q = d;",
+                "endmodule",
+                "module large_bridges(input logic [299:0] a, output logic [299:0] y);",
+                instances,
+                "endmodule",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "large_bridges")
+    header = generate_systemc_header(design)
+
+    assert "void __bridge_group_0_255()" in header
+    assert "void __bridge_group_256_299()" in header
+    assert "SC_METHOD(__bridge_group_0_255);" in header
+    assert "SC_METHOD(__bridge_group_256_299);" in header
+    assert "void __bridge_method_u_0_d()" not in header
+
+
 def test_generate_systemc_header_for_parameter_override(tmp_path: Path) -> None:
     rtl = tmp_path / "param.v"
     rtl.write_text(
@@ -78,6 +144,231 @@ endmodule
     assert "SC_MODULE(child)" in header
     assert "child<8> u_child;" in header
     assert 'u_child("u_child")' in header
+
+
+def test_template_defaults_translate_verilog_only_constant_forms(tmp_path: Path) -> None:
+    rtl = tmp_path / "template_defaults.v"
+    rtl.write_text(
+        """
+module template_defaults #(
+  parameter DW = 8,
+  parameter ZERO = {DW{1'b0}},
+  parameter ONES = {DW{1'b1}},
+  parameter FIELD = DW[6:0],
+  parameter DECIMAL = 09
+) (output wire out);
+  assign out = ZERO | FIELD | DECIMAL;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "template_defaults")
+    header = generate_systemc_header(design)
+
+    assert "int ZERO = 0" in header
+    assert "int ONES = ((DW >= 31) ? -1 : ((1 << DW) - 1))" in header
+    assert "int FIELD = ((DW >> 0) & 127)" in header
+    assert "int DECIMAL = 9" in header
+
+
+def test_specialization_name_includes_defaulted_actual_parameters(tmp_path: Path) -> None:
+    rtl = tmp_path / "defaulted_specialization.v"
+    rtl.write_text(
+        """
+module child #(parameter DW = 1, parameter RST = {DW{1'b1}}) (
+  input wire [DW-1:0] d,
+  output wire [DW-1:0] q
+);
+  assign q = d | RST;
+endmodule
+
+module top(input wire d, output wire q0, output wire q1);
+  child #(1) u_default(.d(d), .q(q0));
+  child #(.DW(1), .RST(1'b0)) u_zero(.d(d), .q(q1));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_design_top_down([rtl], "top").design
+    top = next(module for module in design.modules if module.name == "top")
+    module_names = {module.name for module in design.modules}
+
+    assert len({instance.module for instance in top.instances}) == 2
+    assert all(instance.module in module_names for instance in top.instances)
+    assert all(len(instance.parameters) == 2 for instance in top.instances)
+
+
+def test_internal_signal_edges_use_signal_event_methods(tmp_path: Path) -> None:
+    rtl = tmp_path / "internal_edge.v"
+    rtl.write_text(
+        """
+module internal_edge(input wire clk, input wire rst_n, input wire d, output reg q);
+  wire gated_clk = clk;
+  wire local_rst_n = rst_n;
+  always @(posedge gated_clk or negedge local_rst_n) begin
+    if (!local_rst_n) q <= 1'b0;
+    else q <= d;
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "internal_edge"))
+    assert "gated_clk.posedge_event()" in header
+    assert "local_rst_n.negedge_event()" in header
+
+
+def test_explicit_one_bit_vector_write_casts_bit_reference(tmp_path: Path) -> None:
+    rtl = tmp_path / "one_bit_vector.v"
+    rtl.write_text(
+        """
+module one_bit_vector(input wire [3:0] data, output wire [0:0] y);
+  assign y = data[3];
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "one_bit_vector"))
+    assert "y.write(sc_uint<1>(data.read()[3]));" in header
+
+
+def test_unpacked_array_element_slice_uses_cell_read_modify_write(tmp_path: Path) -> None:
+    rtl = tmp_path / "array_slice.sv"
+    rtl.write_text(
+        """
+module array_slice(input logic [3:0] hi, lo, output logic [7:0] y);
+  logic [7:0] words [0:1];
+  always_comb begin
+    words[0][7:4] = hi;
+    words[0][3:0] = lo;
+    y = words[0];
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "array_slice"))
+    assert "words[0].read()" in header
+    assert "words[0].write(" in header
+    assert "words.read()" not in header
+
+
+def test_continuous_array_cell_slices_use_one_assembler_writer(tmp_path: Path) -> None:
+    rtl = tmp_path / "continuous_array_slice.sv"
+    rtl.write_text(
+        """
+module continuous_array_slice(input logic [3:0] hi, lo, output logic [7:0] y);
+  logic [7:0] words [0:0];
+  assign words[0][7:4] = hi;
+  assign words[0][3:0] = lo;
+  assign y = words[0];
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "continuous_array_slice"))
+    assert "__shadow_words_0__7_4" in header
+    assert "__shadow_words_0__3_0" in header
+    assert "__assemble_words_0" in header
+
+
+def test_child_output_bit_binding_writes_back_array_cell(tmp_path: Path) -> None:
+    rtl = tmp_path / "child_output_array_bit.sv"
+    rtl.write_text(
+        """
+module bit_source(input logic d, output logic q);
+  assign q = d;
+endmodule
+module child_output_array_bit(input logic d, output logic [1:0] y);
+  logic [1:0] cells [0:1];
+  bit_source u_bit(.d(d), .q(cells[0][1]));
+  assign y = cells[0];
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "child_output_array_bit"))
+    assert "__bridge_u_bit_q" in header
+    assert "__bridge_assemble_cells_0_" in header
+    assert "auto __tmp = cells[0].read();" in header
+    assert "cells[0].write(__tmp);" in header
+
+
+def test_child_output_and_continuous_slice_share_one_parent_writer(tmp_path: Path) -> None:
+    rtl = tmp_path / "child_and_assign_slice.sv"
+    rtl.write_text(
+        """
+module low_source(input logic d, output logic q);
+  assign q = d;
+endmodule
+module child_and_assign_slice(input logic d, output logic [7:0] y);
+  logic [7:0] value;
+  low_source u_low(.d(d), .q(value[0]));
+  assign value[7:1] = 7'b0;
+  assign y = value;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "child_and_assign_slice"))
+    assert "__shadow_value_7_1" in header
+    assert "void __bridge_assemble_value()" in header
+    assembler = header.split("void __bridge_assemble_value()", 1)[1].split("}", 1)[0]
+    assert "__tmp.range(7, 1) = __shadow_value_7_1.read();" in assembler
+    assert "__tmp[0] = __bridge_u_low_q.read();" in assembler
+    assert "value.write(__tmp);" in assembler
+    assert header.count("value.write(__tmp);") == 1
+
+
+def test_child_output_expression_bit_index_writes_back_vector(tmp_path: Path) -> None:
+    rtl = tmp_path / "child_output_expression_bit.sv"
+    rtl.write_text(
+        """
+module bit_source_expr(input logic d, output logic q);
+  assign q = d;
+endmodule
+module child_output_expression_bit(input logic d, output logic [7:0] y);
+  bit_source_expr u_bit(.d(d), .q(y[8-1]));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "child_output_expression_bit"))
+    assert "__bridge_u_bit_q" in header
+    assert "__bridge_assemble_y" in header
+    assert "auto __tmp = y.read();" in header
+    assert "__tmp[(8 - 1)]" in header
+    assert "y.write(__tmp);" in header
+
+
+def test_parameter_select_expression_uses_integer_shift(tmp_path: Path) -> None:
+    rtl = tmp_path / "parameter_select.v"
+    rtl.write_text(
+        """
+module parameter_select #(parameter VALUE = 32'h1234abcd) (
+  output wire [7:0] byte_value,
+  output wire bit_value
+);
+  assign byte_value = VALUE[15:8];
+  assign bit_value = VALUE[3];
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    header = generate_systemc_header(lower_via_pyslang([rtl], "parameter_select"))
+    assert "VALUE.range" not in header
+    assert "sc_uint<8>(VALUE >> (8))" in header
+    assert "((VALUE >> (3)) & 1)" in header
 
 
 def test_parameterized_expression_bridge_uses_instance_width(tmp_path: Path) -> None:
@@ -186,6 +477,52 @@ endmodule
     assert "int AW = 1" not in header
 
 
+def test_single_element_concat_in_width_is_constant_evaluated(tmp_path: Path) -> None:
+    rtl = tmp_path / "curly_width.sv"
+    rtl.write_text(
+        """
+module curly_width #(
+  parameter LANES = 4,
+  parameter BITS = 58,
+  parameter EXTRA = 11
+) (
+  input  logic [LANES*{BITS+EXTRA}-1:0] a,
+  output logic [LANES*{BITS+EXTRA}-1:0] y
+);
+  assign y = a;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "curly_width")
+    header = generate_systemc_header(design)
+
+    assert "y.write(a.read());" in header
+    assert "y.write(sc_uint<1>(a.read()));" not in header
+
+
+def test_localparam_constant_concat_and_replication_is_folded(tmp_path: Path) -> None:
+    rtl = tmp_path / "concat_localparam.sv"
+    rtl.write_text(
+        """
+module concat_localparam (
+  output logic [7:0] value
+);
+  localparam MASK = {1'b0, {7{1'b1}}};
+  assign value = MASK;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "concat_localparam")
+    header = generate_systemc_header(design)
+
+    assert "static constexpr int MASK = 127;" in header
+    assert "7((0b1))" not in header
+
+
 def test_parameterized_child_with_default_args_uses_template_empty_args(tmp_path: Path) -> None:
     rtl = tmp_path / "param_default.v"
     rtl.write_text(
@@ -210,7 +547,7 @@ endmodule
     design = lower_via_pyslang([rtl], "top")
     header = generate_systemc_header(design)
 
-    assert "child<> u_child;" in header
+    assert "child<4> u_child;" in header
     assert "u_child.a(a);" in header
 
 
@@ -236,6 +573,38 @@ endmodule
     assert "auto __concat_rhs = sc_uint<16>(bus.read());" in header
     assert "hi.write(sc_uint<8>(__concat_rhs.range(15, 8)));" in header
     assert "lo.write(sc_uint<8>(__concat_rhs.range(7, 0)));" in header
+
+
+def test_concat_lvalue_bit_slices_share_one_parent_writer(tmp_path: Path) -> None:
+    rtl = tmp_path / "concat_lvalue_slices.sv"
+    rtl.write_text(
+        """
+module concat_lvalue_slices(
+  input wire [1:0] a,
+  input wire [1:0] b,
+  output wire [1:0] y
+);
+  wire [1:0] flags;
+  wire lanes [0:1];
+  assign {flags[0], lanes[0]} = a;
+  assign {flags[1], lanes[1]} = b;
+  assign y = flags;
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "concat_lvalue_slices")
+    header = generate_systemc_header(design)
+
+    assert "sc_signal<bool> __shadow_flags_0;" in header
+    assert "sc_signal<bool> __shadow_flags_1;" in header
+    assert "__shadow_flags_0.write(__concat_rhs[1]);" in header
+    assert "__shadow_flags_1.write(__concat_rhs[1]);" in header
+    assembler = header.split("void __assemble_flags()", 1)[1].split("}", 1)[0]
+    assert "flags.write(__tmp);" in assembler
+    assert "__tmp[0] = __shadow_flags_0.read();" in assembler
+    assert "__tmp[1] = __shadow_flags_1.read();" in assembler
 
 
 def test_template_defaults_do_not_reference_parent_localparams(tmp_path: Path) -> None:

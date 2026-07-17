@@ -33,6 +33,8 @@ def test_benchmark_runner_writes_incremental_report_for_unavailable_case(tmp_pat
 def test_benchmark_baseline_references_existing_evidence() -> None:
     root = Path(__file__).resolve().parents[1]
     payload = MODULE.json.loads((root / "verification/benchmark_baseline.json").read_text(encoding="utf-8"))
+    manifest = MODULE.load_manifest(root / "verification/benchmarks.json")
     assert payload["evidence_type"] == "documented_regression_baseline"
-    assert len(payload["benchmarks"]) == 7
+    assert len(payload["benchmarks"]) == 8
+    assert {item["name"] for item in payload["benchmarks"]} == {item["name"] for item in manifest}
     assert all((root / item["evidence"]).exists() for item in payload["benchmarks"])

@@ -201,7 +201,10 @@ def generate_sampling_method(config: InstrumentationConfig, probe: ProbeSpec) ->
             else:
                 lines.append("    uint64_t __power_toggled_bits = 0;")
                 lines.append(f"    for (int __power_i = 0; __power_i < {width}; ++__power_i) {{")
-                lines.append(f"        if (current_value[__power_i] != __power_prev_{signal}[__power_i]) {{")
+                lines.append(
+                    f"        if (current_value[__power_i].to_bool() != "
+                    f"__power_prev_{signal}[__power_i].to_bool()) {{"
+                )
                 lines.append("            __power_toggled_bits++;")
                 if config.per_bit_counters:
                     lines.append(f"            __power_bit_toggle_count_{signal}[__power_i]++;")

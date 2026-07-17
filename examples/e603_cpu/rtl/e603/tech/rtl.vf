@@ -1,0 +1,5 @@
+../design/tech/e603_hand_buf.v
+../design/tech/e603_hand_mux_bit.v
+../design/tech/e603_gnrl_tech_clkgate.v
+../design/tech/e603_gnrl_tech_ram.v
+../design/tech/e603_gnrl_tech_sync.v

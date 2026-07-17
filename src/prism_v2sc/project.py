@@ -21,6 +21,7 @@ class ProjectStage:
     model_manifest: Path | None
     diagnostic_policy: Path | None
     depends_on: tuple[str, ...]
+    no_ir: bool
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,9 @@ def load_project_manifest(path: Path) -> ProjectManifest:
         depends = item.get("depends_on", [])
         if not isinstance(depends, list) or not all(isinstance(value, str) for value in depends):
             raise ValueError(f"stages[{index}].depends_on must be a string list")
+        no_ir = item.get("no_ir", False)
+        if not isinstance(no_ir, bool):
+            raise ValueError(f"stages[{index}].no_ir must be a boolean")
         stages.append(ProjectStage(
             name=stage_name,
             top=top,
@@ -80,6 +84,7 @@ def load_project_manifest(path: Path) -> ProjectManifest:
             model_manifest=_optional_path(base, item.get("model_manifest")),
             diagnostic_policy=_optional_path(base, item.get("diagnostic_policy")),
             depends_on=tuple(depends),
+            no_ir=no_ir,
         ))
         names.add(stage_name)
     for stage in stages:
@@ -116,6 +121,8 @@ def run_project(manifest: ProjectManifest, report_path: Path | None = None) -> i
             command.extend(("--model-manifest", str(stage.model_manifest)))
         if stage.diagnostic_policy is not None:
             command.extend(("--diagnostic-policy", str(stage.diagnostic_policy)))
+        if stage.no_ir:
+            command.append("--no-ir")
         command.extend(str(source) for source in stage.sources)
         start = time.perf_counter()
         result = subprocess.run(command, text=True, capture_output=True)

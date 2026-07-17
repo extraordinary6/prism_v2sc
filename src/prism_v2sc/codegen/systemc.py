@@ -17,10 +17,14 @@ Two entry points:
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
+from functools import lru_cache
+import hashlib
+import json
 from pathlib import Path
 import os
 import re
+from typing import Sequence
 
 from prism_v2sc.ir.model import (
     ArgIR,
@@ -86,6 +90,7 @@ class DirectBitBridge:
     port_name: str
     direction: str
     vector: bool = False
+    array_cell: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,15 @@ class ExprPortBridge:
     port_name: str
     port: PortIR
     expr: dict[str, object]
+
+
+@dataclass(frozen=True)
+class BridgeMethodSpec:
+    """Generated bridge body plus the signals that schedule it."""
+
+    name: str
+    body: tuple[str, ...]
+    sensitivity: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -123,6 +137,7 @@ class ChildOutputAssembler:
     method_name: str
     direct_bridges: tuple[DirectBitBridge, ...]
     expr_bridges: tuple[ExprPortBridge, ...]
+    shadow_slots: tuple[tuple[str, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,18 +161,34 @@ class ProcessSliceAssembler:
     slots: tuple[tuple[str, int, int], ...]
 
 
-def _expr_output_part_parent(bridge: ExprPortBridge) -> str | None:
-    if bridge.port.direction != "output" or bridge.expr.get("kind") != "partselect":
+def _expr_output_parent(bridge: ExprPortBridge, ctx: ModuleContext) -> str | None:
+    if bridge.port.direction != "output" or bridge.expr.get("kind") not in {"bitselect", "partselect"}:
         return None
     target = bridge.expr.get("target")
-    if not isinstance(target, dict) or target.get("kind") != "identifier":
+    if not isinstance(target, dict):
         return None
-    return _sanitize_identifier(str(target.get("name", "")))
+    if target.get("kind") == "identifier":
+        name = str(target.get("name", ""))
+        if bridge.expr.get("kind") == "bitselect" and name in ctx.array_signal_names:
+            return None
+        return _sanitize_identifier(name)
+    if target.get("kind") != "bitselect":
+        return None
+    array_target = target.get("target")
+    if not isinstance(array_target, dict) or array_target.get("kind") != "identifier":
+        return None
+    array_name = str(array_target.get("name", ""))
+    array_index = target.get("index")
+    index_value = const_eval(array_index, ctx) if isinstance(array_index, dict) else None
+    if index_value is None or array_name not in ctx.array_signal_names:
+        return None
+    return f"{_sanitize_identifier(array_name)}[{index_value}]"
 
 
 def _child_output_assemblers(
     direct_bit_bridges: list[DirectBitBridge],
     expr_port_bridges: list[ExprPortBridge],
+    ctx: ModuleContext,
 ) -> list[ChildOutputAssembler]:
     grouped_direct: dict[str, list[DirectBitBridge]] = {}
     grouped_expr: dict[str, list[ExprPortBridge]] = {}
@@ -165,12 +196,19 @@ def _child_output_assemblers(
     for bridge in direct_bit_bridges:
         if bridge.direction not in {"output", "inout"}:
             continue
+        if _is_array_subarray_name(bridge.parent_name, ctx):
+            # An unpacked array element is already its own sc_signal. Its
+            # child output must be bridged directly, not assembled as bits of
+            # the outer array object.
+            continue
         if bridge.parent_name not in grouped_direct and bridge.parent_name not in grouped_expr:
             order.append(bridge.parent_name)
         grouped_direct.setdefault(bridge.parent_name, []).append(bridge)
     for bridge in expr_port_bridges:
-        parent = _expr_output_part_parent(bridge)
+        parent = _expr_output_parent(bridge, ctx)
         if parent is None:
+            continue
+        if _is_array_subarray_name(parent, ctx):
             continue
         if parent not in grouped_direct and parent not in grouped_expr:
             order.append(parent)
@@ -178,12 +216,39 @@ def _child_output_assemblers(
     return [
         ChildOutputAssembler(
             parent_name=parent,
-            method_name=f"__bridge_assemble_{parent}",
+            method_name=f"__bridge_assemble_{_sanitize_identifier(parent)}",
             direct_bridges=tuple(grouped_direct.get(parent, ())),
             expr_bridges=tuple(grouped_expr.get(parent, ())),
         )
         for parent in order
     ]
+
+
+def _merge_child_and_slice_assemblers(
+    child_assemblers: list[ChildOutputAssembler],
+    slice_assemblers: list[ProcessSliceAssembler],
+) -> tuple[list[ChildOutputAssembler], list[ProcessSliceAssembler]]:
+    """Merge sliced local writers into a child-output assembler for a parent.
+
+    A Verilog vector may legally have one child output driving a low slice and
+    a continuous/procedural assignment driving a disjoint high slice. SystemC
+    still requires one process to write the complete ``sc_signal``.
+    """
+    slices_by_parent: dict[str, list[ProcessSliceAssembler]] = {}
+    for assembler in slice_assemblers:
+        slices_by_parent.setdefault(assembler.parent_name, []).append(assembler)
+
+    merged: list[ChildOutputAssembler] = []
+    consumed: set[int] = set()
+    for child in child_assemblers:
+        matching = slices_by_parent.get(child.parent_name, ())
+        shadow_slots: list[tuple[str, int, int]] = list(child.shadow_slots)
+        for assembler in matching:
+            shadow_slots.extend(assembler.slots)
+            consumed.add(id(assembler))
+        merged.append(replace(child, shadow_slots=tuple(shadow_slots)))
+    remaining = [assembler for assembler in slice_assemblers if id(assembler) not in consumed]
+    return merged, remaining
 
 
 def _classify_lvalue_slot(
@@ -199,22 +264,46 @@ def _classify_lvalue_slot(
     kind = lvalue.get("kind")
     if kind == "bitselect":
         target = lvalue.get("target")
-        if not isinstance(target, dict) or target.get("kind") != "identifier":
+        if not isinstance(target, dict):
             return None
         idx = lvalue.get("index")
         value = const_eval(idx, ctx) if isinstance(idx, dict) else None
         if value is None:
             return None
+        if target.get("kind") == "bitselect":
+            array_target = target.get("target")
+            if not isinstance(array_target, dict) or array_target.get("kind") != "identifier":
+                return None
+            array_name = str(array_target.get("name", ""))
+            array_index = target.get("index")
+            array_value = const_eval(array_index, ctx) if isinstance(array_index, dict) else None
+            if array_value is None or array_name not in ctx.array_signal_names:
+                return None
+            return (f"{array_name}[{array_value}]", value, value)
+        if target.get("kind") != "identifier" or str(target.get("name", "")) in ctx.array_signal_names:
+            return None
         return (str(target.get("name", "")), value, value)
     if kind == "partselect":
         target = lvalue.get("target")
-        if not isinstance(target, dict) or target.get("kind") != "identifier":
+        if not isinstance(target, dict):
             return None
         msb_node = lvalue.get("msb")
         lsb_node = lvalue.get("lsb")
         msb = const_eval(msb_node, ctx) if isinstance(msb_node, dict) else None
         lsb = const_eval(lsb_node, ctx) if isinstance(lsb_node, dict) else None
         if msb is None or lsb is None:
+            return None
+        if target.get("kind") == "bitselect":
+            array_target = target.get("target")
+            if not isinstance(array_target, dict) or array_target.get("kind") != "identifier":
+                return None
+            array_name = str(array_target.get("name", ""))
+            array_index = target.get("index")
+            array_value = const_eval(array_index, ctx) if isinstance(array_index, dict) else None
+            if array_value is None or array_name not in ctx.array_signal_names:
+                return None
+            return (f"{array_name}[{array_value}]", max(msb, lsb), min(msb, lsb))
+        if target.get("kind") != "identifier" or str(target.get("name", "")) in ctx.array_signal_names:
             return None
         return (str(target.get("name", "")), max(msb, lsb), min(msb, lsb))
     return None
@@ -258,6 +347,9 @@ def _cast_expr_to_slice_width(expr: object, width: int) -> object:
 
 def _aggregate_multi_writer_continuous_assigns(
     module: ModuleIR,
+    ctx: ModuleContext | None = None,
+    *,
+    force_parents: frozenset[str] = frozenset(),
 ) -> tuple[ModuleIR, list[ProcessSliceAssembler]]:
     """Give sliced continuous assignments one SystemC writer per parent.
 
@@ -266,18 +358,40 @@ def _aggregate_multi_writer_continuous_assigns(
     a read-modify-write on the whole ``sc_signal``, which SystemC treats as
     multiple drivers even when the Verilog slices do not overlap.
     """
-    ctx = build_module_context(module)
-    array_signal_names = {signal.name for signal in module.signals if signal.unpacked_dims}
-    sites_per_parent: dict[str, list[tuple[int, tuple[str, int, int]]]] = {}
+    ctx = ctx or build_module_context(module)
+    sites_per_parent: dict[str, list[tuple[int, int | None, tuple[str, int, int]]]] = {}
     has_whole_or_dynamic_write: set[str] = set()
 
     for index, assign in enumerate(module.continuous_assigns):
         left_expr = assign.left_expr
+        if isinstance(left_expr, dict) and left_expr.get("kind") == "concat":
+            for part_index, part in enumerate(left_expr.get("parts", ()) or ()):
+                slot = _classify_lvalue_slot(part, ctx)
+                if slot is not None:
+                    parent = slot[0]
+                    if not _is_array_subarray_name(parent, ctx):
+                        sites_per_parent.setdefault(parent, []).append(
+                            (index, part_index, slot)
+                        )
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                kind = part.get("kind")
+                if kind == "identifier":
+                    name = str(part.get("name", ""))
+                    if name:
+                        has_whole_or_dynamic_write.add(name)
+                    continue
+                target = part.get("target") if kind in {"bitselect", "partselect"} else None
+                if isinstance(target, dict) and target.get("kind") == "identifier":
+                    has_whole_or_dynamic_write.add(str(target.get("name", "")))
+            continue
         slot = _classify_lvalue_slot(left_expr, ctx)
         if slot is not None:
             parent = slot[0]
-            if parent not in array_signal_names:
-                sites_per_parent.setdefault(parent, []).append((index, slot))
+            if _is_array_subarray_name(parent, ctx):
+                continue
+            sites_per_parent.setdefault(parent, []).append((index, None, slot))
             continue
         if not isinstance(left_expr, dict):
             continue
@@ -294,7 +408,8 @@ def _aggregate_multi_writer_continuous_assigns(
     qualifying = {
         parent: sites
         for parent, sites in sites_per_parent.items()
-        if len(sites) > 1 and parent not in has_whole_or_dynamic_write
+        if (len(sites) > 1 or parent in force_parents)
+        and parent not in has_whole_or_dynamic_write
     }
     if not qualifying:
         return module, []
@@ -306,12 +421,12 @@ def _aggregate_multi_writer_continuous_assigns(
 
     for parent in sorted(qualifying):
         slot_map: dict[tuple[int, int], str] = {}
-        for index, (_, msb, lsb) in qualifying[parent]:
+        for index, part_index, (_, msb, lsb) in qualifying[parent]:
             slot = (msb, lsb)
             shadow_name = slot_map.get(slot)
             if shadow_name is None:
                 slot_id = f"{msb}" if msb == lsb else f"{msb}_{lsb}"
-                shadow_name = f"__shadow_{parent}_{slot_id}"
+                shadow_name = f"__shadow_{_sanitize_identifier(parent)}_{slot_id}"
                 slot_map[slot] = shadow_name
                 if shadow_name not in extra_signal_names:
                     extra_signal_names.add(shadow_name)
@@ -320,19 +435,30 @@ def _aggregate_multi_writer_continuous_assigns(
                     extra_signals.append(
                         SignalIR(name=shadow_name, kind="wire", width=width_ir, signed=False)
                     )
-            rewritten_assigns[index] = replace(
-                rewritten_assigns[index],
-                left=shadow_name,
-                left_expr={"kind": "identifier", "name": shadow_name},
-                right_expr=_cast_expr_to_slice_width(
-                    rewritten_assigns[index].right_expr,
-                    abs(msb - lsb) + 1,
-                ),
-            )
+            if part_index is None:
+                rewritten_assigns[index] = replace(
+                    rewritten_assigns[index],
+                    left=shadow_name,
+                    left_expr={"kind": "identifier", "name": shadow_name},
+                    right_expr=_cast_expr_to_slice_width(
+                        rewritten_assigns[index].right_expr,
+                        abs(msb - lsb) + 1,
+                    ),
+                )
+            else:
+                left_expr = rewritten_assigns[index].left_expr
+                if not isinstance(left_expr, dict):
+                    continue
+                parts = list(left_expr.get("parts", ()) or ())
+                parts[part_index] = {"kind": "identifier", "name": shadow_name}
+                rewritten_assigns[index] = replace(
+                    rewritten_assigns[index],
+                    left_expr={**left_expr, "parts": parts},
+                )
         assemblers.append(
             ProcessSliceAssembler(
                 parent_name=parent,
-                method_name=f"__assemble_{parent}",
+                method_name=f"__assemble_{_sanitize_identifier(parent)}",
                 slots=tuple(
                     (slot_map[(msb, lsb)], msb, lsb) for (msb, lsb) in sorted(slot_map)
                 ),
@@ -351,6 +477,9 @@ def _aggregate_multi_writer_continuous_assigns(
 
 def _aggregate_multi_writer_processes(
     module: ModuleIR,
+    ctx: ModuleContext | None = None,
+    *,
+    force_parents: frozenset[str] = frozenset(),
 ) -> tuple[ModuleIR, list[ProcessSliceAssembler]]:
     """Rewrite per-process bit/part writes so that each parent signal driven
     by multiple procedural processes has exactly one writer process.
@@ -367,7 +496,7 @@ def _aggregate_multi_writer_processes(
     pre-existing real conflict for driver analysis to surface).
     """
     # Gather every assignment dict per process, classified by its lvalue.
-    ctx = build_module_context(module)
+    ctx = ctx or build_module_context(module)
     per_process: list[list[tuple[dict, tuple[str, int, int] | None]]] = []
     for process in module.processes:
         sink: list = []
@@ -381,8 +510,6 @@ def _aggregate_multi_writer_processes(
     # ``mem[i].write(...)``, so the parent multi-writer aggregation logic
     # below mustn't try to shadow-rewrite them — they're not vector
     # bit/part selects.
-    array_signal_names = {signal.name for signal in module.signals if signal.unpacked_dims}
-
     # Group by parent identifier across processes.
     writers_per_parent: dict[str, dict[int, list[tuple[dict, tuple[str, int, int]]]]] = {}
     has_whole_write: set[str] = set()
@@ -406,7 +533,7 @@ def _aggregate_multi_writer_processes(
                     has_whole_write.add(str(target.get("name", "")))
                 continue
             parent, msb, lsb = slot
-            if parent in array_signal_names:
+            if _is_array_subarray_name(parent, ctx):
                 # Array cells already route through their own sc_signal
                 # per cell; no parent-level shadow rewrite needed.
                 continue
@@ -418,7 +545,7 @@ def _aggregate_multi_writer_processes(
     # process AND no writer does a whole-signal or dynamic write.
     qualifying: dict[str, list[tuple[dict, tuple[str, int, int]]]] = {}
     for parent, by_proc in writers_per_parent.items():
-        if len(by_proc) < 2:
+        if len(by_proc) < 2 and parent not in force_parents:
             continue
         if parent in has_whole_write:
             continue
@@ -440,7 +567,7 @@ def _aggregate_multi_writer_processes(
         for stmt, (_, msb, lsb) in sites:
             if (msb, lsb) not in slot_map:
                 slot_id = f"{msb}" if msb == lsb else f"{msb}_{lsb}"
-                shadow_name = f"__shadow_{parent}_{slot_id}"
+                shadow_name = f"__shadow_{_sanitize_identifier(parent)}_{slot_id}"
                 slot_map[(msb, lsb)] = shadow_name
                 if shadow_name not in extra_signal_names:
                     extra_signal_names.add(shadow_name)
@@ -468,7 +595,7 @@ def _aggregate_multi_writer_processes(
         assemblers.append(
             ProcessSliceAssembler(
                 parent_name=parent,
-                method_name=f"__assemble_{parent}",
+                method_name=f"__assemble_{_sanitize_identifier(parent)}",
                 slots=tuple(
                     (slot_map[(msb, lsb)], msb, lsb) for (msb, lsb) in sorted(slot_map)
                 ),
@@ -565,6 +692,9 @@ def emit_systemc_files(
     *,
     signatures: dict[str, ModuleSignature] | None = None,
     instrumentation_config: InstrumentationConfig | None = None,
+    incremental: bool = False,
+    reuse_existing_modules: frozenset[str] = frozenset(),
+    compile_friendly: bool = False,
 ) -> list[Path]:
     """Write one ``.hpp`` per module under ``out_dir``, mirroring RTL layout.
 
@@ -574,22 +704,172 @@ def emit_systemc_files(
     """
     sigs = dict(signatures) if signatures is not None else _signatures_from_design(design)
     modules_by_name = {module.name: module for module in design.modules}
+    cache_path = out_dir / ".prism_codegen_cache.json"
+    old_cache = _load_codegen_cache(cache_path) if incremental else {}
+    old_modules = old_cache.get("modules", {}) if isinstance(old_cache.get("modules"), dict) else {}
+    new_modules: dict[str, dict[str, object]] = {}
+    rendered_count = 0
+    reused_count = 0
+    bootstrapped_count = 0
+
+    if compile_friendly:
+        _write_shared_runtime_header(
+            out_dir / "prism_v2sc_runtime.hpp",
+            instrumentation_config=instrumentation_config,
+        )
 
     written: list[Path] = []
     for module in _dependency_order(list(design.modules)):
-        target = render_module_file(
+        path = _module_output_path(module, out_dir, source_root)
+        fingerprint = _module_codegen_fingerprint(
             module,
             modules_by_name,
             sigs,
-            out_dir,
-            source_root,
-            instrumentation_config=instrumentation_config,
+            instrumentation_config,
+            compile_friendly=compile_friendly,
         )
-        path = _module_output_path(module, out_dir, source_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(target, encoding="utf-8")
+        cached = old_modules.get(module.name, {}) if isinstance(old_modules, dict) else {}
+        cached_artifacts = _cached_module_artifact_paths(cached, out_dir, path)
+        cache_hit = (
+            incremental
+            and isinstance(cached, dict)
+            and cached.get("fingerprint") == fingerprint
+            and all(artifact.exists() for artifact in cached_artifacts)
+        )
+        bootstrap_hit = module.name in reuse_existing_modules and path.exists()
+        artifact_paths = cached_artifacts if (cache_hit or bootstrap_hit) else [path]
+        if cache_hit:
+            reused_count += 1
+        elif bootstrap_hit:
+            bootstrapped_count += 1
+        else:
+            target, implementations = _render_module_artifacts(
+                module,
+                modules_by_name,
+                sigs,
+                out_dir,
+                source_root,
+                instrumentation_config=instrumentation_config,
+                split_implementation=True,
+                compile_friendly=compile_friendly,
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(target, encoding="utf-8")
+            artifact_paths = [path]
+            for file_name, implementation in implementations:
+                implementation_path = path.parent / file_name
+                implementation_path.write_text(implementation, encoding="utf-8")
+                artifact_paths.append(implementation_path)
+            for stale_path in cached_artifacts:
+                if stale_path not in artifact_paths and stale_path != path:
+                    try:
+                        stale_path.unlink()
+                    except OSError:
+                        pass
+            rendered_count += 1
+        recorded_fingerprint = fingerprint
+        if bootstrap_hit and not cache_hit:
+            previous_fingerprint = cached.get("fingerprint") if isinstance(cached, dict) else None
+            recorded_fingerprint = (
+                previous_fingerprint
+                if isinstance(previous_fingerprint, str) and previous_fingerprint
+                else f"trusted-existing:{_file_sha256(path)}"
+            )
+        new_modules[module.name] = {
+            "fingerprint": recorded_fingerprint,
+            "path": str(path.relative_to(out_dir)),
+            "artifacts": [str(artifact.relative_to(out_dir)) for artifact in artifact_paths],
+            "size_bytes": sum(artifact.stat().st_size for artifact in artifact_paths),
+        }
         written.append(path)
+    if incremental or reuse_existing_modules:
+        _write_codegen_cache(
+            cache_path,
+            {
+                "version": 2,
+                "generator_fingerprint": _generator_fingerprint(),
+                "compile_friendly": compile_friendly,
+                "modules": new_modules,
+                "last_run": {
+                    "rendered": rendered_count,
+                    "reused": reused_count,
+                    "bootstrapped": bootstrapped_count,
+                    "module_count": len(written),
+                },
+            },
+        )
     return written
+
+
+def _cached_module_artifact_paths(cached: object, out_dir: Path, header_path: Path) -> list[Path]:
+    if not isinstance(cached, dict):
+        return [header_path]
+    artifacts = cached.get("artifacts")
+    if isinstance(artifacts, list) and artifacts and all(isinstance(item, str) for item in artifacts):
+        return [out_dir / item for item in artifacts]
+    return [header_path]
+
+
+def _load_codegen_cache(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) and payload.get("version") in {1, 2} else {}
+
+
+def _write_codegen_cache(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _generator_fingerprint() -> str:
+    digest = hashlib.sha256()
+    for source in (
+        Path(__file__),
+        Path(__file__).with_name("expr.py"),
+        Path(__file__).with_name("writer.py"),
+        Path(__file__).with_name("instrumentation.py"),
+    ):
+        digest.update(source.name.encode("utf-8"))
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
+
+
+def _module_codegen_fingerprint(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+    instrumentation_config: InstrumentationConfig | None,
+    *,
+    compile_friendly: bool = False,
+) -> str:
+    dependencies = _module_dependencies(module)
+    dependency_signatures = {
+        name: asdict(signatures[name])
+        for name in dependencies
+        if name in signatures
+    }
+    payload = {
+        "generator": _generator_fingerprint(),
+        "module": asdict(module),
+        "dependency_signatures": dependency_signatures,
+        "instrumentation": repr(instrumentation_config),
+        "compile_friendly": compile_friendly,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def render_module_file(
@@ -602,18 +882,48 @@ def render_module_file(
     instrumentation_config: InstrumentationConfig | None = None,
 ) -> str:
     """Render a single module's SystemC hpp text (no disk side effects)."""
+    header, _implementations = _render_module_artifacts(
+        module,
+        modules_by_name,
+        signatures,
+        out_dir,
+        source_root,
+        instrumentation_config=instrumentation_config,
+        split_implementation=False,
+    )
+    return header
+
+
+def _render_module_artifacts(
+    module: ModuleIR,
+    modules_by_name: dict[str, ModuleIR],
+    signatures: dict[str, ModuleSignature],
+    out_dir: Path,
+    source_root: Path,
+    *,
+    instrumentation_config: InstrumentationConfig | None = None,
+    split_implementation: bool,
+    compile_friendly: bool = False,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
     writer = CodeWriter()
     guard = f"PRISM_V2SC_MOD_{_sanitize_identifier(module.name).upper()}_HPP"
     writer.line(banner().rstrip())
     writer.line("#pragma once")
     writer.line()
-    writer.line("#include <array>")
-    writer.line("#include <systemc>")
-    writer.line("#include <string>")
-    writer.line("#include <type_traits>")
-    if instrumentation_config is not None and instrumentation_config.enabled:
-        writer.line("#include <cstdint>")
-        writer.line("#include <ostream>")
+    if compile_friendly:
+        runtime_path = os.path.relpath(
+            out_dir / "prism_v2sc_runtime.hpp",
+            start=_module_output_path(module, out_dir, source_root).parent,
+        ).replace(os.sep, "/")
+        writer.line(f'#include "{runtime_path}"')
+    else:
+        writer.line("#include <array>")
+        writer.line("#include <systemc>")
+        writer.line("#include <string>")
+        writer.line("#include <type_traits>")
+        if instrumentation_config is not None and instrumentation_config.enabled:
+            writer.line("#include <cstdint>")
+            writer.line("#include <ostream>")
 
     child_includes = _child_include_paths(module, modules_by_name, out_dir, source_root)
     if child_includes:
@@ -625,23 +935,95 @@ def render_module_file(
     writer.line("using namespace sc_core;")
     writer.line("using namespace sc_dt;")
     writer.line()
-    _emit_integer_type_aliases(writer)
+    if not compile_friendly:
+        _emit_integer_type_aliases(writer)
     writer.line()
     writer.line(f"#ifndef {guard}")
     writer.line(f"#define {guard}")
     writer.line()
 
-    _emit_module(
+    outlined_bodies = _emit_module(
         writer,
         module,
         modules_by_name,
         signatures,
         include_children=False,
         instrumentation_config=instrumentation_config,
+        defer_outlined_definitions=split_implementation,
+        compile_friendly=compile_friendly,
     )
     writer.line()
     writer.line(f"#endif  // {guard}")
-    return writer.render()
+    implementations = (
+        _render_module_implementation_chunks(
+            module,
+            outlined_bodies,
+            out_dir,
+            source_root,
+            implementation_chunk_bytes=64 * 1024 if compile_friendly else 256 * 1024,
+        )
+        if split_implementation and outlined_bodies
+        else ()
+    )
+    return writer.render(), implementations
+
+
+def _render_module_implementation_chunks(
+    module: ModuleIR,
+    methods: list[tuple[str, tuple[str, ...]]],
+    out_dir: Path,
+    source_root: Path,
+    *,
+    implementation_chunk_bytes: int = 256 * 1024,
+) -> tuple[tuple[str, str], ...]:
+    heavy_expression_line_bytes = 32 * 1024
+    chunks: list[list[tuple[str, tuple[str, ...]]]] = []
+    current: list[tuple[str, tuple[str, ...]]] = []
+    current_size = 0
+    for method in methods:
+        method_size = sum(len(line) + 1 for line in method[1])
+        has_heavy_expression = any(
+            len(line) > heavy_expression_line_bytes for line in method[1]
+        )
+        if current and (
+            current_size + method_size > implementation_chunk_bytes or has_heavy_expression
+        ):
+            chunks.append(current)
+            current = []
+            current_size = 0
+        current.append(method)
+        current_size += method_size
+        if has_heavy_expression:
+            chunks.append(current)
+            current = []
+            current_size = 0
+    if current:
+        chunks.append(current)
+
+    header_name = _module_output_path(module, out_dir, source_root).name
+    class_name = _sanitize_identifier(module.name)
+    stem = Path(header_name).stem
+    rendered: list[tuple[str, str]] = []
+    for index, chunk in enumerate(chunks):
+        writer = CodeWriter()
+        writer.line(banner().rstrip())
+        writer.line(f'#include "{header_name}"')
+        writer.line()
+        for method_name, body_lines in chunk:
+            if method_name == "__prism_constructor__":
+                for body_line in body_lines:
+                    writer.line(body_line)
+                writer.line()
+                continue
+            writer.line(f"void {class_name}::{method_name}() {{")
+            writer.indent()
+            for body_line in body_lines:
+                writer.line(body_line)
+            writer.dedent()
+            writer.line("}")
+            writer.line()
+        rendered.append((f"{stem}__impl_{index:03d}.cpp", writer.render()))
+    return tuple(rendered)
 
 
 def module_output_path(module: ModuleIR, out_dir: Path, source_root: Path) -> Path:
@@ -694,7 +1076,7 @@ def _signatures_from_design(design: DesignIR) -> dict[str, ModuleSignature]:
         signatures[module.name] = ModuleSignature(
             name=module.name,
             ports=module.ports,
-            parameters=module.parameters,
+            parameters=tuple(parameter for parameter in module.parameters if parameter.kind == "parameter"),
         )
     return signatures
 
@@ -712,23 +1094,72 @@ def _emit_module(
     *,
     include_children: bool,
     instrumentation_config: InstrumentationConfig | None = None,
-) -> None:
+    defer_outlined_definitions: bool = False,
+    compile_friendly: bool = False,
+) -> list[tuple[str, tuple[str, ...]]]:
     if module.model.get("provider") == "memory":
         _emit_provider_memory_module(writer, module)
-        return
+        return []
     class_name = _sanitize_identifier(module.name)
     # Rewrite sliced continuous/procedural writes that share a parent signal
     # so the generated SystemC has exactly one writer per signal. Must run
     # before ``build_module_context`` so the shadow signals enter the context.
-    module, continuous_assemblers = _aggregate_multi_writer_continuous_assigns(module)
-    module, process_assemblers = _aggregate_multi_writer_processes(module)
+    original_module = module
+    base_ctx = build_module_context(module, compile_friendly=compile_friendly)
+    preliminary_direct_bridges = _direct_bit_bridges(
+        module,
+        modules_by_name,
+        signatures,
+        parent_ctx=base_ctx,
+    )
+    preliminary_expr_bridges = _expr_port_bridges(
+        module,
+        modules_by_name,
+        signatures,
+        parent_ctx=base_ctx,
+    )
+    child_driven_parents = frozenset(
+        assembler.parent_name
+        for assembler in _child_output_assemblers(
+            preliminary_direct_bridges,
+            preliminary_expr_bridges,
+            base_ctx,
+        )
+    )
+    module, continuous_assemblers = _aggregate_multi_writer_continuous_assigns(
+        module,
+        base_ctx,
+        force_parents=child_driven_parents,
+    )
+    module, process_assemblers = _aggregate_multi_writer_processes(
+        module,
+        base_ctx,
+        force_parents=child_driven_parents,
+    )
     slice_assemblers = continuous_assemblers + process_assemblers
     resolved_names = _resolved_signal_names(module, modules_by_name, signatures)
-    ctx = build_module_context(module, resolved_names=frozenset(resolved_names))
+    if module is original_module:
+        ctx = replace(base_ctx, resolved_names=frozenset(resolved_names))
+    else:
+        ctx = build_module_context(
+            module,
+            resolved_names=frozenset(resolved_names),
+            compile_friendly=compile_friendly,
+        )
     bit_bridges = _generate_bit_bridges(module, modules_by_name, signatures)
-    direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures)
-    expr_port_bridges = _expr_port_bridges(module, modules_by_name, signatures)
-    child_output_assemblers = _child_output_assemblers(direct_bit_bridges, expr_port_bridges)
+    direct_bit_bridges = _direct_bit_bridges(module, modules_by_name, signatures, parent_ctx=ctx)
+    expr_port_bridges = _expr_port_bridges(module, modules_by_name, signatures, parent_ctx=ctx)
+    bridge_methods = _bridge_method_specs(direct_bit_bridges, expr_port_bridges, ctx)
+    if compile_friendly:
+        bridge_methods = [
+            replace(spec, body=tuple(_optimize_method_body_for_compile(spec.body)))
+            for spec in bridge_methods
+        ]
+    child_output_assemblers = _child_output_assemblers(direct_bit_bridges, expr_port_bridges, ctx)
+    child_output_assemblers, slice_assemblers = _merge_child_and_slice_assemblers(
+        child_output_assemblers,
+        slice_assemblers,
+    )
     unconnected_port_signals = _unconnected_port_signals(module, modules_by_name, signatures)
     module_instrumentation = _module_instrumentation_config(module, instrumentation_config)
     module_needs_power_sample_strobe = _module_subtree_needs_power_sample_strobe(
@@ -736,11 +1167,13 @@ def _emit_module(
         modules_by_name,
         instrumentation_config,
     )
-    if module.parameters:
+    if any(parameter.kind == "parameter" for parameter in module.parameters):
         template_params = _template_parameter_list(module)
         writer.line(f"template <{template_params}>")
     writer.line(f"SC_MODULE({class_name}) {{")
     writer.indent()
+
+    _emit_local_parameters(writer, module)
 
     for port in module.ports:
         dims = port.declared_unpacked_dims or port.unpacked_dims
@@ -795,31 +1228,69 @@ def _emit_module(
         writer.line()
 
     methods = _method_specs(module, ctx)
+    if compile_friendly:
+        methods = [
+            (method_name, _optimize_method_body_for_compile(body_lines))
+            for method_name, body_lines in methods
+        ]
+    outline_methods = (
+        not any(parameter.kind == "parameter" for parameter in module.parameters)
+        and (
+            compile_friendly
+            or (
+            len(module.continuous_assigns) > 256
+            or len(direct_bit_bridges) + len(expr_port_bridges) > 256
+            or len(bit_bridges) > 64
+            or len(child_output_assemblers) > 64
+            )
+        )
+    )
+    outlined_method_bodies: list[tuple[str, tuple[str, ...]]] = []
     for subroutine in module.subroutines:
         _emit_subroutine(writer, subroutine, ctx)
     for method_name, body_lines in methods:
-        writer.line(f"void {method_name}() {{")
-        writer.indent()
-        for body_line in body_lines:
-            writer.line(body_line)
-        writer.dedent()
-        writer.line("}")
+        if outline_methods:
+            writer.line(f"void {method_name}();")
+            outlined_method_bodies.append((method_name, tuple(body_lines)))
+        else:
+            writer.line(f"void {method_name}() {{")
+            writer.indent()
+            for body_line in body_lines:
+                writer.line(body_line)
+            writer.dedent()
+            writer.line("}")
         writer.line()
 
     for bridge in bit_bridges:
-        _emit_bridge_method(writer, bridge)
+        if outline_methods:
+            writer.line(f"void {bridge.method_name}();")
+            bridge_body = _generate_bit_bridge_body(bridge)
+            if compile_friendly:
+                bridge_body = _optimize_method_body_for_compile(bridge_body)
+            outlined_method_bodies.append(
+                (bridge.method_name, tuple(bridge_body))
+            )
+        else:
+            _emit_bridge_method(writer, bridge)
         writer.line()
-    for bridge in direct_bit_bridges:
-        if bridge.direction in {"input", "inout"}:
-            _emit_direct_bridge_method(writer, bridge)
-            writer.line()
+    for bridge_method in bridge_methods:
+        if outline_methods:
+            writer.line(f"void {bridge_method.name}();")
+            outlined_method_bodies.append((bridge_method.name, bridge_method.body))
+        else:
+            _emit_bridge_method_spec(writer, bridge_method)
+        writer.line()
     for assembler in child_output_assemblers:
-        _emit_child_output_assembler(writer, assembler, ctx)
-        writer.line()
-    for bridge in expr_port_bridges:
-        if _expr_output_part_parent(bridge) is not None:
-            continue
-        _emit_expr_port_bridge_method(writer, bridge, ctx)
+        if outline_methods:
+            writer.line(f"void {assembler.method_name}();")
+            assembler_body = _generate_child_output_assembler_body(assembler, ctx)
+            if compile_friendly:
+                assembler_body = _optimize_method_body_for_compile(assembler_body)
+            outlined_method_bodies.append(
+                (assembler.method_name, tuple(assembler_body))
+            )
+        else:
+            _emit_child_output_assembler(writer, assembler, ctx)
         writer.line()
     for assembler in slice_assemblers:
         _emit_process_slice_assembler(writer, assembler)
@@ -848,14 +1319,14 @@ def _emit_module(
             writer.line(body_line)
         writer.line()
 
-    _emit_constructor(
-        writer,
+    constructor_args = (
         module,
         ctx,
         methods,
         bit_bridges,
         direct_bit_bridges,
         expr_port_bridges,
+        bridge_methods,
         child_output_assemblers,
         unconnected_port_signals,
         slice_assemblers,
@@ -865,8 +1336,29 @@ def _emit_module(
         module_instrumentation,
         power_sampling_processes,
     )
+    if outline_methods and defer_outlined_definitions:
+        writer.line(f"SC_HAS_PROCESS({class_name});")
+        writer.line(f"{class_name}(sc_module_name name);")
+        constructor_writer = CodeWriter()
+        _emit_constructor(constructor_writer, *constructor_args, out_of_class=True)
+        outlined_method_bodies.append(
+            ("__prism_constructor__", tuple(constructor_writer.render().splitlines()))
+        )
+    else:
+        _emit_constructor(writer, *constructor_args)
     writer.dedent()
     writer.line("};")
+    if outlined_method_bodies and not defer_outlined_definitions:
+        writer.line()
+        for method_name, body_lines in outlined_method_bodies:
+            writer.line(f"inline void {class_name}::{method_name}() {{")
+            writer.indent()
+            for body_line in body_lines:
+                writer.line(body_line)
+            writer.dedent()
+            writer.line("}")
+            writer.line()
+    return outlined_method_bodies
 
 
 def _emit_provider_memory_module(writer: CodeWriter, module: ModuleIR) -> None:
@@ -883,7 +1375,7 @@ def _emit_provider_memory_module(writer: CodeWriter, module: ModuleIR) -> None:
     write_data = _sanitize_identifier(str(model["write_data"]))
     read_data = _sanitize_identifier(str(model["read_data"]))
     depth = _cpp_expr(str(model["depth"]))
-    lane_width = int(model["lane_width"])
+    lane_width = _cpp_expr(str(model["lane_width"]))
     data_port = ports[str(model["write_data"])]
     address_port = ports[str(model["address"])]
     data_type = _sc_type(data_port.width, data_port.signed)
@@ -891,10 +1383,11 @@ def _emit_provider_memory_module(writer: CodeWriter, module: ModuleIR) -> None:
     data_width = _width_expr(data_port.width)
     class_name = _sanitize_identifier(module.name)
 
-    if module.parameters:
+    if any(parameter.kind == "parameter" for parameter in module.parameters):
         writer.line(f"template <{_template_parameter_list(module)}>")
     writer.line(f"SC_MODULE({class_name}) {{")
     writer.indent()
+    _emit_local_parameters(writer, module)
     for port in module.ports:
         dims = port.declared_unpacked_dims or port.unpacked_dims
         writer.line(f"{_port_type(port)} {_sanitize_identifier(port.name)}{_unpacked_suffix(dims)};")
@@ -1076,6 +1569,7 @@ def _emit_constructor(
     bit_bridges: list[GenerateBitBridge],
     direct_bit_bridges: list[DirectBitBridge],
     expr_port_bridges: list[ExprPortBridge],
+    bridge_methods: list[BridgeMethodSpec],
     child_output_assemblers: list[ChildOutputAssembler],
     unconnected_port_signals: list[UnconnectedPortSignal],
     process_assemblers: list[ProcessSliceAssembler],
@@ -1084,6 +1578,8 @@ def _emit_constructor(
     root_instrumentation_config: InstrumentationConfig | None,
     instrumentation_config: InstrumentationConfig,
     power_sampling_processes: list,
+    *,
+    out_of_class: bool = False,
 ) -> None:
     class_name = _sanitize_identifier(module.name)
     init_list = [f"{_sanitize_identifier(instance.name)}(\"{instance.name}\")" for instance in module.instances]
@@ -1095,14 +1591,19 @@ def _emit_constructor(
             )
     for bridge in bit_bridges:
         init_list.append(f"{bridge.name}(\"{bridge.name}\", {bridge.count_expr})")
+    constructor_name = (
+        f"{class_name}::{class_name}(sc_module_name name)"
+        if out_of_class
+        else f"SC_CTOR({class_name})"
+    )
     if init_list:
-        writer.line(f"SC_CTOR({class_name})")
+        writer.line(constructor_name)
         writer.indent()
         writer.line(": " + ", ".join(init_list))
         writer.dedent()
         writer.line("{")
     else:
-        writer.line(f"SC_CTOR({class_name}) {{")
+        writer.line(f"{constructor_name} {{")
     writer.indent()
 
     for init_line in generate_instrumentation_init(instrumentation_config):
@@ -1200,11 +1701,16 @@ def _emit_constructor(
             writer.line("}")
         writer.line()
 
-    for bridge in direct_bit_bridges:
-        if bridge.direction not in {"input", "inout"}:
-            continue
-        writer.line(f"SC_METHOD({bridge.method_name});")
-        writer.line(f"sensitive << {bridge.parent_name};")
+    for bridge_method in bridge_methods:
+        if bridge_method.sensitivity:
+            writer.line(f"SC_METHOD({bridge_method.name});")
+            writer.line(
+                "sensitive"
+                + "".join(f" << {name}" for name in bridge_method.sensitivity)
+                + ";"
+            )
+        else:
+            writer.line(f"{bridge_method.name}();")
         writer.line()
 
     for assembler in child_output_assemblers:
@@ -1213,19 +1719,10 @@ def _emit_constructor(
             f" << {bridge.name}"
             for bridge in (*assembler.direct_bridges, *assembler.expr_bridges)
         )
+        sensitivities += "".join(
+            f" << {shadow}" for shadow, _msb, _lsb in assembler.shadow_slots
+        )
         writer.line(f"sensitive{sensitivities};")
-        writer.line()
-
-    for bridge in expr_port_bridges:
-        if _expr_output_part_parent(bridge) is not None:
-            continue
-        sensitivity = [bridge.name] if bridge.port.direction == "output" else collect_sensitivity(bridge.expr, ctx)
-        sensitivity = _expand_sensitivity_list(sensitivity, ctx)
-        if sensitivity:
-            writer.line(f"SC_METHOD({bridge.method_name});")
-            writer.line("sensitive" + "".join(f" << {name}" for name in sensitivity) + ";")
-        else:
-            writer.line(f"{bridge.method_name}();")
         writer.line()
 
     for assembler in process_assemblers:
@@ -1355,8 +1852,28 @@ def _resolve_instance_arg_ports(
 
 def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[str]]]:
     specs: list[tuple[str, list[str]]] = []
-    for index, assign in enumerate(module.continuous_assigns):
-        specs.append((f"assign_{index}", _emit_continuous_assign(assign, ctx)))
+    assign_count = len(module.continuous_assigns)
+    if assign_count > 256:
+        start = 0
+        body: list[str] = []
+        body_size = 0
+        for index, assign in enumerate(module.continuous_assigns):
+            assign_body = ["{"]
+            assign_body.extend(f"  {line}" for line in _emit_continuous_assign(assign, ctx))
+            assign_body.append("}")
+            assign_size = sum(len(line) + 1 for line in assign_body)
+            if body and (index - start >= 64 or body_size + assign_size > 256 * 1024):
+                specs.append((f"assign_group_{start}_{index - 1}", body))
+                start = index
+                body = []
+                body_size = 0
+            body.extend(assign_body)
+            body_size += assign_size
+        if body:
+            specs.append((f"assign_group_{start}_{assign_count - 1}", body))
+    else:
+        for index, assign in enumerate(module.continuous_assigns):
+            specs.append((f"assign_{index}", _emit_continuous_assign(assign, ctx)))
 
     comb_index = 0
     ff_index = 0
@@ -1370,59 +1887,116 @@ def _method_specs(module: ModuleIR, ctx: ModuleContext) -> list[tuple[str, list[
     return specs
 
 
+_STATIC_SIGNAL_READ_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9\s()+\-*/]+\])*\.read\(\)"
+)
+
+
+def _optimize_method_body_for_compile(lines: Sequence[str]) -> list[str]:
+    """Hoist repeated stable signal reads into method-local temporaries.
+
+    SystemC signal writes update after the method returns, so repeated reads
+    of the same statically indexed signal observe one stable value throughout
+    an invocation. Dynamic array indices are deliberately excluded because
+    their index variables may be declared inside the method body.
+    """
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for line in lines:
+        for match in _STATIC_SIGNAL_READ_RE.finditer(line):
+            read = match.group(0)
+            if read not in counts:
+                counts[read] = 0
+                order.append(read)
+            counts[read] += 1
+    repeated = [read for read in order if counts[read] >= 2]
+    if not repeated:
+        return list(lines)
+
+    aliases = {read: f"__prism_read_{index}" for index, read in enumerate(repeated)}
+    optimized = [f"const auto {aliases[read]} = {read};" for read in repeated]
+    for line in lines:
+        updated = line
+        for read in repeated:
+            updated = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(read)}(?![A-Za-z0-9_])",
+                aliases[read],
+                updated,
+            )
+        optimized.append(updated)
+    return optimized
+
+
 def _emit_bridge_method(writer: CodeWriter, bridge: GenerateBitBridge) -> None:
     writer.line(f"void {bridge.method_name}() {{")
     writer.indent()
-    if bridge.direction == "input":
-        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
-        writer.indent()
-        writer.line(f"{bridge.name}[i].write({bridge.parent_name}.read()[i]);")
-        writer.dedent()
-        writer.line("}")
-    elif bridge.direction == "inout":
-        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
-        writer.indent()
-        writer.line(f"{bridge.name}[i].write(sc_lv<1>({bridge.parent_name}.read()[i]));")
-        writer.dedent()
-        writer.line("}")
-        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
-        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
-        writer.indent()
-        writer.line(f"__tmp[i] = {bridge.name}[i].read()[0];")
-        writer.dedent()
-        writer.line("}")
-        writer.line(f"{bridge.parent_name}.write(__tmp);")
-    else:
-        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
-        writer.line(f"for (int i = 0; i < {bridge.count_expr}; ++i) {{")
-        writer.indent()
-        writer.line(f"__tmp[i] = {bridge.name}[i].read();")
-        writer.dedent()
-        writer.line("}")
-        writer.line(f"{bridge.parent_name}.write(__tmp);")
+    for line in _generate_bit_bridge_body(bridge):
+        writer.line(line)
     writer.dedent()
     writer.line("}")
 
 
+def _generate_bit_bridge_body(bridge: GenerateBitBridge) -> list[str]:
+    if bridge.direction == "input":
+        return [
+            f"for (int i = 0; i < {bridge.count_expr}; ++i) {{",
+            f"    {bridge.name}[i].write({bridge.parent_name}.read()[i]);",
+            "}",
+        ]
+    if bridge.direction == "inout":
+        return [
+            f"for (int i = 0; i < {bridge.count_expr}; ++i) {{",
+            f"    {bridge.name}[i].write(sc_lv<1>({bridge.parent_name}.read()[i]));",
+            "}",
+            f"auto __tmp = {bridge.parent_name}.read();",
+            f"for (int i = 0; i < {bridge.count_expr}; ++i) {{",
+            f"    __tmp[i] = {bridge.name}[i].read()[0];",
+            "}",
+            f"{bridge.parent_name}.write(__tmp);",
+        ]
+    return [
+        f"auto __tmp = {bridge.parent_name}.read();",
+        f"for (int i = 0; i < {bridge.count_expr}; ++i) {{",
+        f"    __tmp[i] = {bridge.name}[i].read();",
+        "}",
+        f"{bridge.parent_name}.write(__tmp);",
+    ]
+
+
 def _emit_direct_bridge_method(writer: CodeWriter, bridge: DirectBitBridge) -> None:
-    writer.line(f"void {bridge.method_name}() {{")
-    writer.indent()
+    _emit_bridge_method_spec(
+        writer,
+        BridgeMethodSpec(
+            name=bridge.method_name,
+            body=tuple(_direct_bridge_body(bridge)),
+            sensitivity=(bridge.parent_name,),
+        ),
+    )
+
+
+def _direct_bridge_body(bridge: DirectBitBridge) -> list[str]:
+    if bridge.array_cell:
+        target = f"{bridge.parent_name}[{bridge.index_expr}]"
+        if bridge.direction == "input":
+            return [f"{bridge.name}.write({target}.read());"]
+        if bridge.direction == "inout":
+            return [f"{bridge.name}.write(sc_lv<1>({target}.read()));"]
+        return [f"{target}.write({bridge.name}.read());"]
     if bridge.direction == "input":
         value = f"{bridge.parent_name}.read()[{bridge.index_expr}]"
         if bridge.vector:
             value = f"sc_uint<1>({value})"
-        writer.line(f"{bridge.name}.write({value});")
+        return [f"{bridge.name}.write({value});"]
     elif bridge.direction == "inout":
-        writer.line(
+        return [
             f"{bridge.name}.write(sc_lv<1>({bridge.parent_name}.read()[{bridge.index_expr}]));"
-        )
-    else:
-        writer.line(f"auto __tmp = {bridge.parent_name}.read();")
-        value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
-        writer.line(f"__tmp[{bridge.index_expr}] = {value};")
-        writer.line(f"{bridge.parent_name}.write(__tmp);")
-    writer.dedent()
-    writer.line("}")
+        ]
+    value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
+    return [
+        f"auto __tmp = {bridge.parent_name}.read();",
+        f"__tmp[{bridge.index_expr}] = {value};",
+        f"{bridge.parent_name}.write(__tmp);",
+    ]
 
 
 def _emit_child_output_assembler(
@@ -1432,46 +2006,151 @@ def _emit_child_output_assembler(
 ) -> None:
     writer.line(f"void {assembler.method_name}() {{")
     writer.indent()
-    writer.line(f"auto __tmp = {assembler.parent_name}.read();")
-    for bridge in assembler.direct_bridges:
-        if bridge.direction == "inout":
-            writer.line(f"__tmp[{bridge.index_expr}] = {bridge.name}.read()[0];")
-        else:
-            value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
-            writer.line(f"__tmp[{bridge.index_expr}] = {value};")
-    for bridge in assembler.expr_bridges:
-        value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
-        msb = render_rvalue(bridge.expr.get("msb"), ctx)
-        lsb = render_rvalue(bridge.expr.get("lsb"), ctx)
-        writer.line(f"__tmp.range({msb}, {lsb}) = {value};")
-    writer.line(f"{assembler.parent_name}.write(__tmp);")
+    for line in _generate_child_output_assembler_body(assembler, ctx):
+        writer.line(line)
     writer.dedent()
     writer.line("}")
+
+
+def _generate_child_output_assembler_body(
+    assembler: ChildOutputAssembler,
+    ctx: ModuleContext,
+) -> list[str]:
+    lines = [f"auto __tmp = {assembler.parent_name}.read();"]
+    for shadow, msb, lsb in assembler.shadow_slots:
+        if msb == lsb:
+            lines.append(f"__tmp[{msb}] = {shadow}.read();")
+        else:
+            lines.append(f"__tmp.range({msb}, {lsb}) = {shadow}.read();")
+    for bridge in assembler.direct_bridges:
+        if bridge.direction == "inout":
+            lines.append(f"__tmp[{bridge.index_expr}] = {bridge.name}.read()[0];")
+        else:
+            value = f"{bridge.name}.read()[0]" if bridge.vector else f"{bridge.name}.read()"
+            lines.append(f"__tmp[{bridge.index_expr}] = {value};")
+    for bridge in assembler.expr_bridges:
+        value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
+        if bridge.expr.get("kind") == "bitselect":
+            index = render_rvalue(bridge.expr.get("index"), ctx)
+            lines.append(f"__tmp[{index}] = {value};")
+        else:
+            msb = render_rvalue(bridge.expr.get("msb"), ctx)
+            lsb = render_rvalue(bridge.expr.get("lsb"), ctx)
+            lines.append(f"__tmp.range({msb}, {lsb}) = {value};")
+    lines.append(f"{assembler.parent_name}.write(__tmp);")
+    return lines
 
 
 def _emit_expr_port_bridge_method(writer: CodeWriter, bridge: ExprPortBridge, ctx: ModuleContext) -> None:
-    writer.line(f"void {bridge.method_name}() {{")
-    writer.indent()
+    raw_sensitivity = (
+        [bridge.name]
+        if bridge.port.direction == "output"
+        else collect_sensitivity(bridge.expr, ctx)
+    )
+    _emit_bridge_method_spec(
+        writer,
+        BridgeMethodSpec(
+            name=bridge.method_name,
+            body=tuple(_expr_port_bridge_body(bridge, ctx)),
+            sensitivity=tuple(_expand_sensitivity_list(raw_sensitivity, ctx)),
+        ),
+    )
+
+
+def _expr_port_bridge_body(bridge: ExprPortBridge, ctx: ModuleContext) -> list[str]:
     if bridge.port.direction == "output":
         value = _cast_to_lvalue_type(f"{bridge.name}.read()", bridge.expr, ctx)
-        if bridge.expr.get("kind") == "partselect":
-            target = bridge.expr.get("target")
-            if isinstance(target, dict) and target.get("kind") == "identifier":
-                parent = _sanitize_identifier(str(target.get("name", "")))
-                msb = render_rvalue(bridge.expr.get("msb"), ctx)
-                lsb = render_rvalue(bridge.expr.get("lsb"), ctx)
-                writer.line(f"auto __tmp = {parent}.read();")
-                writer.line(f"__tmp.range({msb}, {lsb}) = {value};")
-                writer.line(f"{parent}.write(__tmp);")
-            else:
-                writer.line("// unsupported aggregate output part-select binding")
-        else:
-            writer.line(f"{render_lvalue(bridge.expr, ctx)}.write({value});")
-    else:
-        value = _cast_to_port_type(render_rvalue(bridge.expr, ctx), bridge.port)
-        writer.line(f"{bridge.name}.write({value});")
+        return [_emit_lvalue_write(bridge.expr, value, ctx)]
+    value = _cast_to_port_type(render_rvalue(bridge.expr, ctx), bridge.port)
+    return [f"{bridge.name}.write({value});"]
+
+
+def _emit_bridge_method_spec(writer: CodeWriter, spec: BridgeMethodSpec) -> None:
+    writer.line(f"void {spec.name}() {{")
+    writer.indent()
+    for line in spec.body:
+        writer.line(line)
     writer.dedent()
     writer.line("}")
+
+
+def _bridge_method_specs(
+    direct_bit_bridges: list[DirectBitBridge],
+    expr_port_bridges: list[ExprPortBridge],
+    ctx: ModuleContext,
+) -> list[BridgeMethodSpec]:
+    specs: list[BridgeMethodSpec] = []
+    for bridge in direct_bit_bridges:
+        if bridge.direction not in {"input", "inout"} and not bridge.array_cell:
+            continue
+        specs.append(
+            BridgeMethodSpec(
+                name=bridge.method_name,
+                body=tuple(_direct_bridge_body(bridge)),
+                sensitivity=(
+                    (bridge.name,)
+                    if bridge.direction == "output"
+                    else (_bridge_parent_signal_expr(bridge),)
+                ),
+            )
+        )
+    for bridge in expr_port_bridges:
+        expr_parent = _expr_output_parent(bridge, ctx)
+        if expr_parent is not None and not _is_array_subarray_name(expr_parent, ctx):
+            continue
+        raw_sensitivity = (
+            [bridge.name]
+            if bridge.port.direction == "output"
+            else collect_sensitivity(bridge.expr, ctx)
+        )
+        specs.append(
+            BridgeMethodSpec(
+                name=bridge.method_name,
+                body=tuple(_expr_port_bridge_body(bridge, ctx)),
+                sensitivity=tuple(_expand_sensitivity_list(raw_sensitivity, ctx)),
+            )
+        )
+
+    scheduled = [spec for spec in specs if spec.sensitivity]
+    immediate = [spec for spec in specs if not spec.sensitivity]
+    if len(scheduled) <= 256:
+        return specs
+
+    grouped: list[BridgeMethodSpec] = []
+    for start in range(0, len(scheduled), 256):
+        chunk = scheduled[start : start + 256]
+        body: list[str] = []
+        sensitivity: list[str] = []
+        for spec in chunk:
+            body.append("{")
+            body.extend(f"  {line}" for line in spec.body)
+            body.append("}")
+            sensitivity.extend(spec.sensitivity)
+        grouped.append(
+            BridgeMethodSpec(
+                name=f"__bridge_group_{start}_{start + len(chunk) - 1}",
+                body=tuple(body),
+                sensitivity=tuple(_dedupe_preserve(sensitivity)),
+            )
+        )
+    return grouped + immediate
+
+
+def _array_index_count(name: str) -> int:
+    return name.count("[")
+
+
+def _is_array_subarray_name(name: str, ctx: ModuleContext) -> bool:
+    """Return whether ``name`` indexes an array but not a complete cell."""
+    base = name.split("[", 1)[0]
+    dimensions = ctx.array_dimensions.get(base, ())
+    return bool(dimensions) and 0 < _array_index_count(name) < len(dimensions)
+
+
+def _bridge_parent_signal_expr(bridge: DirectBitBridge) -> str:
+    if bridge.array_cell:
+        return f"{bridge.parent_name}[{bridge.index_expr}]"
+    return bridge.parent_name
 
 
 def _emit_process_slice_assembler(writer: CodeWriter, assembler: ProcessSliceAssembler) -> None:
@@ -1557,14 +2236,21 @@ def _direct_bit_bridges(
     module: ModuleIR,
     modules_by_name: dict[str, ModuleIR],
     signatures: dict[str, ModuleSignature],
+    *,
+    parent_ctx: ModuleContext | None = None,
 ) -> list[DirectBitBridge]:
     bridges: list[DirectBitBridge] = []
-    parent_ctx = build_module_context(module)
+    parent_ctx = parent_ctx or build_module_context(module)
     for instance in module.instances:
         child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
         if not child_ports:
             continue
         for port in instance.ports:
+            if is_array_element_expr(port.value_expr, parent_ctx):
+                # ``array[index]`` denotes a complete unpacked-array cell,
+                # not a packed-vector bit. ExprPortBridge preserves the
+                # cell's actual width and signedness.
+                continue
             match = _constant_bit_select_binding(port.value)
             if match is None:
                 continue
@@ -1573,19 +2259,19 @@ def _direct_bit_bridges(
                 continue
             child_port = _specialize_child_port(instance, child_port, modules_by_name, signatures)
             parent_name, index_expr = match
-            if parent_name in parent_ctx.array_signal_names:
-                continue
+            array_cell = _is_array_subarray_name(parent_name, parent_ctx)
             base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port.name)}"
             bridges.append(
                 DirectBitBridge(
                     name=f"__bridge_{base}",
                     method_name=f"__bridge_method_{base}",
-                    parent_name=_sanitize_identifier(parent_name),
+                    parent_name=parent_name if (array_cell or "[" in parent_name) else _sanitize_identifier(parent_name),
                     index_expr=_sanitize_identifier(index_expr) if not index_expr.isdecimal() else index_expr,
                     instance_name=instance.name,
                     port_name=port.name,
                     direction=child_port.direction,
                     vector=child_port.width is not None,
+                    array_cell=array_cell,
                 )
             )
     return bridges
@@ -1595,9 +2281,11 @@ def _expr_port_bridges(
     module: ModuleIR,
     modules_by_name: dict[str, ModuleIR],
     signatures: dict[str, ModuleSignature],
+    *,
+    parent_ctx: ModuleContext | None = None,
 ) -> list[ExprPortBridge]:
     bridges: list[ExprPortBridge] = []
-    parent_ctx = build_module_context(module)
+    parent_ctx = parent_ctx or build_module_context(module)
     for instance in module.instances:
         child_ports = _child_ports_lookup(instance.module, modules_by_name, signatures)
         if not child_ports:
@@ -1627,7 +2315,7 @@ def _expr_port_bridges(
                 child_port.direction == "output"
                 and not simple_binding
                 and not is_array_element_expr(arg.value_expr, parent_ctx)
-                and arg.value_expr.get("kind") != "partselect"
+                and arg.value_expr.get("kind") not in {"bitselect", "partselect"}
             ):
                 continue
             base = f"{_sanitize_identifier(instance.name)}_{_sanitize_identifier(port_name)}"
@@ -1835,6 +2523,18 @@ def _contains_xz_literal(expr: object) -> bool:
 
 
 def _method_sensitivity(module: ModuleIR, method_name: str, ctx: ModuleContext) -> list[str]:
+    grouped_assign = re.fullmatch(r"assign_group_(?P<start>\d+)_(?P<end>\d+)", method_name)
+    if grouped_assign is not None:
+        start = int(grouped_assign.group("start"))
+        end = int(grouped_assign.group("end"))
+        sensitivity: list[str] = []
+        for assign in module.continuous_assigns[start : end + 1]:
+            if assign.right_expr is not None:
+                sensitivity.extend(collect_sensitivity(assign.right_expr, ctx))
+            else:
+                sensitivity.extend(_identifiers(assign.right))
+        return _dedupe_preserve(sensitivity)
+
     if method_name.startswith("assign_"):
         index = int(method_name.removeprefix("assign_"))
         assign = module.continuous_assigns[index]
@@ -1872,7 +2572,10 @@ def _method_sensitivity(module: ModuleIR, method_name: str, ctx: ModuleContext) 
         sensitivity: list[str] = []
         for item in process.sensitivity:
             if item.edge in {"posedge", "negedge"}:
-                sensitivity.append(f"{_sanitize_identifier(item.signal)}.{_systemc_edge(item.edge)}()")
+                signal = _sanitize_identifier(item.signal)
+                is_port = any(port.name == item.signal for port in module.ports)
+                edge_method = _systemc_edge(item.edge) if is_port else f"{item.edge}_event"
+                sensitivity.append(f"{signal}.{edge_method}()")
             elif item.signal and item.signal != "*":
                 sensitivity.append(_sanitize_identifier(item.signal))
         return sensitivity
@@ -2407,6 +3110,14 @@ def _emit_tree_assignment(
         rhs = _cpp_rvalue(str(statement.get("right", "")))
 
     if isinstance(left_expr, dict):
+        target = left_expr.get("target")
+        if (
+            left_expr.get("kind") in {"bitselect", "partselect"}
+            and isinstance(target, dict)
+            and is_array_element_expr(target, ctx)
+        ):
+            value = _cast_to_lvalue_type(rhs, left_expr, ctx)
+            return _emit_lvalue_write(left_expr, value, ctx)
         # Array-cell write (``mem[idx] <= val``): each cell is its own
         # sc_signal, so emit ``mem[idx].write(val);`` directly. The
         # surrounding process doesn't stage these — SystemC's delta-cycle
@@ -2453,18 +3164,8 @@ def _emit_continuous_assign(assign: ContinuousAssignIR, ctx: ModuleContext) -> l
         value = _cast_for_signed_lvalue(rhs, assign.left_expr, ctx)
         return [f"{render_lvalue(assign.left_expr, ctx)}.write({value});"]
     if assign.left_expr is not None and assign.left_expr.get("kind") in {"bitselect", "partselect"}:
-        base = lvalue_base_name(assign.left_expr)
-        if is_array_element_expr(assign.left_expr, ctx):
-            value = _cast_for_signed_lvalue(rhs, assign.left_expr, ctx)
-            return [f"{render_lvalue(assign.left_expr, ctx)}.write({value});"]
-        if base:
-            sanitized = _sanitize_identifier(base)
-            lhs_target = render_lvalue(assign.left_expr, ctx, staged_names=frozenset({base}))
-            return [(
-                f"{{ auto __tmp_{sanitized} = {sanitized}.read(); "
-                f"{lhs_target.replace(f'__next_{sanitized}', f'__tmp_{sanitized}')} = {rhs}; "
-                f"{sanitized}.write(__tmp_{sanitized}); }}"
-            )]
+        value = _cast_to_lvalue_type(rhs, assign.left_expr, ctx)
+        return [_emit_lvalue_write(assign.left_expr, value, ctx)]
     return [_emit_legacy_assignment(assign.left, rhs, rhs_already_cpp=True)]
 
 
@@ -2559,7 +3260,7 @@ def _emit_lvalue_write(left_expr: dict[str, object], value: str, ctx: ModuleCont
 
 def _cast_to_port_type(value: str, port: PortIR) -> str:
     width_expr = _width_expr(port.width)
-    if width_expr == "1" and not port.signed:
+    if port.width is None and not port.signed:
         return value
     return f"{_sc_type(port.width, port.signed)}({value})"
 
@@ -2574,9 +3275,12 @@ def _cast_to_lvalue_type(value: str, left_expr: dict[str, object], ctx: ModuleCo
 
 
 def _cast_for_signed_lvalue(value: str, left_expr: dict[str, object], ctx: ModuleContext) -> str:
-    if not _lvalue_signed(left_expr, ctx):
-        return value
     width = max(1, infer_width(left_expr, ctx))
+    base = lvalue_base_name(left_expr)
+    if not _lvalue_signed(left_expr, ctx):
+        if width == 1 and base in ctx.packed_vector_names:
+            return f"{systemc_int_type(1)}({value})"
+        return value
     return f"{systemc_int_type(width, signed=True)}({value})"
 
 
@@ -2818,6 +3522,38 @@ def _emit_integer_type_aliases(writer: CodeWriter) -> None:
     writer.line("#endif")
 
 
+def _write_shared_runtime_header(
+    path: Path,
+    *,
+    instrumentation_config: InstrumentationConfig | None,
+) -> None:
+    """Write the common, PCH-friendly SystemC prelude once per output tree."""
+    writer = CodeWriter()
+    writer.line(banner().rstrip())
+    writer.line("#pragma once")
+    writer.line()
+    writer.line("#include <array>")
+    writer.line("#include <systemc>")
+    writer.line("#include <string>")
+    writer.line("#include <type_traits>")
+    if instrumentation_config is not None and instrumentation_config.enabled:
+        writer.line("#include <cstdint>")
+        writer.line("#include <ostream>")
+    writer.line()
+    writer.line("using namespace sc_core;")
+    writer.line("using namespace sc_dt;")
+    writer.line()
+    _emit_integer_type_aliases(writer)
+    content = writer.render()
+    try:
+        if path.read_text(encoding="utf-8") == content:
+            return
+    except (FileNotFoundError, OSError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 def _sc_type(width: WidthIR | None, signed: bool) -> str:
     width_expr = _width_expr(width)
     if width is None and not signed:
@@ -2832,6 +3568,8 @@ def _template_parameter_list(module: ModuleIR) -> str:
     declared: set[str] = set()
     rendered: list[str] = []
     for parameter in module.parameters:
+        if parameter.kind != "parameter":
+            continue
         name = _sanitize_identifier(parameter.name)
         default = _safe_template_default(parameter.value, declared)
         rendered.append(f"int {name} = {default}")
@@ -2839,14 +3577,182 @@ def _template_parameter_list(module: ModuleIR) -> str:
     return ", ".join(rendered)
 
 
+def _emit_local_parameters(writer: CodeWriter, module: ModuleIR) -> None:
+    declared = {
+        _sanitize_identifier(parameter.name)
+        for parameter in module.parameters
+        if parameter.kind == "parameter"
+    }
+    emitted: set[str] = set()
+    for parameter in module.parameters:
+        if parameter.kind != "localparam":
+            continue
+        name = _sanitize_identifier(parameter.name)
+        if name in emitted:
+            continue
+        default = _safe_template_default(parameter.value, declared | emitted)
+        writer.line(f"static constexpr int {name} = {default};")
+        emitted.add(name)
+    if emitted:
+        writer.line()
+
+
 def _safe_template_default(value: str, declared: set[str]) -> str:
-    default = _cpp_expr(value)
+    constant_concat = _constant_concat_value(value) if "{" in value else None
+    repeated_bit = re.fullmatch(
+        r"\{\s*(?P<count>[A-Za-z_][A-Za-z0-9_$]*|\d+)\s*\{+\s*0b(?P<bit>[01])\s*\}+\s*\}",
+        _convert_verilog_constants(value),
+    )
+    if constant_concat is not None:
+        default = str(constant_concat)
+    elif repeated_bit is not None:
+        if repeated_bit.group("bit") == "0":
+            default = "0"
+        else:
+            count = _sanitize_identifier(repeated_bit.group("count"))
+            default = f"(({count} >= 31) ? -1 : ((1 << {count}) - 1))"
+    else:
+        default = _cpp_expr(value)
     if not default:
         return "1"
+
+    def replace_slice(match: re.Match[str]) -> str:
+        name = _sanitize_identifier(match.group("name"))
+        msb = int(match.group("msb"))
+        lsb = int(match.group("lsb"))
+        width = abs(msb - lsb) + 1
+        low = min(msb, lsb)
+        mask = (1 << width) - 1
+        return f"(({name} >> {low}) & {mask})"
+
+    default = re.sub(
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*\[\s*(?P<msb>\d+)\s*:\s*(?P<lsb>\d+)\s*\]",
+        replace_slice,
+        default,
+    )
     identifiers = set(_identifiers(default))
     if identifiers - declared:
         return "1"
     return default
+
+
+def _constant_concat_value(expr: str) -> int | None:
+    """Evaluate constant Verilog concatenations and replications as bit patterns."""
+
+    def enclosing_braces(value: str) -> bool:
+        if not (value.startswith("{") and value.endswith("}")):
+            return False
+        depth = 0
+        for index, char in enumerate(value):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0 and index != len(value) - 1:
+                    return False
+            if depth < 0:
+                return False
+        return depth == 0
+
+    def split_top_level(value: str) -> list[str]:
+        parts: list[str] = []
+        depth = 0
+        start = 0
+        for index, char in enumerate(value):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(value[start:index].strip())
+                start = index + 1
+        parts.append(value[start:].strip())
+        return parts
+
+    def parse(value: str) -> tuple[int, int] | None:
+        value = value.strip()
+        while value.startswith("(") and value.endswith(")"):
+            depth = 0
+            enclosed = True
+            for index, char in enumerate(value):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and index != len(value) - 1:
+                        enclosed = False
+                        break
+            if not enclosed or depth != 0:
+                break
+            value = value[1:-1].strip()
+
+        literal = re.fullmatch(
+            r"(?P<width>\d+)\s*'\s*(?P<signed>s)?(?P<base>[bodhBODH])"
+            r"(?P<digits>[0-9a-fA-F_xXzZ?]+)",
+            value,
+        )
+        if literal is not None:
+            width = int(literal.group("width"))
+            digits = literal.group("digits").replace("_", "")
+            if width <= 0 or width > 4096:
+                return None
+            if any(char in digits.lower() for char in "xz?"):
+                integer = 0
+            else:
+                base = {"b": 2, "o": 8, "d": 10, "h": 16}[literal.group("base").lower()]
+                integer = int(digits, base)
+            return integer & ((1 << width) - 1), width
+
+        unsized_bit = re.fullmatch(r"'(?P<bit>[01])", value)
+        if unsized_bit is not None:
+            return int(unsized_bit.group("bit")), 1
+
+        if not enclosing_braces(value):
+            return None
+        body = value[1:-1].strip()
+        parts = split_top_level(body)
+        if len(parts) > 1:
+            result = 0
+            width = 0
+            for part in parts:
+                parsed = parse(part)
+                if parsed is None:
+                    return None
+                part_value, part_width = parsed
+                result = (result << part_width) | part_value
+                width += part_width
+                if width > 4096:
+                    return None
+            return result, width
+
+        if "{" not in body or enclosing_braces(body):
+            return parse(body)
+
+        depth = 0
+        repeat_open = None
+        for index, char in enumerate(body):
+            if char == "{":
+                if depth == 0:
+                    repeat_open = index
+                    break
+                depth += 1
+        if repeat_open is None or not body.endswith("}"):
+            return None
+        count_expr = body[:repeat_open].strip()
+        count = _constant_integer_expr(_cpp_expr(count_expr))
+        repeated = parse(body[repeat_open:])
+        if count is None or count < 0 or count > 4096 or repeated is None:
+            return None
+        repeated_value, repeated_width = repeated
+        if repeated_width * count > 4096:
+            return None
+        result = 0
+        for _ in range(count):
+            result = (result << repeated_width) | repeated_value
+        return result, repeated_width * count
+
+    parsed = parse(expr)
+    return None if parsed is None else parsed[0]
 
 
 def _width_expr(width: WidthIR | None) -> str:
@@ -2936,7 +3842,7 @@ def _instance_type(
     child_module = modules_by_name.get(instance.module)
     signature = signatures.get(instance.module)
     formal_parameters = (
-        child_module.parameters
+        tuple(parameter for parameter in child_module.parameters if parameter.kind == "parameter")
         if child_module is not None
         else signature.parameters if signature is not None else ()
     )
@@ -2964,7 +3870,7 @@ def _child_parameter_count(
 ) -> int:
     child_module = modules_by_name.get(module_name)
     if child_module is not None:
-        return len(child_module.parameters)
+        return sum(parameter.kind == "parameter" for parameter in child_module.parameters)
     signature = signatures.get(module_name)
     if signature is not None:
         return len(signature.parameters)
@@ -3025,6 +3931,18 @@ def _cpp_rvalue(expr: str) -> str:
 
 def _cpp_expr(expr: str) -> str:
     rendered = _convert_verilog_constants(expr)
+    previous = None
+    while previous != rendered:
+        previous = rendered
+        rendered = re.sub(
+            r"\{\s*([^,{}]+)\s*\}",
+            lambda match: (
+                match.group(0)
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_$]*\s*\(", match.group(1).strip())
+                else f"({match.group(1)})"
+            ),
+            rendered,
+        )
     return re.sub(r"\$clog2\s*\(", "prism_v2sc_clog2(", rendered)
 
 
@@ -3099,6 +4017,11 @@ def _convert_verilog_constants(expr: str) -> str:
     rendered = re.sub(
         r"'\s*(?P<base>[bodhBODH])(?P<value>[0-9a-fA-F_xXzZ?]+)",
         replace_unsized,
+        rendered,
+    )
+    rendered = re.sub(
+        r"(?<![A-Za-z0-9_$])0(?P<digits>[0-9][0-9_]*)(?![A-Za-z0-9_$])",
+        lambda match: str(int(match.group("digits").replace("_", ""), 10)),
         rendered,
     )
     return rendered

@@ -33,6 +33,17 @@ def test_cli_writes_ir_and_systemc_header(tmp_path: Path, capsys) -> None:
     assert "SC_MODULE(top)" in header
     assert "sc_in<bool> a;" in header
     assert "sc_out<bool> y;" in header
+
+
+def test_cli_no_ir_skips_large_ir_serialization(tmp_path: Path) -> None:
+    rtl = tmp_path / "top.v"
+    rtl.write_text("module top(input a, output y); assign y = a; endmodule\n", encoding="utf-8")
+    out_dir = tmp_path / "systemc"
+
+    assert main(["--top", "top", "--no-ir", "--out", str(out_dir), str(rtl)]) == 0
+    assert (out_dir / "top.hpp").exists()
+    assert not (out_dir / "ir.json").exists()
+    header = (out_dir / "top.hpp").read_text(encoding="utf-8")
     assert "void assign_0()" in header
     assert "y.write(a.read());" in header
     assert "SC_METHOD(assign_0);" in header

@@ -1,0 +1,3 @@
+../design/core/e603_core_wrapper.v
+../design/core/e603_core_rams.v
+../design/core/global.v

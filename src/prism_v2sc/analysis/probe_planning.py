@@ -12,6 +12,7 @@ from typing import Any
 from prism_v2sc.ir.model import DesignIR, ModuleIR, SignalIR, SourceLocIR
 from prism_v2sc.analysis.sensitivity import analyze_sensitivity
 from prism_v2sc.analysis.power_static import analyze_static_power, PowerSuspect
+from prism_v2sc.codegen.expr import build_module_context
 
 
 @dataclass(frozen=True)
@@ -160,6 +161,7 @@ def _plan_module_probes(
 ) -> list[ProbeSpec]:
     """Plan probes for a single module."""
     probes: list[ProbeSpec] = []
+    module_context = build_module_context(module)
 
     # Run sensitivity analysis to classify signals
     sens_analysis = analyze_sensitivity(module)
@@ -204,6 +206,7 @@ def _plan_module_probes(
                         policy,
                         sens_analysis,
                         suspect_map,
+                        module_context.signal_widths,
                     )
                 )
             continue
@@ -243,7 +246,9 @@ def _plan_module_probes(
                 clock_edge = domain.edge
 
         # Get width
-        width = _compute_width_from_width_ir(signal_width)
+        width = module_context.signal_widths.get(
+            signal_name, _compute_width_from_width_ir(signal_width)
+        )
 
         # Get static reason codes
         reason_codes = tuple(s.reason_code for s in suspect_map.get(signal_name, []))
@@ -290,6 +295,7 @@ def _plan_memory_cell_probes(
     policy: ProbePlanPolicy,
     sens_analysis: Any,
     suspect_map: dict[str, list[PowerSuspect]],
+    signal_widths: dict[str, int],
 ) -> list[ProbeSpec]:
     """Create optional probes for unpacked-array cells."""
     cell_indices = _memory_cell_indices(signal.unpacked_dims)
@@ -304,7 +310,7 @@ def _plan_memory_cell_probes(
         clock_domain = domain.clock_signal
         clock_edge = domain.edge
 
-    width = _compute_width_from_width_ir(signal.width)
+    width = signal_widths.get(signal.name, _compute_width_from_width_ir(signal.width))
     reason_codes = tuple(s.reason_code for s in suspect_map.get(signal.name, []))
     probes: list[ProbeSpec] = []
     for index_tuple in cell_indices:

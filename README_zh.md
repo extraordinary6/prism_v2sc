@@ -15,7 +15,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="214 tests" src="https://img.shields.io/badge/tests-214%20collected-0EA5E9">
+  <img alt="255 tests" src="https://img.shields.io/badge/tests-255%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
@@ -65,6 +65,8 @@ python -m prism_v2sc --top top_datapath `
 | `--metrics` | 写出包含耗时、内存和遍历计数的 `metrics.json`。 |
 | `--compare-verilator` | 对同一批输入运行 best-effort `verilator --lint-only` 并记录耗时。 |
 | `--fail-on-diagnostics` | 出现 error-level diagnostics 时返回退出码 `2`。 |
+| `--diagnostic-policy <json>` | 应用 version 1 的 diagnostics allow/deny/fatal policy；policy 失败时返回退出码 `2`。 |
+| `--conversion-audit <json>` | 写出机器可读的源码/模块覆盖、provider、diagnostics 和 policy 结果。 |
 | `--model-manifest <json/toml>` | 应用显式源码过滤和外部模型 provider，并写出 `model_report.json`。 |
 | `--model-audit` | 不替换模块，只分类模型/testbench 候选并写出 `model_report.json`。 |
 | `--version` | 打印包版本。 |
@@ -106,6 +108,10 @@ rtl/top.v
 | `--power-report-static <json>` | 和动态活动量合并使用的静态分析 JSON。 |
 | `--power-report-output <file>` | 打分报告输出路径。默认是 `power_report.json`。 |
 
+`--model-manifest` 和 `--model-audit` 可以与 `--power-static` 或
+`--power-instrument` 组合使用。功耗分析使用 provider 处理后的设计，并在
+`--out` 目录写出 `model_report.json`。
+
 ## 输出布局
 
 ```text
@@ -126,6 +132,83 @@ build/systemc/
 4. Codegen 按后序 DFS 写出每个模块的 `.hpp`，因此父模块引用子模块 header 时，子模块文件已经存在。
 5. slang、lowerer 和 model provider 产生的 diagnostics 会保存在 IR 中，并在运行结束时汇总。
 
+## 大型项目与可审计转换
+
+### Model provider
+
+大型 RTL 仓库经常包含仅用于仿真的 memory、vendor primitive、testbench、assertion 或 timing model。`--model-audit` 只分类这些源码和模块候选，不会过滤源码或替换模块：
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --model-audit `
+  --out build\cpu_audit
+```
+
+需要显式控制转换决策时，使用 version 1 的 JSON 或 TOML model manifest。source rule 可以忽略指定文件，module rule 则选择已注册的 provider。内置 `memory` provider 会在其文档化 contract 范围内生成有功能的规范化 memory model；`blackbox` 会保留参数和端口，但没有功能体，并且在 strict mode 下必须显式允许。
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --model-manifest models.json `
+  --fail-on-diagnostics `
+  --out build\cpu_systemc
+```
+
+两种模式都会写出 `model_report.json`，让每项分类、忽略的源码、provider 替换、warning 和 approximation 都可见。自动分类只用于 audit，绝不会仅凭文件名 heuristic 删除 RTL。manifest schema 和 provider contract 详见 `docs/model_providers.md`。
+
+### Conversion audit 与 diagnostic policy
+
+`--conversion-audit` 会写出机器可读报告，其中包含源码数量和分类、可达及已生成模块、provider 决策、diagnostics、policy failure 和最终 pass/fail 状态。version 1 diagnostic policy 可以定义 fatal severity，以及显式允许或拒绝的 diagnostic code：
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --diagnostic-policy docs\diagnostic_policy.example.json `
+  --conversion-audit build\conversion_audit.json `
+  --out build\cpu_systemc
+```
+
+policy 失败时返回退出码 `2`，因此同一套规则可以同时作为本地转换和 CI gate。仓库中的 `docs/rtl_coverage_registry.json` 把 support claim 关联到 evidence，`docs/diagnostic_policy.example.json` 则提供最小 policy 模板。
+
+### Staged project 转换
+
+大型设计可以拆成有序 stage，每个 stage 使用独立的 top、sources 或 filelists、model manifest 和 diagnostic policy。project manifest 支持 JSON 和 TOML，所有相对路径都相对于 manifest 所在目录解析。
+
+```json
+{
+  "version": 1,
+  "name": "cpu",
+  "output_root": "build/project_conversion",
+  "stages": [
+    {
+      "name": "leaf",
+      "top": "leaf_top",
+      "filelists": ["rtl/leaf.f"],
+      "model_manifest": "models.json",
+      "diagnostic_policy": "policy.json"
+    },
+    {
+      "name": "integration",
+      "top": "cpu_top",
+      "filelists": ["rtl/cpu.f"],
+      "depends_on": ["leaf"],
+      "model_manifest": "models.json",
+      "diagnostic_policy": "policy.json",
+      "no_ir": true
+    }
+  ]
+}
+```
+
+运行 project：
+
+```powershell
+python -m prism_v2sc.project project.json
+```
+
+每个 stage 都会在 `<output_root>/<stage>/` 下写出生成的 SystemC 和 `conversion_audit.json`，runner 还会写出 `project_report.json`。超大 stage 可以设置 `no_ir: true`，避免序列化 `ir.json`。如果某个 stage 的依赖失败或被跳过，该 stage 会记为 `skipped_dependency`，且不会运行。
+
 ## 示例
 
 | 位置 | 范围 |
@@ -134,6 +217,8 @@ build/systemc/
 | `examples/filelist_demo/` | 由 `.f` filelist 驱动的多文件构建，包含 `+incdir+` 和 `-D`。 |
 | `examples/power_demo/` | 用于静态功耗嫌疑分析的小型单模块 RTL 示例。 |
 | `examples/power_multimodule_demo/` | filelist 驱动的多模块功耗 demo，包含生成好的报告和插桩 SystemC。 |
+| `examples/e203_cpu/` | 自包含 E203 CPU 快照，包含 model provider、生成 SystemC 和 staged-project 输出。 |
+| `examples/e603_cpu/` | 自包含 E603 CPU/SRAM wrapper 快照，包含生成 SystemC 和受控大设计命令。 |
 
 ## 功耗诊断
 
@@ -245,13 +330,15 @@ python -m prism_v2sc --power-report build\power_profile.json `
 python -m pytest -q
 ```
 
-当前测试套件收集 185 个测试，覆盖 IR lowering、codegen 输出形态、CLI 行为、多文件输出布局、表达式覆盖、diagnostics、hardening、subroutines、静态功耗分析、probe planning、instrumentation 形态、递归 power dump 生成、profile parsing、scoring、deep profiling、workload comparison 和 power report 稳定性。
+当前测试套件收集 255 个测试，覆盖 IR lowering、codegen 输出形态、CLI 行为、多文件输出布局、表达式覆盖、diagnostics、hardening、subroutines、model providers、conversion audits、staged projects、静态功耗分析、probe planning、instrumentation、递归 power dump、profile parsing、scoring、deep profiling、workload comparison 和 report 稳定性。
 
 ## 等价性 CI
 
 `.github/workflows/equivalence.yml` 在 Linux 上运行。它用 Icarus Verilog 协同仿真 RTL fixtures，并用 `libsystemc-dev` 编译运行生成的 SystemC，然后 diff per-cycle traces。CI 也包含 Linux-only power checks：编译并运行插桩 SystemC，解析 `prism_power_dump` 输出，并比较插桩和未插桩 traces。
 
 本地 trace-equivalence 和动态功耗 smoke 需要 SystemC headers 和 libraries。没有 `<systemc>` 的机器可以本地运行 Python unit suite，并依赖 Linux CI 做最终 SystemC compile/run 检查。
+
+对于较大的生成设计，`--compile-friendly` 会生成共享 SystemC runtime header，并把非模板方法拆到实现分片中。等价性、MHSA、E203 和 E603 consistency harness 还支持 `--sc-build-mode optimized --sc-build-jobs N`，用于开启受控并行编译、PCH 复用、基于依赖文件的对象缓存和链接缓存。这些开关保持 opt-in，因为极小设计通常无法摊薄额外 translation unit 的固定开销。
 
 更深入的探索性验证和真实设计检查放在 `verification/` 下，包括外部 MHSA、OFDM FFT/IFFT、带 interface 的 ICB-to-APB bridge、4x4/8x8 tinyNPU，以及 E203 CPU 转换和一致性 gate。E203 使用 model provider 替换 ITCM/DTCM 仿真模型，并按架构关键事件比较，不要求严格逐拍对齐。
 

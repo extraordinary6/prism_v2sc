@@ -9,6 +9,14 @@
       "contract": "architectural keypoints and DTCM results"
     },
     {
+      "name": "e603_cpu",
+      "domain": "cpu",
+      "source_root": "examples/e603_cpu/rtl/e603",
+      "command": [".venv/bin/python", "verification/cases/consistency/e603_cpu_consistency.py"],
+      "contract": "first fetch address, ID, burst length, and approximate cycle timing",
+      "timeout_seconds": 1800
+    },
+    {
       "name": "mhsa_accelerator",
       "domain": "accelerator",
       "source_root": "/home/MicroE/MHSA",
@@ -32,7 +40,7 @@
     {
       "name": "tinynpu",
       "domain": "accelerator",
-      "source_root": "/home/MicroE/ai_proj/TinyNPU",
+      "source_root": "/home/MicroE/ai_proj/tinyNPU",
       "command": [".venv/bin/python", "verification/cases/consistency/tinynpu_consistency.py"],
       "contract": "matrix result consistency"
     },

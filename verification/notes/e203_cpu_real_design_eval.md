@@ -55,6 +55,24 @@ entry/terminal or handler PCs are present, and all 10 checked DTCM words match.
 This is key-event and architectural-result consistency, not strict per-cycle or
 formal equivalence.
 
+## Optimized SystemC Build
+
+The E203 harness supports the compile-oriented generator and cached builder:
+
+```bash
+.venv/bin/python verification/cases/consistency/e203_cpu_consistency.py \
+  --sc-build-mode optimized --sc-build-jobs 1
+
+.venv/bin/python verification/cases/consistency/e203_cpu_consistency.py \
+  --keep-out --skip-rtl --sc-build-mode optimized --sc-build-jobs 1
+```
+
+On the local machine, the optimized cold SystemC build compiled 40 translation
+units in 83.346 s with one bounded build job. The unchanged hot rerun took
+0.007 s, reused all 40 objects and the link result, and reran all six SystemC
+scenarios successfully. `--skip-rtl` reuses the cached VCS scenario logs; it
+does not weaken the architectural comparisons.
+
 The RTL reference build defines `DISABLE_SV_ASSERTION`. E203's simulation-only
 signed-division golden assertion computes `-20 / 3` incorrectly and calls
 `$fatal` even though the actual datapath returns the correct RISC-V result.

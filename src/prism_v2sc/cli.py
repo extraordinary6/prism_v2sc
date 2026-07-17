@@ -60,6 +60,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the Phase 1 JSON IR to stdout instead of writing ir.json.",
     )
     parser.add_argument(
+        "--no-ir",
+        action="store_true",
+        help="Do not serialize ir.json (useful for very large designs).",
+    )
+    parser.add_argument(
+        "--incremental-codegen",
+        action="store_true",
+        help="Reuse unchanged per-module SystemC files using a content fingerprint cache.",
+    )
+    parser.add_argument(
+        "--compile-friendly",
+        action="store_true",
+        help="Emit a shared SystemC prelude and outline non-template module methods into .cpp files.",
+    )
+    parser.add_argument(
+        "--reuse-generated-module",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="Trust and reuse an existing generated module without rendering it (repeatable).",
+    )
+    parser.add_argument(
         "--metrics",
         action="store_true",
         help="Write Phase 5 conversion metrics to metrics.json.",
@@ -175,12 +197,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
 
-    if model_manifest is not None and (args.power_static or args.power_instrument is not None):
-        parser.error(
-            "--model-manifest/--model-audit is not yet supported with "
-            "--power-static or --power-instrument"
-        )
-
     if not source_set.sources:
         parser.error("no Verilog source files resolved from positional inputs and filelists")
 
@@ -191,6 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         include_dirs=source_set.include_dirs,
         defines=source_set.defines,
         out_dir=args.out,
+        model_manifest=model_manifest,
     ):
         return 0
 
@@ -206,19 +223,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         out_dir=args.out,
         source_root=source_root,
         model_manifest=model_manifest,
+        track_memory=args.metrics or args.compare_verilator,
+        incremental_codegen=args.incremental_codegen or bool(args.reuse_generated_module),
+        reuse_existing_modules=tuple(args.reuse_generated_module),
+        compile_friendly=args.compile_friendly,
     )
     design = artifacts.design
-    payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)
-
     if args.dump_ir:
+        payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)
         print(payload)
         return 0
 
-    ir_path = args.out / "ir.json"
-    ir_path.write_text(payload + "\n", encoding="utf-8")
-    print(f"wrote Phase 1 IR: {ir_path}")
+    if not args.no_ir:
+        payload = json.dumps(design.to_dict(), indent=2, sort_keys=True)
+        ir_path = args.out / "ir.json"
+        ir_path.write_text(payload + "\n", encoding="utf-8")
+        print(f"wrote Phase 1 IR: {ir_path}")
     for emitted in artifacts.emitted_files:
         print(f"wrote SystemC module: {emitted}")
+    if args.incremental_codegen or args.reuse_generated_module:
+        print(
+            "codegen cache: "
+            f"rendered={artifacts.report.codegen_rendered_count}, "
+            f"reused={artifacts.report.codegen_reused_count}, "
+            f"bootstrapped={artifacts.report.codegen_bootstrapped_count}"
+        )
 
     if artifacts.model_report is not None:
         model_report_path = args.out / "model_report.json"

@@ -62,6 +62,55 @@ endmodule
     assert " h" not in " ".join(line for line in header.splitlines() if "sensitive" in line)
 
 
+@pytest.mark.parametrize(
+    ("expression", "width", "expected"),
+    [
+        ("{62{1'b0}}", 62, "sc_uint<62>(0)"),
+        ("{8{1'b1}}", 8, "sc_uint<8>(255)"),
+        ("{4'hA, 4'h5}", 8, "sc_uint<8>(165)"),
+        ("{1'b1, {63{1'b0}}}", 64, "sc_uint<64>(0x8000000000000000ULL)"),
+        ("{80{1'b1}}", 80, 'sc_biguint<80>("0xffffffffffffffffffff")'),
+    ],
+)
+def test_constant_concat_and_repeat_are_folded(
+    tmp_path: Path,
+    expression: str,
+    width: int,
+    expected: str,
+) -> None:
+    design = _design(
+        tmp_path,
+        f"""
+module const_concat_repeat_top(output wire [{width - 1}:0] y);
+  assign y = {expression};
+endmodule
+""",
+        "const_concat_repeat_top",
+    )
+    header = generate_systemc_header(design)
+    assert expected in header
+    assert " << " not in next(line for line in header.splitlines() if "y.write" in line)
+
+
+def test_mixed_concat_is_not_constant_folded(tmp_path: Path) -> None:
+    design = _design(
+        tmp_path,
+        """
+module mixed_concat_top(
+  input wire [3:0] a,
+  output wire [7:0] y
+);
+  assign y = {4'hA, a};
+endmodule
+""",
+        "mixed_concat_top",
+    )
+    header = generate_systemc_header(design)
+    write_line = next(line for line in header.splitlines() if "y.write" in line)
+    assert "a.read()" in write_line
+    assert "sc_uint<8>(165)" not in write_line
+
+
 def test_dynamic_indexed_part_select_width_in_concat(tmp_path: Path) -> None:
     design = _design(
         tmp_path,
@@ -243,8 +292,8 @@ endmodule
     )
     header = generate_systemc_header(design)
     assert "auto __next_q = q.read();" in header
-    assert "__next_q[0] = a.read();" in header
-    assert "__next_q[1] = b.read();" in header
+    assert "__next_q[0] = sc_uint<1>(a.read());" in header
+    assert "__next_q[1] = sc_uint<1>(b.read());" in header
     assert "q.write(__next_q);" in header
 
 
@@ -362,7 +411,7 @@ endmodule
     assert assign.right_expr["value"] == 255
 
     header = generate_systemc_header(design)
-    assert "lut[1].write(255);" in header
+    assert "lut[1].write(sc_uint<16>(255));" in header
     assert "raw: 0.9951847267" not in header
 
 

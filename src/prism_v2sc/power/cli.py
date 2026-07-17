@@ -15,6 +15,51 @@ from prism_v2sc.codegen.systemc import emit_systemc_files
 from prism_v2sc.frontend.flow import compute_source_root
 from prism_v2sc.power.runner import WorkloadMetadata, create_power_profile_json
 from prism_v2sc.power.schemas import export_power_static_json
+from prism_v2sc.models.manifest import ModelManifest
+from prism_v2sc.models.resolver import (
+    ModelResolutionReport,
+    prepare_model_sources,
+    resolve_design_models,
+)
+
+
+def _lower_power_design(
+    sources: list[Path],
+    top: str,
+    *,
+    include_dirs: list[Path] | tuple[Path, ...],
+    defines: list[str] | tuple[str, ...],
+    model_manifest: ModelManifest | None,
+):
+    resolved_sources = tuple(Path(source) for source in sources)
+    source_decisions = ()
+    if model_manifest is not None:
+        resolved_sources, source_decisions = prepare_model_sources(resolved_sources, model_manifest)
+        if not resolved_sources:
+            raise ValueError("model source rules ignored every input source")
+    artifacts = lower_design_top_down(
+        sources=resolved_sources,
+        top=top,
+        include_dirs=include_dirs,
+        defines=defines,
+    )
+    design = artifacts.design
+    model_report: ModelResolutionReport | None = None
+    if model_manifest is not None:
+        design, model_report = resolve_design_models(
+            design,
+            model_manifest,
+            source_decisions=source_decisions,
+        )
+    return artifacts, design, resolved_sources, model_report
+
+
+def _write_model_report(report: ModelResolutionReport | None, path: Path | None) -> None:
+    if report is None or path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Model resolution report written to: {path}", file=sys.stderr)
 
 
 def run_power_static(
@@ -25,6 +70,8 @@ def run_power_static(
     *,
     include_dirs: list[Path] | tuple[Path, ...] = (),
     defines: list[str] | tuple[str, ...] = (),
+    model_manifest: ModelManifest | None = None,
+    model_report_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run static power analysis and generate power_static.json.
 
@@ -42,13 +89,14 @@ def run_power_static(
 
     # Convert design to IR
     print(f"Converting design (top={top})...", file=sys.stderr)
-    artifacts = lower_design_top_down(
-        sources=sources,
-        top=top,
+    artifacts, design, _resolved_sources, model_report = _lower_power_design(
+        sources,
+        top,
         include_dirs=include_dirs,
         defines=defines,
+        model_manifest=model_manifest,
     )
-    design = artifacts.design
+    _write_model_report(model_report, model_report_path)
 
     # Run static analysis on all modules
     all_suspects = []
@@ -80,6 +128,8 @@ def run_power_instrument(
     include_dirs: list[Path] | tuple[Path, ...] = (),
     defines: list[str] | tuple[str, ...] = (),
     deep_profile: bool = False,
+    model_manifest: ModelManifest | None = None,
+    model_report_path: Path | None = None,
 ) -> dict[str, Any]:
     """Generate instrumented SystemC with probe manifest.
 
@@ -95,13 +145,14 @@ def run_power_instrument(
 
     # Convert design to IR
     print(f"Converting design (top={top})...", file=sys.stderr)
-    artifacts = lower_design_top_down(
-        sources=sources,
-        top=top,
+    artifacts, design, resolved_sources, model_report = _lower_power_design(
+        sources,
+        top,
         include_dirs=include_dirs,
         defines=defines,
+        model_manifest=model_manifest,
     )
-    design = artifacts.design
+    _write_model_report(model_report, model_report_path)
 
     # Create probe plan
     print("Creating probe plan...", file=sys.stderr)
@@ -121,13 +172,22 @@ def run_power_instrument(
 
     manifest = export_probe_plan_json(probe_plan)
     manifest["instrumentation"] = generate_manifest_json(instrumentation_config)
+    if model_report is not None:
+        manifest["model_providers"] = [
+            item.to_dict() if hasattr(item, "to_dict") else {
+                "module": item.module,
+                "provider": item.provider,
+                "status": item.status,
+            }
+            for item in model_report.modules
+        ]
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)
 
     print(f"Probe manifest written to: {manifest_path}", file=sys.stderr)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    source_root = compute_source_root(sources)
+    source_root = compute_source_root(resolved_sources)
     written = emit_systemc_files(
         design,
         output_dir,
@@ -368,6 +428,7 @@ def handle_power_commands(
     include_dirs: list[Path] | tuple[Path, ...] = (),
     defines: list[str] | tuple[str, ...] = (),
     out_dir: Path | None = None,
+    model_manifest: ModelManifest | None = None,
 ) -> bool:
     """Handle power analysis commands from parsed arguments.
 
@@ -388,6 +449,8 @@ def handle_power_commands(
             args.power_static_output,
             include_dirs=include_dirs,
             defines=defines,
+            model_manifest=model_manifest,
+            model_report_path=(out_dir / "model_report.json") if out_dir is not None else None,
         )
         handled = True
 
@@ -407,6 +470,8 @@ def handle_power_commands(
             include_dirs=include_dirs,
             defines=defines,
             deep_profile=args.power_deep_profile,
+            model_manifest=model_manifest,
+            model_report_path=(output_dir / "model_report.json"),
         )
         handled = True
 

@@ -1,0 +1,5 @@
+-f ../design/core/rtl.vf
+-f ../design/soc/rtl.vf
+
+-f ../design/tech/rtl.vf
+

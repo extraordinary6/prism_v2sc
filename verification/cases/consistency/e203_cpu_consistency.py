@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from prism_v2sc.frontend.preprocess import parse_filelist
+from prism_v2sc.systemc_build import SystemCBuildOptions, build_systemc
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -215,6 +216,12 @@ def run(cmd: list[str], cwd: Path, log: Path, env: dict[str, str] | None = None)
     print("+ " + " ".join(cmd), flush=True)
     with log.open("w", encoding="utf-8") as handle:
         subprocess.run(cmd, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT, check=True)
+
+
+def write_if_changed(path: Path, content: str) -> None:
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return
+    path.write_text(content, encoding="utf-8")
 
 
 def width(port: dict[str, object]) -> int:
@@ -418,21 +425,41 @@ def ordered_unique(values: list[str]) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--keep-out", action="store_true")
+    parser.add_argument("--skip-rtl", action="store_true")
+    parser.add_argument("--sc-build-mode", choices=("legacy", "optimized"), default="optimized")
+    parser.add_argument("--sc-build-jobs", type=int, default=1)
     args = parser.parse_args()
     out = args.out.resolve()
-    if out.exists():
+    if out.exists() and not args.keep_out:
         shutil.rmtree(out)
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
     sc_out = out / "systemc"
+    convert_cmd = [
+        sys.executable,
+        "-m",
+        "prism_v2sc",
+        "--top",
+        "e203_cpu_top",
+        "--filelist",
+        str(FILELIST),
+        "--model-manifest",
+        str(MANIFEST),
+        "--fail-on-diagnostics",
+        "--out",
+        str(sc_out),
+    ]
+    if args.sc_build_mode == "optimized":
+        convert_cmd.extend(("--compile-friendly", "--incremental-codegen"))
     run(
-        [sys.executable, "-m", "prism_v2sc", "--top", "e203_cpu_top", "--filelist", str(FILELIST), "--model-manifest", str(MANIFEST), "--fail-on-diagnostics", "--out", str(sc_out)],
+        convert_cmd,
         ROOT,
         out / "convert.log",
     )
     design = json.loads((sc_out / "ir.json").read_text(encoding="utf-8"))
     ports = next(module["ports"] for module in design["modules"] if module["name"] == "e203_cpu_top")
-    (out / "tb_rtl.sv").write_text(rtl_tb(ports), encoding="utf-8")
-    (out / "tb_systemc.cpp").write_text(systemc_tb(ports), encoding="utf-8")
+    write_if_changed(out / "tb_rtl.sv", rtl_tb(ports))
+    write_if_changed(out / "tb_systemc.cpp", systemc_tb(ports))
 
     sources = parse_filelist(FILELIST)
     vcs_env = os.environ.copy()
@@ -447,19 +474,50 @@ def main() -> int:
     ]
     vcs_cmd += [f"+incdir+{path}" for path in sources.include_dirs]
     vcs_cmd += [str(path) for path in sources.sources] + [str(out / "tb_rtl.sv"), "-o", "simv"]
-    run(vcs_cmd, out, out / "vcs_compile.log", vcs_env)
+    if not args.skip_rtl:
+        run(vcs_cmd, out, out / "vcs_compile.log", vcs_env)
 
     include_dirs = sorted({str(path.parent) for path in sc_out.rglob("*.hpp")})
-    sc_cmd = ["g++", "-std=c++14", f"-I{SYSTEMC_INCLUDE}"]
-    sc_cmd += [f"-I{path}" for path in include_dirs]
-    sc_cmd += [str(out / "tb_systemc.cpp"), f"-L{SYSTEMC_LIB}", f"-Wl,-rpath,{SYSTEMC_LIB}", "-lsystemc", "-pthread", "-o", "sc_sim"]
-    run(sc_cmd, out, out / "sc_compile.log")
+    if args.sc_build_mode == "optimized":
+        build = build_systemc(
+            (*sorted(sc_out.rglob("*__impl_*.cpp")), out / "tb_systemc.cpp"),
+            out / "sc_sim",
+            out / "optimized_build",
+            options=SystemCBuildOptions(
+                cxx=shutil.which("g++") or "g++",
+                standard="c++14",
+                include_dirs=(*map(Path, include_dirs), SYSTEMC_INCLUDE),
+                pch_headers=(next(sc_out.rglob("e203_cpu_top.hpp")),),
+                ld_flags=(f"-L{SYSTEMC_LIB}", f"-Wl,-rpath,{SYSTEMC_LIB}"),
+                libs=("-lsystemc", "-pthread"),
+                jobs=max(1, args.sc_build_jobs),
+                use_pch=True,
+                incremental=True,
+                timeout_seconds=360,
+            ),
+            log_path=out / "sc_compile.log",
+        )
+        print(
+            "E203 optimized SystemC build: "
+            f"elapsed={build.elapsed_seconds:.3f}s compiled={build.compiled_sources} "
+            f"reused={build.reused_objects} jobs={build.jobs} "
+            f"link_reused={build.link_reused}",
+            flush=True,
+        )
+    else:
+        sc_cmd = ["g++", "-std=c++14", f"-I{SYSTEMC_INCLUDE}"]
+        sc_cmd += [f"-I{path}" for path in include_dirs]
+        sc_cmd += [str(out / "tb_systemc.cpp"), f"-L{SYSTEMC_LIB}", f"-Wl,-rpath,{SYSTEMC_LIB}", "-lsystemc", "-pthread", "-o", "sc_sim"]
+        run(sc_cmd, out, out / "sc_compile.log")
 
     summaries: list[str] = []
     for test in SCENARIOS:
         rtl_log = out / f"rtl_{test.name}.log"
         sc_log = out / f"systemc_{test.name}.log"
-        run([str(out / "simv"), f"+SCENARIO={test.name}"], out, rtl_log, vcs_env)
+        if not args.skip_rtl:
+            run([str(out / "simv"), f"+SCENARIO={test.name}"], out, rtl_log, vcs_env)
+        elif not rtl_log.is_file():
+            raise RuntimeError(f"missing cached RTL log for {test.name}: {rtl_log}")
         run([str(out / "sc_sim"), test.name], out, sc_log)
 
         rtl_pcs, rtl_dtcm = events(rtl_log)

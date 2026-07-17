@@ -1,0 +1,210 @@
+{
+  "available_providers": [
+    "blackbox",
+    "memory"
+  ],
+  "diagnostics": [
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_ca10525ff2' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_ca10525ff2",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_8047a6f04a' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_8047a6f04a",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_9458009294' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_9458009294",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_88c924c340' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_88c924c340",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_b4c5e9da54' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_b4c5e9da54",
+      "node": "memory",
+      "severity": "warning"
+    },
+    {
+      "code": "model_memory_applied",
+      "message": "module 'e603_sim_ram__prism_p_029c1cde8b' replaced by canonical masked synchronous memory model depth=DP, lane_width=WBITS, registered read address",
+      "module": "e603_sim_ram__prism_p_029c1cde8b",
+      "node": "memory",
+      "severity": "warning"
+    }
+  ],
+  "manifest_path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/models.json",
+  "manifest_version": 1,
+  "modules": [
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_ca10525ff2",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_8047a6f04a",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_9458009294",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_88c924c340",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_b4c5e9da54",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    },
+    {
+      "details": {
+        "byte_enable": "wem",
+        "depth": "DP",
+        "lane_width": "WBITS",
+        "read_address_register": true,
+        "read_latency": 1,
+        "storage": "__model_mem",
+        "write_mode": "no_change"
+      },
+      "module": "e603_sim_ram__prism_p_029c1cde8b",
+      "provider": "memory",
+      "reason": "replace the generated-lane simulation SRAM with compact synchronous storage",
+      "status": "applied"
+    }
+  ],
+  "sources": [
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_rams.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/global.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_clkgate.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_sync.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_hand_buf.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_hand_mux_bit.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    },
+    {
+      "action": "include",
+      "category": "design",
+      "path": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "reason": "automatic classification only",
+      "rule": ""
+    }
+  ],
+  "strict": true
+}

@@ -133,6 +133,33 @@ def test_procedural_for_loop_accepts_local_int_postincrement(tmp_path: Path) -> 
 
     header = generate_systemc_header(design)
     assert "Unsupported statement: ForLoop" not in header
+
+
+def test_procedural_for_loop_unrolls_parameter_arithmetic_bound(tmp_path: Path) -> None:
+    source = tmp_path / "parameter_arithmetic_for.v"
+    source.write_text(
+        """
+module parameter_arithmetic_for #(
+  parameter integer WIDTH = 64
+) (
+  input  wire [WIDTH-1:0] in,
+  output reg  [WIDTH/8-1:0] out
+);
+  integer i;
+  always @* begin
+    for (i = 0; i < WIDTH / 8; i = i + 1)
+      out[i] = in[i * 8];
+  end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([source], "parameter_arithmetic_for")
+    header = generate_systemc_header(design)
+
+    assert not [d for d in design.diagnostics if d.code == "unsupported_for_loop_bounds"]
+    assert "Unsupported statement: ForLoop" not in header
     assert "__next_out[0]" in header
     assert "__next_out[7]" in header
 
@@ -222,3 +249,46 @@ def test_procedural_for_loop_nested_in_case(tmp_path: Path) -> None:
     unrolled = first_case_item["statements"][0]
     assert unrolled["type"] == "block"
     assert len(unrolled["statements"]) == 4
+
+
+def test_procedural_for_in_generate_scope_substitutes_renamed_index(tmp_path: Path) -> None:
+    rtl = tmp_path / "generated_for_scope.v"
+    rtl.write_text(
+        dedent(
+            """\
+            module generated_for_scope(
+              input  wire [1:0] valid,
+              input  wire [7:0] lane [0:1],
+              output wire [7:0] y
+            );
+              generate
+                if (1) begin : g
+                  integer i;
+                  reg [7:0] selected;
+                  always @* begin
+                    selected = 8'b0;
+                    for (i = 0; i < 2; i = i + 1)
+                      selected = selected | ({8{valid[i]}} & lane[i]);
+                  end
+                  assign y = selected;
+                end
+              endgenerate
+            endmodule
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "generated_for_scope")
+    header = generate_systemc_header(design)
+
+    process = design.modules[0].processes[0]
+    unrolled = process.structured_statements[1]
+    indices = [
+        statement["right_expr"]["right"]["right"]["index"]["value"]
+        for statement in unrolled["statements"]
+    ]
+    assert indices == [0, 1]
+    assert "valid.read()[0]" in header
+    assert "valid.read()[1]" in header
+    assert "g_i.read()" not in header

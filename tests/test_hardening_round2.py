@@ -115,6 +115,36 @@ endmodule
     assert "result[0][0].write(sc_uint<16>(__bridge_u_y.read()));" in header
 
 
+def test_one_dimensional_array_cell_uses_only_expression_bridge(tmp_path: Path) -> None:
+    rtl = tmp_path / "array_cell_bridge.sv"
+    rtl.write_text(
+        """
+module child(input wire [2:0] a, output wire [6:0] y);
+  assign y = a;
+endmodule
+
+module top(input wire [2:0] din, output wire [6:0] dout);
+  wire [2:0] inputs [0:0];
+  wire [6:0] outputs [0:0];
+  assign inputs[0] = din;
+  assign dout = outputs[0];
+  child u(.a(inputs[0]), .y(outputs[0]));
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    design = lower_via_pyslang([rtl], "top")
+    header = generate_systemc_header(design)
+
+    assert header.count("sc_signal<sc_uint<3>> __bridge_u_a;") == 1
+    assert header.count("sc_signal<sc_uint<7>> __bridge_u_y;") == 1
+    assert "sc_signal<sc_uint<1>> __bridge_u_a;" not in header
+    assert "sc_signal<sc_uint<1>> __bridge_u_y;" not in header
+    assert "__bridge_u_a.write(sc_uint<3>(inputs[0].read()));" in header
+    assert "outputs[0].write(sc_uint<7>(__bridge_u_y.read()));" in header
+
+
 def test_inout_ports_use_resolved_systemc_and_hierarchical_binding(tmp_path: Path) -> None:
     rtl = tmp_path / "inout_bus.sv"
     rtl.write_text(

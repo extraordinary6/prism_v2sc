@@ -7,6 +7,7 @@
   ],
   "benchmarks": [
     {"name": "e203_cpu", "status": "passed", "evidence": "verification/notes/e203_cpu_real_design_eval.md", "scenarios": 6},
+    {"name": "e603_cpu", "status": "passed", "evidence": "verification/notes/e603_cpu_real_design_eval.md", "key_events": 1},
     {"name": "mhsa_accelerator", "status": "passed", "evidence": "verification/notes/mhsa_icb_real_design_eval.md", "keypoint_groups": 3},
     {"name": "ofdm_fft", "status": "passed", "evidence": "verification/notes/ofdm_fft_real_design_eval.md", "cases": 9},
     {"name": "icb_apb_bridge", "status": "passed", "evidence": "verification/notes/icb_apb_bridge_real_design_eval.md", "events": 36},

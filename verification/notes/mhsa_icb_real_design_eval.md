@@ -1,6 +1,6 @@
 # MHSA ICB Real-design Evaluation
 
-Date: 2026-07-09
+Date: 2026-07-17
 
 ## Case
 
@@ -135,6 +135,51 @@ pe: keypoint consistency passed (9 samples)
 scale_core: keypoint consistency passed (7 samples)
 MHSA keypoint consistency passed: /tmp/prism_mhsa_keypoints
 ```
+
+## SystemC Build Optimization
+
+The MHSA gate also exercises the optional compile-oriented output and build path:
+
+```bash
+# Legacy single-command C++ build.
+.venv/bin/python verification/cases/consistency/mhsa_keypoint_consistency.py \
+  --case icb_mhsa --skip-rtl --out /tmp/prism_mhsa_build_legacy
+
+# Shared runtime header, out-of-line methods, 64 KiB implementation chunks,
+# PCH, dependency-aware object cache, link cache, and bounded parallelism.
+.venv/bin/python verification/cases/consistency/mhsa_keypoint_consistency.py \
+  --case icb_mhsa --skip-rtl --out /tmp/prism_mhsa_build_bench \
+  --sc-build-mode optimized --sc-build-jobs 4
+
+# Hot incremental rerun.
+.venv/bin/python verification/cases/consistency/mhsa_keypoint_consistency.py \
+  --case icb_mhsa --skip-rtl --out /tmp/prism_mhsa_build_bench --keep-out \
+  --sc-build-mode optimized --sc-build-jobs 4
+```
+
+Observed on the local machine:
+
+| Build | SystemC compile/link time | Result |
+| --- | ---: | --- |
+| Legacy cold | 4.08 s | passed |
+| Optimized cold, 4 jobs | 2.27 s | passed, about 1.8x faster |
+| Optimized hot | 0.002 s | 7 objects and link reused |
+
+A later full regression after the CPU-oriented generator fixes again produced
+byte-for-byte identical RTL/SystemC keypoint files for `icb_mhsa`, `pe`, and
+`scale_core`. Their unchanged hot builds took 0.002-0.003 s with all objects
+and links reused.
+
+The optimized SystemC keypoint trace exactly matches the previously captured VCS RTL
+keypoint trace. The benchmark found and fixed a real multidimensional unpacked-array bug:
+`row_i[0][1]`-style child bindings were previously misclassified as packed bit selects and
+could emit invalid `row_i[0].read()` code. A partial unpacked-array index is now bridged as an
+independent array element, while bit slices inside a complete packed array cell still use a
+single-writer assembler.
+
+The switches remain opt-in. Very small designs can be slower when method outlining creates
+extra translation units, while hierarchy-heavy designs such as MHSA benefit from PCH and
+parallel implementation chunks.
 
 ## Assessment
 

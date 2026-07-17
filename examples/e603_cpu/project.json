@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "e603_cpu_example",
+  "output_root": "project_build",
+  "stages": [
+    {
+      "name": "cpu_core_rams",
+      "top": "e603_core_rams",
+      "filelists": ["sources.f"],
+      "model_manifest": "models.json",
+      "no_ir": true
+    }
+  ]
+}

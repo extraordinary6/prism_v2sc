@@ -8,6 +8,8 @@
 
 - `../docs/rtl_conversion_roadmap.md` - 四阶段能力建设路线、覆盖状态和证据要求。
 - `benchmarks.json` / `benchmark_baseline.json` - 真实设计 benchmark 清单和证据基线。
+- `run_benchmark_suite.py` - 统一执行清单中的真实 RTL 一致性门禁；默认运行全部
+  注册用例，也可用 `--cases` 选择子集。
 - `cases/conversion/mhsa_icb_smoke.py` - 引用外部 `/home/MicroE/MHSA`
   ICB MHSA 加速器，执行真实设计转换和生成 SystemC 顶层 C++14 编译 smoke。
 - `cases/conversion/ofdm_fft_smoke.py` - 引用外部
@@ -38,6 +40,9 @@
   manifest 转换 `e203_cpu_top`，一次编译后运行 6 个 RV32 程序场景；比较关键
   PC 首次出现顺序和 10 个 DTCM 结果点，覆盖 ALU/分支、M 扩展、byte/halfword
   访存、CSR 和 timer interrupt trap，不要求逐拍响应完全相同。
+- `cases/consistency/e603_cpu_consistency.py` - 使用 `examples/e603_cpu/` 中的
+  自包含 E603 RTL、filelist 和 model manifest，以受限内存、超时和两个编译
+  job 完成转换；比较首取指地址、AXI ID、burst length 和近似周期节点。
 - `notes/mhsa_icb_real_design_eval.md` - 记录 MHSA ICB smoke/keypoint 结果、
   已修复的真实设计问题、当前证明范围和后续建议。
 - `notes/ofdm_fft_real_design_eval.md` - 记录 OFDM FFT/IFFT smoke 结果、
@@ -48,10 +53,22 @@
   真实设计暴露的转换器缺陷、warning 分类和当前证明边界。
 - `notes/e203_cpu_real_design_eval.md` - 记录 E203 大型层次转换、外部 memory
   provider 契约、6 个 CPU 执行场景、修复项和当前证明边界。
+- `notes/e603_cpu_real_design_eval.md` - 记录 E603 compile-friendly/optimized
+  构建、首取指关键事件一致性、真实设计暴露的转换缺陷和当前证明边界。
 
 本目录按可综合设计视图工作：assertion/property/sequence、bind 和 UVM/testbench
 内容不属于转换目标。用例应只把 RTL design sources 交给 converter；若验证宏与
 设计源码共存，真实设计脚本会在临时快照中关闭验证宏，绝不修改外部 RTL。
+
+统一回归命令：
+
+```bash
+.venv/bin/python verification/run_benchmark_suite.py \
+  --output /tmp/full_benchmark_report.json
+```
+
+该入口需要已配置的 VCS 和 SystemC 2.3.4 环境。报告逐项记录 contract、耗时、
+返回码和日志路径；只有所有已注册用例均为 `passed` 时命令才成功退出。
 
 后续建议布局：
 

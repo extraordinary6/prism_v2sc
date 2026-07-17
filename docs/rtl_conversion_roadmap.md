@@ -10,6 +10,22 @@ generator execution are outside the project. Generator-based designs are
 benchmarked only from a fixed, externally generated Verilog/SystemVerilog
 snapshot.
 
+## Current Priorities
+
+Near-term work is limited to two tracks:
+
+1. **Conversion correctness and RTL coverage**: blind real-design conversion,
+   loud diagnostics for unsupported semantics, provider/interface hardening,
+   generated-SystemC compilation, and RTL/SystemC consistency regressions.
+2. **Power diagnostics**: reliable workload activity collection, provider-backed
+   memory support, clock-domain-aware normalization, reusable reports, and
+   correlation against RTL-simulator activity where practical.
+
+Dedicated performance reporting, protocol throughput analysis, parameter-sweep
+performance dashboards, and Power/Performance Pareto tooling are deferred.
+Existing keypoint and trace timing checks remain correctness evidence, but are
+not being expanded into a performance-analysis product in the current cycle.
+
 ## Evidence rules
 
 - `supported`: a focused differential or real-design regression exists.

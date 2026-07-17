@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import ctypes
+import hashlib
+import pickle
 import shutil
 import subprocess
 import sys
@@ -84,6 +86,10 @@ class ConversionReport:
     instance_count: int
     generate_for_count: int
     diagnostic_count: int
+    frontend_cache_hit: bool = False
+    codegen_rendered_count: int = 0
+    codegen_reused_count: int = 0
+    codegen_bootstrapped_count: int = 0
     verilator_lint: ToolMeasurement = field(default_factory=lambda: ToolMeasurement(tool="verilator", available=False))
 
     def to_dict(self) -> dict[str, object]:
@@ -118,6 +124,10 @@ def convert_with_metrics(
     source_root: Path | None = None,
     model_manifest: ModelManifest | None = None,
     model_registry: ModelProviderRegistry | None = None,
+    track_memory: bool = True,
+    incremental_codegen: bool = False,
+    reuse_existing_modules: Sequence[str] = (),
+    compile_friendly: bool = False,
 ) -> ConversionArtifacts:
     """Parse, lower, emit SystemC, and measure time and peak Python allocation.
 
@@ -135,13 +145,20 @@ def convert_with_metrics(
     normalized_sources = tuple(str(source) for source in resolved_sources)
     total_start = time.perf_counter()
 
-    parse_lower_measurement, flow = _measure(
-        lambda: lower_design_top_down(
+    frontend_cache_path = (
+        Path(out_dir) / ".prism_frontend_cache.pkl"
+        if out_dir is not None and incremental_codegen
+        else None
+    )
+    parse_lower_measurement, (flow, frontend_cache_hit) = _measure(
+        lambda: _load_or_lower_frontend(
             resolved_sources,
             top,
             include_dirs=include_dirs,
             defines=defines,
-        )
+            cache_path=frontend_cache_path,
+        ),
+        track_allocations=track_memory,
     )
     design = flow.design
     if model_manifest is not None:
@@ -152,24 +169,51 @@ def convert_with_metrics(
             registry=model_registry,
         )
     source_index_measurement = Measurement(
-        elapsed_seconds=flow.source_index_elapsed_seconds,
+        elapsed_seconds=0.0 if frontend_cache_hit else flow.source_index_elapsed_seconds,
         peak_python_bytes=0,
     )
     traversal_measurement = Measurement(
-        elapsed_seconds=flow.traversal_elapsed_seconds,
+        elapsed_seconds=0.0 if frontend_cache_hit else flow.traversal_elapsed_seconds,
         peak_python_bytes=0,
     )
 
     resolved_root = source_root if source_root is not None else compute_source_root(resolved_sources)
     emitted_files: tuple[Path, ...] = ()
+    codegen_cache_stats: dict[str, int] = {}
     if out_dir is not None:
         codegen_measurement, written = _measure(
-            lambda: emit_systemc_files(design, Path(out_dir), Path(resolved_root), signatures=flow.signatures)
+            lambda: emit_systemc_files(
+                design,
+                Path(out_dir),
+                Path(resolved_root),
+                signatures=flow.signatures,
+                incremental=incremental_codegen,
+                reuse_existing_modules=frozenset(reuse_existing_modules),
+                compile_friendly=compile_friendly,
+            ),
+            track_allocations=track_memory,
         )
         emitted_files = tuple(written)
-        header_text = generate_systemc_header(design)
+        if incremental_codegen or reuse_existing_modules:
+            try:
+                cache = json.loads((Path(out_dir) / ".prism_codegen_cache.json").read_text(encoding="utf-8"))
+                last_run = cache.get("last_run", {})
+                if isinstance(last_run, dict):
+                    codegen_cache_stats = {
+                        key: int(last_run.get(key, 0))
+                        for key in ("rendered", "reused", "bootstrapped")
+                    }
+            except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+                codegen_cache_stats = {}
+        # Per-module output is the authoritative artifact. Re-rendering the
+        # complete design into one unused monolithic header doubles codegen
+        # work and peak memory for large designs.
+        header_text = ""
     else:
-        codegen_measurement, header_text = _measure(lambda: generate_systemc_header(design))
+        codegen_measurement, header_text = _measure(
+            lambda: generate_systemc_header(design),
+            track_allocations=track_memory,
+        )
     total_elapsed = time.perf_counter() - total_start
 
     verilator_command = _find_verilator_command()
@@ -216,6 +260,10 @@ def convert_with_metrics(
         instance_count=sum(len(module.instances) for module in design.modules),
         generate_for_count=sum(len(module.generate_fors) for module in design.modules),
         diagnostic_count=len(design.diagnostics),
+        frontend_cache_hit=frontend_cache_hit,
+        codegen_rendered_count=codegen_cache_stats.get("rendered", len(emitted_files)),
+        codegen_reused_count=codegen_cache_stats.get("reused", 0),
+        codegen_bootstrapped_count=codegen_cache_stats.get("bootstrapped", 0),
         verilator_lint=verilator,
     )
     return ConversionArtifacts(
@@ -227,18 +275,109 @@ def convert_with_metrics(
     )
 
 
+_FRONTEND_CACHE_VERSION = 1
+_RTL_SUFFIXES = frozenset({".v", ".sv", ".vh", ".svh"})
+
+
+def _load_or_lower_frontend(
+    sources: Sequence[Path],
+    top: str,
+    *,
+    include_dirs: Sequence[Path],
+    defines: Sequence[str],
+    cache_path: Path | None,
+):
+    if cache_path is None:
+        return (
+            lower_design_top_down(sources, top, include_dirs=include_dirs, defines=defines),
+            False,
+        )
+
+    cache_key = _frontend_cache_key(sources, top, include_dirs, defines)
+    try:
+        with cache_path.open("rb") as stream:
+            payload = pickle.load(stream)
+        if (
+            isinstance(payload, dict)
+            and payload.get("version") == _FRONTEND_CACHE_VERSION
+            and payload.get("key") == cache_key
+            and payload.get("flow") is not None
+        ):
+            return payload["flow"], True
+    except (FileNotFoundError, OSError, EOFError, pickle.PickleError, AttributeError, ValueError):
+        pass
+
+    flow = lower_design_top_down(sources, top, include_dirs=include_dirs, defines=defines)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    try:
+        with temporary.open("wb") as stream:
+            pickle.dump(
+                {"version": _FRONTEND_CACHE_VERSION, "key": cache_key, "flow": flow},
+                stream,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+        temporary.replace(cache_path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+    return flow, False
+
+
+def _frontend_cache_key(
+    sources: Sequence[Path],
+    top: str,
+    include_dirs: Sequence[Path],
+    defines: Sequence[str],
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(f"version={_FRONTEND_CACHE_VERSION}\0top={top}\0".encode("utf-8"))
+    for define in defines:
+        digest.update(f"define={define}\0".encode("utf-8"))
+
+    candidates = {Path(source).resolve() for source in sources}
+    for include_dir in include_dirs:
+        resolved_dir = Path(include_dir).resolve()
+        digest.update(f"incdir={resolved_dir}\0".encode("utf-8"))
+        if resolved_dir.is_dir():
+            candidates.update(
+                path.resolve()
+                for path in resolved_dir.rglob("*")
+                if path.is_file() and path.suffix.lower() in _RTL_SUFFIXES
+            )
+
+    implementation_files = [
+        Path(__file__).parents[1] / "frontend" / "flow.py",
+        Path(__file__).parents[1] / "frontend" / "lower.py",
+        Path(__file__).parents[1] / "frontend" / "pyslang_parser.py",
+        Path(__file__).parents[1] / "ir" / "model.py",
+    ]
+    for path in sorted((*candidates, *implementation_files), key=lambda item: str(item)):
+        digest.update(f"file={path}\0".encode("utf-8"))
+        try:
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            digest.update(b"<missing>")
+    return digest.hexdigest()
+
+
 def write_report(report: ConversionReport, path: Path) -> None:
     """Write a stable JSON metrics report."""
     path.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _measure(operation: Callable[[], T]) -> tuple[Measurement, T]:
-    tracemalloc.start()
+def _measure(operation: Callable[[], T], *, track_allocations: bool = True) -> tuple[Measurement, T]:
+    if track_allocations:
+        tracemalloc.start()
     start_rss = _current_process_memory_bytes()
     start = time.perf_counter()
     try:
         result = operation()
-        _current, peak = tracemalloc.get_traced_memory()
+        peak = tracemalloc.get_traced_memory()[1] if track_allocations else 0
         end_rss = _current_process_memory_bytes()
         return (
             Measurement(
@@ -249,7 +388,8 @@ def _measure(operation: Callable[[], T]) -> tuple[Measurement, T]:
             result,
         )
     finally:
-        tracemalloc.stop()
+        if track_allocations:
+            tracemalloc.stop()
 
 
 def _measure_verilator_lint(

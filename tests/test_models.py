@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from prism_v2sc.cli import main
 from prism_v2sc.ir.model import DesignIR, ModuleIR, ParameterIR, PortIR
 from prism_v2sc.models.manifest import ModelManifest, ModuleRule, SourceRule, load_model_manifest
@@ -202,6 +200,7 @@ module masked_ram #(parameter DP=16, DW=32, MW=4, AW=4)(
   input logic [MW-1:0] wem,
   output logic [DW-1:0] dout
 );
+  localparam WBITS = DW / MW;
 endmodule
 """,
         encoding="utf-8",
@@ -220,7 +219,7 @@ endmodule
                             "enable": "cs",
                             "write_enable": "we",
                             "byte_enable": "wem",
-                            "lane_width": 8,
+                            "lane_width": "WBITS",
                             "address": "addr",
                             "write_data": "din",
                             "read_data": "dout",
@@ -241,15 +240,70 @@ endmodule
     header = (out_dir / "masked_ram.hpp").read_text(encoding="utf-8")
     assert "std::array<" in header
     assert "__model_mem[" in header
-    assert "__bit / 8" in header
+    assert "__bit / WBITS" in header
     assert "sensitive << __model_read_addr;" in header
     assert "mem_r[0]" not in header
 
 
-def test_model_options_do_not_silently_bypass_power_flow(tmp_path: Path) -> None:
-    rtl = tmp_path / "core.sv"
-    rtl.write_text("module core(input logic a, output logic y); assign y=a; endmodule\n", encoding="utf-8")
+def _write_power_memory_case(tmp_path: Path) -> tuple[Path, Path]:
+    rtl = tmp_path / "memory_top.sv"
+    rtl.write_text(
+        """
+module sim_sram(input logic clk, en, we, input logic [1:0] addr,
+                input logic [7:0] wdata, output logic [7:0] rdata);
+endmodule
+module memory_top(input logic clk, en, we, input logic [1:0] addr,
+                  input logic [7:0] wdata, output logic [7:0] rdata);
+  sim_sram u_mem(.*);
+endmodule
+""",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "models.json"
+    manifest.write_text(json.dumps({
+        "version": 1,
+        "module_rules": [{
+            "module": "sim_sram", "provider": "memory",
+            "config": {
+                "clock": "clk", "enable": "en", "write_enable": "we",
+                "address": "addr", "write_data": "wdata", "read_data": "rdata",
+                "depth": 4, "read_latency": 1, "write_mode": "read_first"
+            }
+        }]
+    }), encoding="utf-8")
+    return rtl, manifest
 
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--top", "core", "--model-audit", "--power-static", str(rtl)])
-    assert exc_info.value.code == 2
+
+def test_model_manifest_applies_to_power_static(tmp_path: Path) -> None:
+    rtl, manifest = _write_power_memory_case(tmp_path)
+    out = tmp_path / "out"
+    static = tmp_path / "power_static.json"
+    assert main([
+        "--top", "memory_top", "--model-manifest", str(manifest),
+        "--power-static", "--power-static-output", str(static),
+        "--out", str(out), str(rtl),
+    ]) == 0
+    report = json.loads((out / "model_report.json").read_text(encoding="utf-8"))
+    assert report["modules"][0]["provider"] == "memory"
+    assert report["modules"][0]["status"] == "applied"
+    assert json.loads(static.read_text(encoding="utf-8"))["design"]["top_module"] == "memory_top"
+
+
+def test_model_manifest_applies_to_power_instrumentation(tmp_path: Path) -> None:
+    rtl, manifest = _write_power_memory_case(tmp_path)
+    out = tmp_path / "instrumented"
+    probes = tmp_path / "probes.json"
+    assert main([
+        "--top", "memory_top", "--model-manifest", str(manifest),
+        "--power-instrument", str(probes), "--power-memory-cells",
+        "--out", str(out), str(rtl),
+    ]) == 0
+    probe_manifest = json.loads(probes.read_text(encoding="utf-8"))
+    assert probe_manifest["memory_probe_count"] == 4
+    assert probe_manifest["model_providers"][0] == {
+        "module": "sim_sram", "provider": "memory", "status": "applied"
+    }
+    assert (out / "model_report.json").is_file()
+    header = (out / "sim_sram.hpp").read_text(encoding="utf-8")
+    assert "__model_mem[4]" in header
+    assert "prism_power_dump" in header

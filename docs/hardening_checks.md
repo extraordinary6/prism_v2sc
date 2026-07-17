@@ -8,7 +8,7 @@ Reproducible local checks you can run while developing. The default pytest suite
 D:\anaconda\envs\pytorch\python.exe -m pytest -q
 ```
 
-Covers IR lowering, codegen text, multi-file output layout, CLI behavior, expression coverage, diagnostics policy, model providers, staged projects, static power analysis, instrumentation, reporting, and real SystemC smoke paths when available. The current baseline collects 214 tests.
+Covers IR lowering, codegen text, multi-file output layout, CLI behavior, expression coverage, diagnostics policy, model providers, staged projects, static power analysis, instrumentation, reporting, and real SystemC smoke paths when available. The current baseline collects 218 tests.
 
 For a hermetic temporary build directory:
 

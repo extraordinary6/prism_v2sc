@@ -19,7 +19,7 @@ def test_project_runner_converts_ordered_stages_and_writes_audits(tmp_path: Path
         "stages": [
             {"name": "leaf", "top": "leaf", "sources": ["leaf.v"]},
             {"name": "integration", "top": "top", "sources": ["leaf.v", "top.v"],
-             "depends_on": ["leaf"]},
+             "depends_on": ["leaf"], "no_ir": True},
         ],
     }), encoding="utf-8")
 
@@ -29,6 +29,22 @@ def test_project_runner_converts_ordered_stages_and_writes_audits(tmp_path: Path
     assert [stage["status"] for stage in report["stages"]] == ["passed", "passed"]
     assert (tmp_path / "out/leaf/conversion_audit.json").is_file()
     assert (tmp_path / "out/integration/systemc/top.hpp").is_file()
+    assert not (tmp_path / "out/integration/systemc/ir.json").exists()
+    assert "--no-ir" in report["stages"][1]["command"]
+
+
+def test_project_manifest_rejects_non_boolean_no_ir(tmp_path: Path) -> None:
+    rtl = tmp_path / "top.v"
+    rtl.write_text("module top; endmodule\n", encoding="utf-8")
+    manifest_path = tmp_path / "project.json"
+    manifest_path.write_text(json.dumps({
+        "version": 1,
+        "stages": [
+            {"name": "top", "top": "top", "sources": ["top.v"], "no_ir": "yes"},
+        ],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="no_ir must be a boolean"):
+        load_project_manifest(manifest_path)
 
 
 def test_project_manifest_rejects_forward_dependency(tmp_path: Path) -> None:

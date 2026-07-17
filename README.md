@@ -15,7 +15,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="pyslang 11.x" src="https://img.shields.io/badge/pyslang-11.x-4B5563">
   <img alt="SystemC CI verified" src="https://img.shields.io/badge/SystemC-CI%20verified-16A34A">
-  <img alt="214 tests" src="https://img.shields.io/badge/tests-214%20collected-0EA5E9">
+  <img alt="255 tests" src="https://img.shields.io/badge/tests-255%20collected-0EA5E9">
   <img alt="Power diagnostics" src="https://img.shields.io/badge/power-diagnostics-F59E0B">
 </p>
 
@@ -68,6 +68,8 @@ Core options:
 | `--metrics` | Write `metrics.json` with timing, memory, and traversal counters. |
 | `--compare-verilator` | Run best-effort `verilator --lint-only` for the same inputs and record timing. |
 | `--fail-on-diagnostics` | Return exit code `2` when error-level diagnostics are present. |
+| `--diagnostic-policy <json>` | Apply a version 1 allow/deny/fatal diagnostic policy; policy failures return exit code `2`. |
+| `--conversion-audit <json>` | Write machine-readable source/module coverage, provider, diagnostics, and policy results. |
 | `--model-manifest <json/toml>` | Apply explicit source filtering and external-model providers; writes `model_report.json`. |
 | `--model-audit` | Classify model/testbench candidates and write `model_report.json` without replacement rules. |
 | `--version` | Print the package version. |
@@ -109,6 +111,10 @@ Power options:
 | `--power-report-static <json>` | Static analysis JSON to join with dynamic activity. |
 | `--power-report-output <file>` | Output path for the scored report. Default: `power_report.json`. |
 
+`--model-manifest` and `--model-audit` can be combined with `--power-static`
+or `--power-instrument`. Power analysis uses the provider-resolved design and
+writes `model_report.json` under `--out`.
+
 ## Output Layout
 
 ```text
@@ -129,6 +135,83 @@ Each generated module header includes the headers for the child modules it insta
 4. Codegen writes one `.hpp` per module in post-order DFS, so child headers exist before parent headers reference them.
 5. Diagnostics from slang, lowering, and model providers are stored in the IR and summarized at the end of the run.
 
+## Large Projects and Auditable Conversion
+
+### Model Providers
+
+Large RTL repositories often contain simulation-only memories, vendor primitives, testbenches, assertions, or timing models. `--model-audit` classifies those source and module candidates without filtering or replacing anything:
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --model-audit `
+  --out build\cpu_audit
+```
+
+For explicit conversion decisions, use a version 1 JSON or TOML model manifest. Source rules can ignore named files, while module rules select a registered provider. The built-in `memory` provider emits a functional canonical memory model for its documented contract; `blackbox` preserves parameters and ports but has no functional body and must be explicitly allowed in strict mode.
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --model-manifest models.json `
+  --fail-on-diagnostics `
+  --out build\cpu_systemc
+```
+
+Both modes write `model_report.json`, making every classification, ignored source, provider replacement, warning, and approximation visible. Automatic classification is audit-only and never removes RTL by filename heuristic. See `docs/model_providers.md` for the manifest schema and provider contracts.
+
+### Conversion Audits and Diagnostic Policies
+
+`--conversion-audit` writes a machine-readable report containing source counts and categories, reachable and generated modules, provider decisions, diagnostics, policy failures, and the final pass/fail status. A version 1 diagnostic policy can define fatal severities plus explicitly allowed or denied diagnostic codes:
+
+```powershell
+python -m prism_v2sc --top cpu_top `
+  --filelist synthesis.f `
+  --diagnostic-policy docs\diagnostic_policy.example.json `
+  --conversion-audit build\conversion_audit.json `
+  --out build\cpu_systemc
+```
+
+A policy failure returns exit code `2`, so the same rules can gate local conversion and CI. The checked-in `docs/rtl_coverage_registry.json` links support claims to evidence, while `docs/diagnostic_policy.example.json` provides a minimal policy template.
+
+### Staged Project Conversion
+
+Large designs can be converted as ordered stages with independent tops, sources or filelists, model manifests, and diagnostic policies. Project manifests support JSON and TOML; all relative paths are resolved from the manifest directory.
+
+```json
+{
+  "version": 1,
+  "name": "cpu",
+  "output_root": "build/project_conversion",
+  "stages": [
+    {
+      "name": "leaf",
+      "top": "leaf_top",
+      "filelists": ["rtl/leaf.f"],
+      "model_manifest": "models.json",
+      "diagnostic_policy": "policy.json"
+    },
+    {
+      "name": "integration",
+      "top": "cpu_top",
+      "filelists": ["rtl/cpu.f"],
+      "depends_on": ["leaf"],
+      "model_manifest": "models.json",
+      "diagnostic_policy": "policy.json",
+      "no_ir": true
+    }
+  ]
+}
+```
+
+Run the project with:
+
+```powershell
+python -m prism_v2sc.project project.json
+```
+
+Each stage writes generated SystemC and `conversion_audit.json` under `<output_root>/<stage>/`; the runner also writes `project_report.json`. Set `no_ir` to `true` for very large stages that should not serialize `ir.json`. A stage whose dependency failed or was skipped is recorded as `skipped_dependency` and is not run.
+
 ## Examples
 
 | location | scope |
@@ -137,6 +220,8 @@ Each generated module header includes the headers for the child modules it insta
 | `examples/filelist_demo/` | Multi-file build driven by a `.f` filelist with `+incdir+` and `-D`. |
 | `examples/power_demo/` | Small single-module RTL examples for static power suspects. |
 | `examples/power_multimodule_demo/` | Multi-module filelist-driven power demo with generated reports and instrumented SystemC. |
+| `examples/e203_cpu/` | Self-contained E203 CPU snapshot with model providers, generated SystemC, and staged-project output. |
+| `examples/e603_cpu/` | Self-contained E603 CPU/SRAM-wrapper snapshot with generated SystemC and bounded large-design commands. |
 
 ## Power Diagnostics
 
@@ -248,13 +333,15 @@ The report contains ranked hotspots, per-probe metrics (`total_bit_toggles`, `to
 python -m pytest -q
 ```
 
-The suite currently collects 214 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, model providers, conversion audits, staged projects, static power analysis, instrumentation, profile parsing, scoring, and report stability.
+The suite currently collects 255 tests covering IR lowering, codegen output shape, CLI behavior, multi-file output layout, expression coverage, diagnostics, hardening, subroutines, model providers, conversion audits, staged projects, static power analysis, probe planning, instrumentation, recursive power dumps, profile parsing, scoring, deep profiling, workload comparison, and report stability.
 
 ## Equivalence CI
 
 `.github/workflows/equivalence.yml` runs on Linux. It co-simulates RTL fixtures with Icarus Verilog and generated SystemC with `libsystemc-dev`, then diffs per-cycle traces. The CI also runs Linux-only power checks that compile and run instrumented SystemC, parse `prism_power_dump` output, and compare instrumented and uninstrumented traces.
 
 Local trace-equivalence and dynamic power smoke runs require SystemC headers and libraries. On machines without `<systemc>`, run the Python unit suite locally and rely on Linux CI for final SystemC compile/run checks.
+
+For larger generated designs, `--compile-friendly` emits a shared SystemC runtime header and out-of-line implementation chunks. The equivalence, MHSA, E203, and E603 consistency harnesses additionally accept `--sc-build-mode optimized --sc-build-jobs N`, enabling bounded parallel compilation, PCH reuse, dependency-aware object caching, and link caching. These switches are opt-in because tiny designs may not amortize the extra translation units.
 
 Additional exploratory and real-design checks live under `verification/`, including external MHSA, OFDM FFT/IFFT, interface-based ICB-to-APB bridge, 4x4/8x8 tinyNPU, and E203 CPU conversion/consistency gates. The E203 gate uses the model-provider framework for ITCM/DTCM and compares architectural key events rather than requiring exact cycle alignment.
 

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "project": "e603_cpu_example",
+  "stages": [
+    {
+      "name": "cpu_core_rams",
+      "top": "e603_core_rams",
+      "status": "passed",
+      "returncode": 0,
+      "elapsed_seconds": 87.016,
+      "output_dir": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams",
+      "audit": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/conversion_audit.json",
+      "command": [
+        "/home/MicroE/ai_proj/prism_v2sc/.venv/bin/python",
+        "-m",
+        "prism_v2sc",
+        "--top",
+        "e603_core_rams",
+        "--out",
+        "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc",
+        "--conversion-audit",
+        "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/conversion_audit.json",
+        "--filelist",
+        "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/sources.f",
+        "--model-manifest",
+        "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/models.json",
+        "--no-ir"
+      ],
+      "output_tail": "wrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_sim_ram__prism_p_8047a6f04a.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/tech/e603_gnrl_tech_ram__prism_p_8047a6f04a.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_gnrl_ram__prism_p_b1e1250461.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_sim_ram__prism_p_9458009294.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/tech/e603_gnrl_tech_ram__prism_p_9458009294.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_gnrl_ram__prism_p_c43b684274.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_sim_ram__prism_p_88c924c340.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/tech/e603_gnrl_tech_ram__prism_p_88c924c340.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_gnrl_ram__prism_p_feba563485.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_sim_ram__prism_p_b4c5e9da54.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/tech/e603_gnrl_tech_ram__prism_p_b4c5e9da54.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_gnrl_ram__prism_p_ca89bf95d3.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_sim_ram__prism_p_029c1cde8b.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/tech/e603_gnrl_tech_ram__prism_p_029c1cde8b.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/soc/e603_gnrl_ram__prism_p_cf40b28012.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/core/e603_rams_wrapper.hpp\nwrote SystemC module: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/core/e603_core_rams.hpp\nwrote model resolution report: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/systemc/model_report.json\nwrote conversion audit: /home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/project_build/cpu_core_rams/conversion_audit.json\ndiagnostics: 0 error(s), 953 warning(s)"
+    }
+  ]
+}

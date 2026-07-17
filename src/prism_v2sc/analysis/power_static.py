@@ -9,6 +9,7 @@ from prism_v2sc.ir.model import ModuleIR, SignalIR, SourceLocIR
 from prism_v2sc.analysis.dependencies import analyze_dependencies
 from prism_v2sc.analysis.sensitivity import analyze_sensitivity
 from prism_v2sc.analysis.expression_metrics import analyze_expression_metrics
+from prism_v2sc.codegen.expr import build_module_context
 
 
 @dataclass(frozen=True)
@@ -120,15 +121,7 @@ def analyze_static_power(module: ModuleIR, thresholds: PowerThresholds | None = 
 
 def _build_signal_width_map(module: ModuleIR) -> dict[str, int]:
     """Build a map from signal name to bit width."""
-    widths: dict[str, int] = {}
-
-    for port in module.ports:
-        widths[port.name] = _compute_width(port.width)
-
-    for signal in module.signals:
-        widths[signal.name] = _compute_width(signal.width)
-
-    return widths
+    return dict(build_module_context(module).signal_widths)
 
 
 def _build_signal_location_map(module: ModuleIR) -> dict[str, SourceLocIR]:

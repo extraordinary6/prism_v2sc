@@ -84,9 +84,14 @@ def _lookup_genvar_subst(symbol: Any) -> str | None:
     name = getattr(symbol, "name", "")
     if not name:
         return None
+    names = [name]
+    scoped_name = _lookup_generate_scope_name(symbol)
+    if scoped_name is not None and scoped_name != name:
+        names.append(scoped_name)
     for frame in reversed(_genvar_subst_stack):
-        if name in frame:
-            return frame[name]
+        for candidate in names:
+            if candidate in frame:
+                return frame[candidate]
     return None
 
 
@@ -356,7 +361,7 @@ def extract_signature(instance: Any) -> ModuleSignature:
             ports.append(_lower_port(member))
         elif kind == "InterfacePortSymbol":
             ports.extend(_lower_interface_port(member))
-        elif kind == "ParameterSymbol":
+        elif kind == "ParameterSymbol" and not getattr(member, "isLocalParam", False):
             parameters.append(_lower_parameter(member))
     return ModuleSignature(
         name=instance.definition.name,
@@ -1460,6 +1465,45 @@ def _try_eval_const_expr(expr: Any) -> int | None:
         operand = getattr(expr, "operand", None)
         if operand:
             return _try_eval_const_expr(operand)
+    elif kind == "UnaryOp":
+        operand = _try_eval_const_expr(getattr(expr, "operand", None))
+        if operand is None:
+            return None
+        op = str(getattr(expr, "op", "")).rsplit(".", 1)[-1]
+        if op in {"Plus", "UnaryPlus"}:
+            return operand
+        if op in {"Minus", "UnaryMinus"}:
+            return -operand
+        if op in {"BitwiseNot", "BinaryNot"}:
+            return ~operand
+        if op in {"LogicalNot"}:
+            return int(not operand)
+    elif kind == "BinaryOp":
+        left = _try_eval_const_expr(getattr(expr, "left", None))
+        right = _try_eval_const_expr(getattr(expr, "right", None))
+        if left is None or right is None:
+            return None
+        op = str(getattr(expr, "op", "")).rsplit(".", 1)[-1]
+        operations = {
+            "Add": lambda: left + right,
+            "Subtract": lambda: left - right,
+            "Multiply": lambda: left * right,
+            "Divide": lambda: int(left / right),
+            "Mod": lambda: left % right,
+            "BinaryAnd": lambda: left & right,
+            "BinaryOr": lambda: left | right,
+            "BinaryXor": lambda: left ^ right,
+            "LogicalShiftLeft": lambda: left << right,
+            "ArithmeticShiftLeft": lambda: left << right,
+            "LogicalShiftRight": lambda: left >> right,
+            "ArithmeticShiftRight": lambda: left >> right,
+        }
+        operation = operations.get(op)
+        if operation is not None:
+            try:
+                return operation()
+            except (ZeroDivisionError, ValueError, OverflowError):
+                return None
     return None
 
 
@@ -1677,11 +1721,15 @@ def _lower_instance_array(array_symbol: Any, *, name_prefix: str = "") -> list[I
 
 
 def _instance_parameter_overrides(instance: Any) -> list[Any]:
-    overrides: list[Any] = []
+    # Keep the fully elaborated parameter vector. Recording only explicit
+    # overrides is ambiguous when two specializations share those overrides
+    # but differ in a defaulted parameter; the parent would then hash a module
+    # name that no lowered child owns.
+    parameters: list[Any] = []
     for member in instance.body:
-        if type(member).__name__ == "ParameterSymbol" and getattr(member, "isOverridden", False):
-            overrides.append(member)
-    return overrides
+        if type(member).__name__ == "ParameterSymbol" and not getattr(member, "isLocalParam", False):
+            parameters.append(member)
+    return parameters
 
 
 def _render_port_connection(connection: Any) -> str:

@@ -157,12 +157,14 @@ def lower_design_top_down(
     def visit(instance, *, is_root: bool = False) -> None:
         definition_name = instance.definition.name
         lowered_module = sv_lower_module(instance, source_manager=source_manager)
+        signature = sv_extract_signature(instance)
+        actual_parameters = signature.parameters
         specialization_name = (
             definition_name
             if is_root
             else _specialized_module_name(
                 definition_name,
-                lowered_module.parameters,
+                actual_parameters,
                 specialized_definitions,
             )
         )
@@ -171,10 +173,17 @@ def lower_design_top_down(
         visited.add(specialization_name)
         # Cache the signature *before* descending into children so a parent
         # whose port list references this child gets the binding info.
-        signature = sv_extract_signature(instance)
         signatures[specialization_name] = replace(signature, name=specialization_name)
         lowered_module = _specialize_module_references(
-            replace(lowered_module, name=specialization_name),
+            replace(
+                lowered_module,
+                name=specialization_name,
+                parameters=actual_parameters + tuple(
+                    parameter
+                    for parameter in lowered_module.parameters
+                    if parameter.kind == "localparam"
+                ),
+            ),
             specialized_definitions,
             parameter_variants,
         )
@@ -220,7 +229,36 @@ def lower_design_top_down(
 
 
 def _parameter_payload(parameters) -> str:
-    return "\x1f".join(f"{parameter.name}={parameter.value}" for parameter in parameters)
+    known: dict[str, int] = {}
+    parts: list[str] = []
+    for parameter in parameters:
+        canonical = _canonical_parameter_value(parameter.value, known)
+        parts.append(f"{parameter.name}={canonical}")
+        try:
+            known[parameter.name] = int(canonical, 10)
+        except ValueError:
+            pass
+    return "\x1f".join(parts)
+
+
+def _canonical_parameter_value(value: str, known: dict[str, int]) -> str:
+    compact = re.sub(r"\s+", "", value)
+    literal = re.fullmatch(r"(?:\d+)?'([bBoOdDhH])([0-9a-fA-F_]+)", compact)
+    if literal is not None:
+        base = {"b": 2, "o": 8, "d": 10, "h": 16}[literal.group(1).lower()]
+        return str(int(literal.group(2).replace("_", ""), base))
+    repeated = re.fullmatch(
+        r"\{(?P<count>[A-Za-z_][A-Za-z0-9_$]*|\d+)\{+(?:\d+)?'[bB](?P<bit>[01])\}+\}",
+        compact,
+    )
+    if repeated is not None:
+        count_text = repeated.group("count")
+        count = int(count_text) if count_text.isdecimal() else known.get(count_text)
+        if count is not None:
+            return "0" if repeated.group("bit") == "0" else str((1 << count) - 1)
+    if re.fullmatch(r"0*[0-9]+", compact):
+        return str(int(compact, 10))
+    return compact
 
 
 def _specialized_module_name(name: str, parameters, specialized_definitions: set[str]) -> str:

@@ -20,6 +20,31 @@ This writes the normal `ir.json` and per-module headers plus
 `model_report.json`. To classify sources without replacement rules, use
 `--model-audit`.
 
+Model manifests also work with both power flows. Source filtering and provider
+replacement happen before static analysis or probe planning, and the resolved
+audit is written to `<out>/model_report.json`:
+
+```bash
+.venv/bin/python -m prism_v2sc --top cpu_top \
+  --filelist synthesis.f \
+  --model-manifest models.json \
+  --power-static \
+  --power-static-output build/power_static.json \
+  --out build/power_static_model
+
+.venv/bin/python -m prism_v2sc --top cpu_top \
+  --filelist synthesis.f \
+  --model-manifest models.json \
+  --power-instrument build/probe_manifest.json \
+  --out build/instrumented_systemc
+```
+
+The probe manifest includes a `model_providers` section. Ordinary canonical
+memory providers expose generated storage to `--power-memory-cells`.
+Specialized provider-only storage may currently expose interface and
+surrounding-state activity without per-cell probes; `model_report.json`
+identifies those modules explicitly.
+
 ## Manifest
 
 JSON and TOML are supported. Version 1 has two explicit rule groups:

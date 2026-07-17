@@ -17,6 +17,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+from prism_v2sc.systemc_build import SystemCBuildError, SystemCBuildOptions, build_systemc
+
 
 DEFAULT_MHSA_ROOT = Path("/home/MicroE/MHSA")
 DEFAULT_OUT = Path("/tmp/prism_mhsa_keypoints")
@@ -668,21 +671,43 @@ def _run(cmd: list[str], *, cwd: Path, log: Path | None = None, env: dict[str, s
         subprocess.run(cmd, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT, check=True)
 
 
-def _convert(case: KeypointCase, mhsa_root: Path, out_dir: Path, repo_root: Path) -> Path:
+def _write_if_changed(path: Path, content: str) -> None:
+    try:
+        if path.read_text(encoding="utf-8") == content:
+            return
+    except (FileNotFoundError, OSError):
+        pass
+    path.write_text(content, encoding="utf-8")
+
+
+def _convert(
+    case: KeypointCase,
+    mhsa_root: Path,
+    out_dir: Path,
+    repo_root: Path,
+    *,
+    compile_friendly: bool = False,
+    incremental: bool = False,
+) -> Path:
     sc_out = out_dir / "systemc"
     sources = [mhsa_root / source_rel for source_rel in case.source_rels]
+    convert_cmd = [
+        sys.executable,
+        "-m",
+        "prism_v2sc",
+        "--top",
+        case.top,
+        "--out",
+        str(sc_out),
+        "--fail-on-diagnostics",
+    ]
+    if compile_friendly:
+        convert_cmd.append("--compile-friendly")
+    if incremental:
+        convert_cmd.append("--incremental-codegen")
+    convert_cmd.extend(str(source) for source in sources)
     _run(
-        [
-            sys.executable,
-            "-m",
-            "prism_v2sc",
-            "--top",
-            case.top,
-            "--out",
-            str(sc_out),
-            "--fail-on-diagnostics",
-            *[str(source) for source in sources],
-        ],
+        convert_cmd,
         cwd=repo_root,
         log=out_dir / "convert.log",
     )
@@ -694,7 +719,7 @@ def _convert(case: KeypointCase, mhsa_root: Path, out_dir: Path, repo_root: Path
 
 def _run_rtl(case: KeypointCase, mhsa_root: Path, out_dir: Path, rtl_sim: str) -> Path:
     rtl_tb = out_dir / "tb_rtl.sv"
-    rtl_tb.write_text(case.rtl_tb, encoding="utf-8")
+    _write_if_changed(rtl_tb, case.rtl_tb)
     sources = [mhsa_root / source_rel for source_rel in case.source_rels]
     if rtl_sim != "vcs":
         raise RuntimeError(f"unsupported RTL simulator for this script: {rtl_sim}")
@@ -728,27 +753,69 @@ def _run_systemc(
     cxx: str,
     systemc_include: Path,
     systemc_lib: Path,
+    build_mode: str = "legacy",
+    build_jobs: int = 1,
+    build_pch: bool = False,
+    build_incremental: bool = False,
 ) -> Path:
     sc_tb = out_dir / "tb_systemc.cpp"
-    sc_tb.write_text(case.sc_tb, encoding="utf-8")
+    _write_if_changed(sc_tb, case.sc_tb)
     exe = out_dir / "sc_tb"
-    _run(
-        [
-            cxx,
-            "-std=c++14",
-            f"-I{systemc_include}",
-            f"-I{header.parent}",
-            str(sc_tb),
-            f"-L{systemc_lib}",
-            f"-Wl,-rpath,{systemc_lib}",
-            "-lsystemc",
-            "-pthread",
-            "-o",
-            str(exe),
-        ],
-        cwd=out_dir,
-        log=out_dir / "systemc_build.log",
+    generated_implementations = sorted(header.parents[1].rglob("*__impl_*.cpp"))
+    optimized = (
+        build_mode == "optimized"
+        or build_jobs > 1
+        or build_pch
+        or build_incremental
     )
+    if optimized:
+        try:
+            result = build_systemc(
+                (sc_tb, *generated_implementations),
+                exe,
+                out_dir / "systemc_build",
+                options=SystemCBuildOptions(
+                    cxx=cxx,
+                    standard="c++14",
+                    cxx_flags=(f"-I{systemc_include}",),
+                    ld_flags=(f"-L{systemc_lib}", f"-Wl,-rpath,{systemc_lib}"),
+                    libs=("-lsystemc", "-pthread"),
+                    include_dirs=(header.parents[1], header.parent),
+                    pch_headers=(header,) if len(generated_implementations) >= 16 else (),
+                    jobs=max(1, build_jobs),
+                    use_pch=build_pch or build_mode == "optimized",
+                    incremental=build_incremental or build_mode == "optimized",
+                ),
+                log_path=out_dir / "systemc_build.log",
+            )
+            print(
+                f"{case.name}: SystemC build elapsed={result.elapsed_seconds:.3f}s "
+                f"compiled={result.compiled_sources} reused={result.reused_objects} "
+                f"jobs={result.jobs} pch={result.pch_used} "
+                f"link_reused={result.link_reused}"
+            )
+        except SystemCBuildError as exc:
+            raise RuntimeError(str(exc)) from exc
+    else:
+        _run(
+            [
+                cxx,
+                "-std=c++14",
+                f"-I{systemc_include}",
+                f"-I{header.parents[1]}",
+                f"-I{header.parent}",
+                str(sc_tb),
+                *[str(path) for path in generated_implementations],
+                f"-L{systemc_lib}",
+                f"-Wl,-rpath,{systemc_lib}",
+                "-lsystemc",
+                "-pthread",
+                "-o",
+                str(exe),
+            ],
+            cwd=out_dir,
+            log=out_dir / "systemc_build.log",
+        )
     _run([str(exe)], cwd=out_dir, log=out_dir / "systemc_run.log")
     return out_dir / "sc_keypoints.txt"
 
@@ -778,11 +845,24 @@ def _run_case(
     cxx: str,
     systemc_include: Path,
     systemc_lib: Path,
+    build_mode: str,
+    build_jobs: int,
+    build_pch: bool,
+    build_incremental: bool,
+    compile_friendly: bool,
+    skip_rtl: bool,
 ) -> None:
     out_dir = out_root / case.name
     out_dir.mkdir(parents=True, exist_ok=True)
-    header = _convert(case, mhsa_root, out_dir, repo_root)
-    rtl_trace = _run_rtl(case, mhsa_root, out_dir, rtl_sim)
+    header = _convert(
+        case,
+        mhsa_root,
+        out_dir,
+        repo_root,
+        compile_friendly=compile_friendly or build_mode == "optimized",
+        incremental=build_incremental or build_mode == "optimized",
+    )
+    rtl_trace = None if skip_rtl else _run_rtl(case, mhsa_root, out_dir, rtl_sim)
     sc_trace = _run_systemc(
         case,
         out_dir,
@@ -790,8 +870,13 @@ def _run_case(
         cxx=cxx,
         systemc_include=systemc_include,
         systemc_lib=systemc_lib,
+        build_mode=build_mode,
+        build_jobs=build_jobs,
+        build_pch=build_pch,
+        build_incremental=build_incremental,
     )
-    _compare(case, rtl_trace, sc_trace, out_dir)
+    if rtl_trace is not None:
+        _compare(case, rtl_trace, sc_trace, out_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -804,6 +889,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--systemc-lib", type=Path, default=DEFAULT_SYSTEMC_LIB)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
     parser.add_argument("--keep-out", action="store_true")
+    parser.add_argument("--skip-rtl", action="store_true", help="Only convert and build SystemC; reuse no RTL simulation.")
+    parser.add_argument("--sc-build-mode", choices=("legacy", "optimized"), default="legacy")
+    parser.add_argument("--sc-build-jobs", type=int, default=1)
+    parser.add_argument("--sc-build-pch", action="store_true")
+    parser.add_argument("--sc-build-incremental", action="store_true")
+    parser.add_argument("--sc-compile-friendly", action="store_true")
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -843,6 +934,12 @@ def main(argv: list[str] | None = None) -> int:
                 cxx=args.cxx,
                 systemc_include=args.systemc_include,
                 systemc_lib=args.systemc_lib,
+                build_mode=args.sc_build_mode,
+                build_jobs=max(1, args.sc_build_jobs),
+                build_pch=args.sc_build_pch,
+                build_incremental=args.sc_build_incremental,
+                compile_friendly=args.sc_compile_friendly,
+                skip_rtl=args.skip_rtl,
             )
         except Exception as exc:
             failures.append(f"{name}: {exc}")

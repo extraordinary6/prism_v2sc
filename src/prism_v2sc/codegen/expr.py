@@ -68,6 +68,9 @@ _CPP_BINARY_OP_MAP = {
     "**": "*",     # rare; approximate
 }
 
+_SAFE_CONST_EXPR_RE = re.compile(r"^[\s\d\(\)\+\-\*\/A-Za-z_?:<>=!&|]+$")
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
 
 @dataclass(frozen=True)
 class ModuleContext:
@@ -96,6 +99,7 @@ class ModuleContext:
     # these values are converted back to the converter's existing two-state
     # expression domain.
     resolved_names: frozenset[str] = field(default_factory=frozenset)
+    compile_friendly: bool = False
 
     def with_loop_var(self, name: str) -> "ModuleContext":
         return ModuleContext(
@@ -113,6 +117,7 @@ class ModuleContext:
             array_dimensions=self.array_dimensions,
             array_bounds=self.array_bounds,
             resolved_names=self.resolved_names,
+            compile_friendly=self.compile_friendly,
         )
 
     def with_locals(self, names: frozenset[str]) -> "ModuleContext":
@@ -138,6 +143,7 @@ class ModuleContext:
             array_dimensions=self.array_dimensions,
             array_bounds=self.array_bounds,
             resolved_names=self.resolved_names,
+            compile_friendly=self.compile_friendly,
         )
 
     def with_subroutine(self, subroutine: SubroutineIR) -> "ModuleContext":
@@ -183,6 +189,7 @@ class ModuleContext:
             array_dimensions=array_dimensions,
             array_bounds=array_bounds,
             resolved_names=self.resolved_names,
+            compile_friendly=self.compile_friendly,
         )
 
 
@@ -190,6 +197,7 @@ def build_module_context(
     module: ModuleIR,
     *,
     resolved_names: frozenset[str] | None = None,
+    compile_friendly: bool = False,
 ) -> ModuleContext:
     """Build a width-aware identifier context for one module."""
     signal_names: set[str] = set()
@@ -244,6 +252,7 @@ def build_module_context(
         array_dimensions=array_dimensions,
         array_bounds=array_bounds,
         resolved_names=resolved_names or frozenset(),
+        compile_friendly=compile_friendly,
     )
 
 
@@ -348,9 +357,8 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
             right_signed = infer_signed(right_node, ctx)
             if left_signed != right_signed:
                 common_width = max(1, infer_width(left_node, ctx), infer_width(right_node, ctx))
-                common_type = systemc_int_type(common_width, signed=False)
-                left = f"{common_type}({left})"
-                right = f"{common_type}({right})"
+                left = _render_type_cast(left_node, left, common_width, False, ctx)
+                right = _render_type_cast(right_node, right, common_width, False, ctx)
         cpp_op = _CPP_BINARY_OP_MAP.get(op, op)
         if op in {"/", "%"}:
             # A network of continuous assignments can briefly expose a zero
@@ -378,9 +386,8 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
         both_signed = infer_signed(true_node, ctx) and infer_signed(false_node, ctx)
         width = max(1, true_width, false_width)
         if width > 1:
-            target_type = systemc_int_type(width, signed=both_signed)
-            true_branch = f"{target_type}({true_branch})"
-            false_branch = f"{target_type}({false_branch})"
+            true_branch = _render_type_cast(true_node, true_branch, width, both_signed, ctx)
+            false_branch = _render_type_cast(false_node, false_branch, width, both_signed, ctx)
         return f"({cond} ? {true_branch} : {false_branch})"
     if kind == "concat":
         return _render_concat(expr.get("parts", []), ctx, staged_names=staged_names)
@@ -398,12 +405,21 @@ def render_rvalue(expr: dict[str, Any] | None, ctx: ModuleContext, *, staged_nam
                 # vector bit-select ``mem.read()[i]``.
                 index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
                 return f"{sanitize_identifier(target_name)}[{index_str}].read()"
+            if target_name in ctx.parameter_names:
+                index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
+                return f"(({sanitize_identifier(target_name)} >> ({index_str})) & 1)"
         target_str = _render_aggregate_rvalue(expr.get("target"), ctx, staged_names=staged_names)
         index_str = render_rvalue(expr.get("index"), ctx, staged_names=staged_names)
         return f"{target_str}[{index_str}]"
     if kind == "partselect":
         target_node = expr.get("target")
         target_str = _render_aggregate_rvalue(target_node, ctx, staged_names=staged_names)
+        if isinstance(target_node, dict) and target_node.get("kind") == "identifier":
+            target_name = str(target_node.get("name", ""))
+            if target_name in ctx.parameter_names:
+                lsb = render_rvalue(expr.get("lsb"), ctx, staged_names=staged_names)
+                width = max(1, infer_width(expr, ctx))
+                return f"{systemc_int_type(width)}({sanitize_identifier(target_name)} >> ({lsb}))"
         if isinstance(target_node, dict) and target_node.get("kind") == "intconst":
             target_width = max(1, infer_width(target_node, ctx), infer_width(expr, ctx))
             target_str = f"{systemc_int_type(target_width)}({target_str})"
@@ -713,6 +729,26 @@ def const_eval(expr: dict[str, Any] | None, ctx: ModuleContext) -> int | None:
         if cond is None:
             return None
         return const_eval(expr.get("true" if cond else "false"), ctx)
+    if kind == "concat":
+        parts = expr.get("parts", [])
+        if not isinstance(parts, list) or not parts:
+            return None
+        widths = [max(1, infer_width(part, ctx)) for part in parts]
+        return _fold_concat_constant(parts, widths, ctx)
+    if kind == "repeat":
+        count = const_eval(expr.get("count"), ctx)
+        value_node = expr.get("value")
+        value = const_eval(value_node, ctx)
+        if count is None or value is None:
+            return None
+        if count <= 0:
+            count = 1
+        width = max(1, infer_width(value_node, ctx))
+        chunk = value & ((1 << width) - 1)
+        repeated = 0
+        for _ in range(count):
+            repeated = (repeated << width) | chunk
+        return repeated
     if kind == "cast":
         return const_eval(expr.get("operand"), ctx)
     return None
@@ -825,14 +861,21 @@ def _render_unop(op: str, operand_node: dict[str, Any] | None, ctx: ModuleContex
         width = infer_width(operand_node, ctx)
         if width > 1:
             value_type = systemc_int_type(width)
-            return f"{value_type}(~{value_type}({operand_text}))"
+            normalized = _render_type_cast(operand_node, operand_text, width, False, ctx)
+            return f"{value_type}(~{normalized})"
         return f"(~{operand_text})"
     if op == "-":
         return f"(-{operand_text})"
     if op == "+":
         return f"(+{operand_text})"
     reduction_width = max(1, infer_width(operand_node, ctx))
-    reduction_operand = f"{systemc_int_type(reduction_width)}({operand_text})"
+    reduction_operand = _render_type_cast(
+        operand_node,
+        operand_text,
+        reduction_width,
+        False,
+        ctx,
+    )
     if op == "&":
         return f"{reduction_operand}.and_reduce()"
     if op == "|":
@@ -858,6 +901,9 @@ def _render_concat(parts: list[dict[str, Any]], ctx: ModuleContext, *, staged_na
     if total <= 0:
         total = 1
     target_type = systemc_int_type(total)
+    constant = _fold_concat_constant(parts, widths, ctx)
+    if constant is not None:
+        return _render_unsigned_constant(constant, total)
     pieces: list[str] = []
     bits_remaining = total
     for part, width in zip(parts, widths):
@@ -879,6 +925,14 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     if total <= 0:
         total = 1
     target_type = systemc_int_type(total)
+    value = const_eval(value_node, ctx)
+    if value is not None:
+        mask = (1 << width) - 1
+        repeated = 0
+        chunk = value & mask
+        for _ in range(count):
+            repeated = (repeated << width) | chunk
+        return _render_unsigned_constant(repeated, total)
     operand = render_rvalue(value_node, ctx, staged_names=staged_names)
     pieces: list[str] = []
     for i in range(count):
@@ -890,13 +944,41 @@ def _render_repeat(count_node: dict[str, Any] | None, value_node: dict[str, Any]
     return f"{target_type}((" + " | ".join(pieces) + "))"
 
 
+def _fold_concat_constant(
+    parts: list[dict[str, Any]],
+    widths: list[int],
+    ctx: ModuleContext,
+) -> int | None:
+    value = 0
+    for part, width in zip(parts, widths):
+        part_value = const_eval(part, ctx)
+        if part_value is None:
+            return None
+        value = (value << width) | (part_value & ((1 << width) - 1))
+    return value
+
+
+def _render_unsigned_constant(value: int, width: int) -> str:
+    width = max(1, width)
+    value &= (1 << width) - 1
+    target_type = systemc_int_type(width)
+    if width > 64:
+        return f'{target_type}("0x{value:x}")'
+    if value > (1 << 63) - 1:
+        # Unsuffixed decimal literals above INT64_MAX are commonly typed as
+        # ``__int128`` by GCC, for which sc_uint has no unambiguous ctor.
+        return f"{target_type}(0x{value:X}ULL)"
+    return f"{target_type}({value})"
+
+
 def _render_cast(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
     width = expr.get("width")
     if not isinstance(width, int) or width <= 0:
         width = infer_width(expr.get("operand"), ctx)
-    target_type = systemc_int_type(width, signed=bool(expr.get("signed")))
-    operand = render_rvalue(expr.get("operand"), ctx, staged_names=staged_names)
-    return f"{target_type}({operand})"
+    signed = bool(expr.get("signed"))
+    operand_node = expr.get("operand")
+    operand = render_rvalue(operand_node, ctx, staged_names=staged_names)
+    return _render_type_cast(operand_node, operand, width, signed, ctx)
 
 
 def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: frozenset[str] | None = None) -> str:
@@ -910,9 +992,59 @@ def _render_syscall(expr: dict[str, Any], ctx: ModuleContext, *, staged_names: f
         # silently turns ``$signed(x) >>> n`` into a logical shift on the
         # underlying unsigned representation.
         width = infer_width(args_nodes[0], ctx) if args_nodes else 1
-        target_type = systemc_int_type(width, signed=name == "signed")
-        return f"{target_type}({args[0]})"
+        return _render_type_cast(
+            args_nodes[0],
+            args[0],
+            width,
+            name == "signed",
+            ctx,
+        )
     return f"/* $${name}() unsupported */ 0"
+
+
+def _render_type_cast(
+    expr: dict[str, Any] | None,
+    rendered: str,
+    width: int,
+    signed: bool,
+    ctx: ModuleContext,
+) -> str:
+    """Emit one SystemC cast, omitting it only when the source type is exact."""
+    width = max(1, int(width))
+    if ctx.compile_friendly and _has_exact_systemc_type(expr, width, signed, ctx):
+        return rendered
+    return f"{systemc_int_type(width, signed=signed)}({rendered})"
+
+
+def _has_exact_systemc_type(
+    expr: dict[str, Any] | None,
+    width: int,
+    signed: bool,
+    ctx: ModuleContext,
+) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    kind = expr.get("kind")
+    if kind == "cast":
+        cast_width = expr.get("width")
+        if not isinstance(cast_width, int) or cast_width <= 0:
+            cast_width = infer_width(expr.get("operand"), ctx)
+        return cast_width == width and bool(expr.get("signed")) == signed
+    if kind == "identifier":
+        name = str(expr.get("name", ""))
+        if ctx.signal_widths.get(name) != width or bool(ctx.signal_signedness.get(name, False)) != signed:
+            return False
+        return width > 1 or name in ctx.packed_vector_names
+    if kind == "bitselect" and is_array_element_expr(expr, ctx):
+        base, _indices = _bitselect_chain(expr)
+        if ctx.signal_widths.get(base) != width or bool(ctx.signal_signedness.get(base, False)) != signed:
+            return False
+        return width > 1 or base in ctx.packed_vector_names
+    if kind == "partselect":
+        return infer_width(expr, ctx) == width and not signed
+    if kind == "syscall" and expr.get("name") in {"signed", "unsigned"}:
+        return infer_width(expr, ctx) == width and (expr.get("name") == "signed") == signed
+    return False
 
 
 def _format_intconst(expr: dict[str, Any]) -> str:
@@ -1026,6 +1158,10 @@ def _eval_text(text: str, parameter_values: dict[str, int]) -> int | None:
     text = (text or "").strip()
     if not text:
         return None
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r"\{\s*([^,{}]+)\s*\}", r"(\1)", text)
     try:
         return int(text)
     except ValueError:
@@ -1034,14 +1170,82 @@ def _eval_text(text: str, parameter_values: dict[str, int]) -> int | None:
     if direct is not None:
         return direct
     # Tiny expression evaluator for things like "(WIDTH - 1)".
-    safe = re.match(r"^[\s\d\(\)\+\-\*\/A-Za-z_]+$", text)
-    if not safe:
+    if _SAFE_CONST_EXPR_RE.fullmatch(text) is None:
         return None
-    expr = text
-    for name, value in parameter_values.items():
-        expr = re.sub(rf"\b{re.escape(name)}\b", str(value), expr)
-    expr = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", "0", expr)
+    expr = _IDENTIFIER_RE.sub(
+        lambda match: str(parameter_values.get(match.group(0), 0)),
+        text,
+    )
+    expr = _translate_const_ternary(expr)
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+    expr = re.sub(r"!(?!=)", " not ", expr)
     try:
         return int(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 - sanitized above
     except Exception:
         return None
+
+
+def _translate_const_ternary(text: str) -> str:
+    """Translate balanced C/Verilog ``cond ? a : b`` into Python syntax."""
+    stripped = _strip_balanced_outer_parentheses(text.strip())
+    question = _find_top_level_token(stripped, "?")
+    if question is None:
+        return stripped
+    colon = _matching_ternary_colon(stripped, question)
+    if colon is None:
+        return stripped
+    cond = _translate_const_ternary(stripped[:question])
+    true_value = _translate_const_ternary(stripped[question + 1 : colon])
+    false_value = _translate_const_ternary(stripped[colon + 1 :])
+    return f"(({true_value}) if ({cond}) else ({false_value}))"
+
+
+def _strip_balanced_outer_parentheses(text: str) -> str:
+    while text.startswith("(") and text.endswith(")"):
+        depth = 0
+        balanced = True
+        for index, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(text) - 1:
+                    balanced = False
+                    break
+            if depth < 0:
+                balanced = False
+                break
+        if not balanced or depth != 0:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def _find_top_level_token(text: str, token: str) -> int | None:
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == token and depth == 0:
+            return index
+    return None
+
+
+def _matching_ternary_colon(text: str, question: int) -> int | None:
+    depth = 0
+    nested = 0
+    for index in range(question + 1, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and char == "?":
+            nested += 1
+        elif depth == 0 and char == ":":
+            if nested == 0:
+                return index
+            nested -= 1
+    return None

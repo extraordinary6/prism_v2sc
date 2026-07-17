@@ -32,6 +32,9 @@ from pathlib import Path
 THIS_FILE = Path(__file__).resolve()
 PROJECT_ROOT = THIS_FILE.parents[2]
 FIXTURE_DIR = THIS_FILE.parent / "fixtures"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from prism_v2sc.systemc_build import SystemCBuildError, SystemCBuildOptions, build_systemc
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,15 @@ class ConversionFixture:
 
 
 FIXTURES: tuple[Fixture, ...] = (
+    Fixture(
+        name="large_assign_group",
+        sources=("large_assign_group.v",),
+        top="large_assign_group",
+        inputs=(Port("a", 8),),
+        outputs=(Port("y", 8),),
+        sequential=False,
+        cycles=64,
+    ),
     Fixture(
         name="mux2",
         sources=("mux2.v",),
@@ -789,6 +801,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Generate SystemC, stimulus, and testbenches but skip iverilog/SystemC build and diff.",
     )
+    parser.add_argument(
+        "--sc-build-mode",
+        choices=("legacy", "optimized"),
+        default="legacy",
+        help="SystemC build policy; optimized enables bounded object builds, PCH, and incremental reuse.",
+    )
+    parser.add_argument(
+        "--sc-build-jobs",
+        type=int,
+        default=1,
+        help="Maximum parallel SystemC compile jobs when optimized build is active.",
+    )
+    parser.add_argument(
+        "--sc-build-pch",
+        action="store_true",
+        help="Enable the shared SystemC precompiled header.",
+    )
+    parser.add_argument(
+        "--sc-build-incremental",
+        action="store_true",
+        help="Reuse SystemC objects whose compiler dependency files are still current.",
+    )
+    parser.add_argument(
+        "--sc-compile-friendly",
+        action="store_true",
+        help="Use compile-friendly generated headers and out-of-line module implementations.",
+    )
     args = parser.parse_args(argv)
     args.work = args.work.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
@@ -828,6 +867,11 @@ def main(argv: list[str] | None = None) -> int:
             shift_tolerance=args.shift_tolerance,
             rtl_sim=rtl_sim,
             dry_run=args.dry_run,
+            sc_build_mode=args.sc_build_mode,
+            sc_build_jobs=max(1, args.sc_build_jobs),
+            sc_build_pch=args.sc_build_pch,
+            sc_build_incremental=args.sc_build_incremental,
+            sc_compile_friendly=args.sc_compile_friendly,
         )
         summary.append((fixture.name, "PASS" if rc == 0 else "FAIL"))
         if rc != 0:
@@ -1064,6 +1108,11 @@ def run_fixture(
     shift_tolerance: int,
     rtl_sim: str,
     dry_run: bool = False,
+    sc_build_mode: str = "legacy",
+    sc_build_jobs: int = 1,
+    sc_build_pch: bool = False,
+    sc_build_incremental: bool = False,
+    sc_compile_friendly: bool = False,
 ) -> int:
     work.mkdir(parents=True, exist_ok=True)
     sources = [FIXTURE_DIR / source for source in fixture.sources]
@@ -1108,6 +1157,8 @@ def run_fixture(
         sc_out_dir,
         log_path=work / "prism.log",
         filelist=filelist_path,
+        compile_friendly=sc_compile_friendly or sc_build_mode == "optimized",
+        incremental_codegen=sc_build_incremental or sc_build_mode == "optimized",
     ):
         return 1
 
@@ -1149,23 +1200,63 @@ def run_fixture(
     ld_flags = [flag for flag in os.environ.get("SC_LDFLAGS", "").split() if flag]
     libs = os.environ.get("SC_LIBS", "-lsystemc -lpthread").split()
     sc_include = sc_out_dir.resolve()
+    generated_implementations = sorted(sc_out_dir.rglob("*__impl_*.cpp"))
     cxx_standard = os.environ.get("SC_CXX_STANDARD", "c++17")
-    cxx_cmd = [
-        cxx,
-        f"-std={cxx_standard}",
-        "-O0",
-        "-g",
-        f"-I{sc_include}",
-        *cxx_flags,
-        str(sctb_path),
-        "-o",
-        str(sctb_exe),
-        *ld_flags,
-        *libs,
-    ]
-    if run_logged(cxx_cmd, work / "g++.log") != 0:
-        print(f"  SystemC compile failed (see {work / 'g++.log'})")
-        return 1
+    systemc_sources = (sctb_path, *generated_implementations)
+    use_optimized_build = (
+        sc_build_mode == "optimized"
+        or sc_build_jobs > 1
+        or sc_build_pch
+        or sc_build_incremental
+    )
+    if use_optimized_build:
+        try:
+            result = build_systemc(
+                systemc_sources,
+                sctb_exe,
+                work,
+                options=SystemCBuildOptions(
+                    cxx=cxx,
+                    standard=cxx_standard,
+                    cxx_flags=tuple(cxx_flags),
+                    ld_flags=tuple(ld_flags),
+                    libs=tuple(libs),
+                    include_dirs=(sc_include,),
+                    pch_headers=(top_header_path,) if len(generated_implementations) >= 16 else (),
+                    jobs=max(1, sc_build_jobs),
+                    use_pch=sc_build_pch or sc_build_mode == "optimized",
+                    incremental=sc_build_incremental or sc_build_mode == "optimized",
+                ),
+                log_path=work / "g++.log",
+            )
+            print(
+                "  SystemC build: "
+                f"elapsed={result.elapsed_seconds:.3f}s "
+                f"compiled={result.compiled_sources} reused={result.reused_objects} "
+                f"jobs={result.jobs} pch={result.pch_used} "
+                f"link_reused={result.link_reused}"
+            )
+        except SystemCBuildError as exc:
+            print(f"  SystemC compile failed: {exc}")
+            return 1
+    else:
+        cxx_cmd = [
+            cxx,
+            f"-std={cxx_standard}",
+            "-O0",
+            "-g",
+            f"-I{sc_include}",
+            *cxx_flags,
+            str(sctb_path),
+            *[str(path) for path in generated_implementations],
+            "-o",
+            str(sctb_exe),
+            *ld_flags,
+            *libs,
+        ]
+        if run_logged(cxx_cmd, work / "g++.log") != 0:
+            print(f"  SystemC compile failed (see {work / 'g++.log'})")
+            return 1
     if run_logged([str(sctb_exe)], work / "sc_run.log", cwd=work) != 0:
         print(f"  SystemC run failed (see {work / 'sc_run.log'})")
         return 1
@@ -1292,6 +1383,8 @@ def convert_with_prism(
     *,
     log_path: Path,
     filelist: Path | None = None,
+    compile_friendly: bool = False,
+    incremental_codegen: bool = False,
 ) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -1305,6 +1398,10 @@ def convert_with_prism(
     ]
     if filelist is not None:
         cmd.extend(["--filelist", str(filelist)])
+    if compile_friendly:
+        cmd.append("--compile-friendly")
+    if incremental_codegen:
+        cmd.append("--incremental-codegen")
     cmd.extend(str(source) for source in sources)
     env = os.environ.copy()
     new_path = str(PROJECT_ROOT / "src")

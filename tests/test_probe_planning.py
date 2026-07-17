@@ -278,3 +278,23 @@ endmodule
     # Should have clock_gating_candidate and/or counter_activity_candidate
     reason_codes = set(wide_reg_probe.static_reason_codes)
     assert "clock_gating_candidate" in reason_codes or "counter_activity_candidate" in reason_codes
+
+
+def test_probe_plan_resolves_parameterized_signal_width(tmp_path: Path) -> None:
+    rtl = tmp_path / "parameterized_probe.sv"
+    rtl.write_text(
+        """
+module parameterized_probe #(parameter DW = 78)(
+  input logic clk,
+  input logic [DW-1:0] d,
+  output logic [DW-1:0] q
+);
+  always_ff @(posedge clk) q <= d;
+endmodule
+""",
+        encoding="utf-8",
+    )
+    design = lower_via_pyslang([rtl], "parameterized_probe")
+    plan = create_probe_plan(design)
+    q_probe = next(probe for probe in plan.probes if probe.rtl_signal_name == "q")
+    assert q_probe.width == 78

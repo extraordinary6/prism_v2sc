@@ -125,6 +125,7 @@ class MemoryProvider:
 
         parameter_names = {parameter.name for parameter in module.parameters}
         depth_is_parameter = isinstance(depth, str) and depth in parameter_names
+        lane_width_is_parameter = isinstance(lane_width, str) and lane_width in parameter_names
         if not depth_is_parameter and (not isinstance(depth, int) or depth <= 0):
             diagnostics.append(
                 DiagnosticIR(
@@ -168,13 +169,18 @@ class MemoryProvider:
                     node="byte_enable",
                 )
             )
-        if byte_enable is not None and (not isinstance(lane_width, int) or lane_width <= 0):
+        if byte_enable is not None and not (
+            (isinstance(lane_width, int) and lane_width > 0) or lane_width_is_parameter
+        ):
             diagnostics.append(
                 DiagnosticIR(
                     severity="error",
                     module=module.name,
                     code="model_memory_invalid_lane_width",
-                    message="byte-enabled memory requires positive integer config.lane_width",
+                    message=(
+                        "byte-enabled memory requires positive integer config.lane_width "
+                        "or the name of a module parameter/localparam"
+                    ),
                     node="lane_width",
                 )
             )

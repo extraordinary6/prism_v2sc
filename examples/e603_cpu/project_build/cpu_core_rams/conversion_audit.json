@@ -1,0 +1,1462 @@
+{
+  "diagnostic_code_counts": {
+    "event_scheduler_approximated": 7,
+    "model_memory_applied": 6,
+    "slang_ArithOpMismatch": 14,
+    "slang_BitwiseOpMismatch": 3,
+    "slang_BitwiseOpParentheses": 747,
+    "slang_CaseDefault": 5,
+    "slang_DanglingElse": 2,
+    "slang_EmptyMember": 1,
+    "slang_EmptyOutputPortConn": 40,
+    "slang_LogicalOpParentheses": 21,
+    "slang_ShiftCountOverflow": 10,
+    "slang_SignConversion": 2,
+    "slang_UnknownEscapeCode": 94,
+    "x_z_literal_approximated": 1
+  },
+  "diagnostic_counts": {
+    "warning": 953
+  },
+  "generated_module_count": 235,
+  "ignored_source_count": 0,
+  "limitations": [
+    "approximate SystemC scheduling; not a formal equivalence proof",
+    "two-state datapath semantics outside resolved inout handling",
+    "verification-only constructs are outside the synthesizable design view"
+  ],
+  "modules": [
+    {
+      "name": "e603_core_rams",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_rams.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_core_wrapper",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_rst_ctrl",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_reset_sync",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_sync",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_sync",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_sync.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffrs__prism_p_e72dd17304",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_hand_mux_bit",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_hand_mux_bit.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffrs__prism_p_3b88fa35c9",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_e83a2e89d4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_cdc_rx",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_e83a2e89d4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_dbg_top",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_clkgate",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_clkgate",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_clkgate.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_012f1c1070",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_a95a641cab",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_012f1c1070",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_967ff2012e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_e83a2e89d4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_2d8e53ea17",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_012f1c1070",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_332e3c1933",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_a42b9b17d5",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflrs__prism_p_171dee1cbd",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_2d8e53ea17",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_c673583c88",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_dtm_cdc",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_dtm_tap",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_332e3c1933",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_7e5d34fb13",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflrs__prism_p_3b88fa35c9",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_657d7f9751",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_dmi",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_core",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_irq_sync",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_clk_ctrl",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_dbg_csr",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_326e406bfe",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_d52d05cfd8",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_1d4a256d55",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflrs__prism_p_1514d836f4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_ucore",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_ifu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_0feb4e946b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_a42b9b17d5",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_7a906127a3",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_0bfcf1ea25",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_e4bb6e7155",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_1bc41e5904",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_a4debc50cd",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_eb7df2d8a4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_c19a61aa3c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_7f730fe21c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_65b694384d",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_6a52af5b8f",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_aa0c06cec2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_72f0b7f06b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_c03122e517",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_44de9c9919",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_4419f1df34",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_111744ab42",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_aa0c06cec2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_967ff2012e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_e359703e3c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_23209ba91c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_1d4a256d55",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_7a5f36d297",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_b0487cb20f",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_326e406bfe",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_b9f754f08b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_186f3c0947",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_9ab08ac158",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_7e6fee0c70",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_d5a0e80d33",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_606a825b23",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_912789c695",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_a689829b8c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_850445fea1",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_df80424186",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_517efedbef",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_6b5c90f106",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_ecddb4b2e7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_92c90dd30e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_ed3a0f910c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_8095671cc7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_9d2bf4e9ab",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_75255c3de1",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_9bb8ae075c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_9f9814c412",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_deac79670e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_6bd400bec4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_ca2300c035",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_3dcb94072d",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_ccd48a2801",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_fpu_stage_dffl__prism_p_efa56851e6",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_348a04e528",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_8c32bf34d8",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_6c645b0244",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_111744ab42",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_f80566b67c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_exu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_a4c41caa25",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_e864bbcc00",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_e9f480a218",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_5b95f81e96",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_98f04b2cf9",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_b524f2750b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_36e8e29b92",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_125929ca1a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_a95a641cab",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_287806d1a4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_7a906127a3",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_7a5f36d297",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflrs__prism_p_e76d273791",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_exu2lsu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_lsu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_326e406bfe",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_c88e1ed158",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_8af07ad0d5",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_8ecde2b839",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_c04cbafb14",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_6a8a055cbe",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_2d8e53ea17",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_1064ddc98f",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_46fc2706e5",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_657d7f9751",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_860ec01680",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_lsu2wb",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_nc_biu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_e359703e3c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_c330000021",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_7f730fe21c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_28a006c931",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_lbiu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_c292dd5ced",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_db4d03b959",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_mmu",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflr__prism_p_b524f2750b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_clic_top",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_51c2b829c8",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_3ec74014d4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f7baed1990",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_38ec513781",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_d28e158ea0",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_bd20ae96bb",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f6b4ed9639",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_a2c742de4c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f58ebce380",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_4f337ffd6a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_d6ba87f1c6",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_8746c11af7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_058e8ac605",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f1cab4c1f3",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_97e23646ab",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_e2d9ec7deb",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_8a56420215",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_8cee31bca8",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_0e04e85fe8",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_5d1be57a51",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_07473f0f24",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_3d6ab55876",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_334b127062",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_2d55b9cad0",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_49ebd5de33",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_35b69a9141",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_b8159ce55d",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_6addc2bceb",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_7d8262aab2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_a509c43ad2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_9d3a50ef3a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_4efe336be1",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_a93398dff9",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_57cea39667",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_e76bcc1ec6",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f4c2798976",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_ca1ae7c0a7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_3666fe71ba",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_de779d1d75",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_6a5337297d",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_7751ca930c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_9dc9a3f876",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_585e2e1b22",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_3e44bb640d",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_e54e448873",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_7b352c1181",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_5728730649",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_fb67c8317b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_e069cb9036",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_ee8fe746c5",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_3e82ad3359",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_c30a8d94ac",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_cf911c5fc7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_eed6c68944",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_9b9dfd7c58",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_8b150a94c2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_85e3b6140e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_d43a260c59",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_54984cfc34",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_432c62e8c7",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_d895585a1a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_2f2261924b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_ca9e887b48",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_f7ab2d375a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_ed8ef56eb2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_d1bf8e8d7b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "l7ta1ic337vyb9nlyc5__prism_p_dd6c5f2c77",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_eb7df2d8a4",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_aa0c06cec2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffr__prism_p_967ff2012e",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_pipe_stage",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_plic_top",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dffl__prism_p_1d08010338",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_tmr_top",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_dfflrs__prism_p_2cf9ea2b31",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_rams_wrapper",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_rams.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_1195106c8c",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_ca10525ff2",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_ca10525ff2",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_b1e1250461",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_8047a6f04a",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_8047a6f04a",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_c43b684274",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_9458009294",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_9458009294",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_feba563485",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_88c924c340",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_88c924c340",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_ca89bf95d3",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_b4c5e9da54",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_b4c5e9da54",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    },
+    {
+      "name": "e603_gnrl_ram__prism_p_cf40b28012",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_gnrl_tech_ram__prism_p_029c1cde8b",
+      "provider": "",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+      "status": "generated"
+    },
+    {
+      "name": "e603_sim_ram__prism_p_029c1cde8b",
+      "provider": "memory",
+      "source": "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v",
+      "status": "provider_backed"
+    }
+  ],
+  "policy_failure_count": 0,
+  "policy_path": "",
+  "provider_module_count": 6,
+  "reachable_module_count": 235,
+  "source_category_counts": {
+    "design": 9
+  },
+  "source_count": 9,
+  "sources": [
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_wrapper.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/e603_core_rams.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/core/global.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_clkgate.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_ram.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_gnrl_tech_sync.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_hand_buf.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/tech/e603_hand_mux_bit.v",
+    "/home/MicroE/ai_proj/prism_v2sc/examples/e603_cpu/rtl/e603/soc/e603_soc_misc.v"
+  ],
+  "status": "passed",
+  "top": "e603_core_rams",
+  "version": 1
+}
